@@ -33,14 +33,36 @@ const TAURI_DRIVER_URL = "http://localhost:4444";
 // Multi-vault configuration for dual-container testing
 // tauri-driver binds to localhost only, but we use socat proxy on port 4446 for cross-container access
 // IMPORTANT: tauri-driver validates Host header - must be "localhost:4444"
-const isInContainer = process.env.VAULT_INSTANCE !== undefined;
-const currentInstance = process.env.VAULT_INSTANCE as "A" | "B" | undefined;
+
+// Detect which container we're running in
+// VAULT_INSTANCE is set in docker-compose.yml for each container
+const rawVaultInstance = process.env.VAULT_INSTANCE;
+const isInContainer = rawVaultInstance !== undefined;
+// Normalize to uppercase and trim to handle any formatting issues
+const currentInstance = rawVaultInstance?.toUpperCase().trim() as "A" | "B" | undefined;
+
+// Debug logging for CI troubleshooting
+console.log("[E2E Config] VAULT_INSTANCE raw:", JSON.stringify(rawVaultInstance));
+console.log("[E2E Config] VAULT_INSTANCE normalized:", JSON.stringify(currentInstance));
+console.log("[E2E Config] isInContainer:", isInContainer);
+
+// Helper to determine URL for a vault instance
+// When running in the same container as the vault, use localhost
+// When running in a different container, use the container hostname via socat proxy
+function getVaultUrl(targetInstance: "A" | "B"): string {
+  const isLocalInstance = currentInstance === targetInstance;
+  if (isLocalInstance) {
+    return "http://localhost:4444";
+  }
+  // Use container hostname for cross-container access
+  return targetInstance === "A" ? "http://vault-a:4446" : "http://vault-b:4446";
+}
 
 export const VAULT_CONFIG = {
   A: {
     // When in vault-a container: use localhost directly
     // When in other container: use socat proxy on port 4446 (requires Host header override)
-    tauriDriverUrl: currentInstance === "A" ? "http://localhost:4444" : "http://vault-a:4446",
+    tauriDriverUrl: getVaultUrl("A"),
     // Host header that tauri-driver expects
     tauriDriverHostHeader: "localhost:4444",
     // Bridge is always local (localhost:19455) - no cross-container access needed
@@ -55,7 +77,7 @@ export const VAULT_CONFIG = {
   B: {
     // When in vault-b container: use localhost directly
     // When in other container: use socat proxy on port 4446 (requires Host header override)
-    tauriDriverUrl: currentInstance === "B" ? "http://localhost:4444" : "http://vault-b:4446",
+    tauriDriverUrl: getVaultUrl("B"),
     tauriDriverHostHeader: "localhost:4444",
     // Bridge is always local (localhost:19455) - no cross-container access needed
     // Sync between vaults happens via sync-server, not via WebSocket bridge
@@ -66,6 +88,10 @@ export const VAULT_CONFIG = {
     needsHostOverride: currentInstance !== "B" && isInContainer,
   },
 } as const;
+
+// Log the final configuration for debugging
+console.log("[E2E Config] VAULT_CONFIG.A.tauriDriverUrl:", VAULT_CONFIG.A.tauriDriverUrl);
+console.log("[E2E Config] VAULT_CONFIG.B.tauriDriverUrl:", VAULT_CONFIG.B.tauriDriverUrl);
 
 export type VaultInstance = keyof typeof VAULT_CONFIG;
 
