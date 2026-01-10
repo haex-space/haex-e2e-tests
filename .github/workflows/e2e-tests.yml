@@ -228,7 +228,8 @@ jobs:
           HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
           CI: true
         run: |
-          docker compose -f docker/docker-compose.yml run --rm e2e-test-env pnpm test
+          # Run tests in vault-a container which has Playwright installed
+          docker compose -f docker/docker-compose.yml run --rm vault-a pnpm test
 
       - name: Copy test results from container
         if: always()
@@ -236,8 +237,9 @@ jobs:
           mkdir -p ./test-results
 
           # Copy from named volume via temporary container
+          # Volume name is docker_test-results (docker/ directory prefix)
           docker run --rm \
-            -v haex-e2e-tests_test-results:/results \
+            -v docker_test-results:/results \
             -v $(pwd)/test-results:/output \
             alpine sh -c "cp -r /results/* /output/ 2>/dev/null || true"
 
