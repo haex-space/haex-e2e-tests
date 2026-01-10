@@ -117,7 +117,8 @@ async function invokeTauriCommand<T = unknown>(
 
   if (result && typeof result === "object" && "success" in result) {
     if (!result.success) {
-      throw new Error(`Tauri command '${command}' failed: ${result.error}`);
+      const errorMsg = typeof result.error === "object" ? JSON.stringify(result.error, null, 2) : result.error;
+      throw new Error(`Tauri command '${command}' failed: ${errorMsg}`);
     }
     return result.data as T;
   }
