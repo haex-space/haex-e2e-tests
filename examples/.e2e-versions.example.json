@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/haex-space/haex-e2e-tests/main/schemas/e2e-versions.schema.json",
+  "project": "haex-vault",
+  "dependencies": {
+    "haex-vault": "self",
+    "haextension": "main",
+    "vault-sdk": "main",
+    "haex-sync-server": "v1.0.0"
+  },
+  "profiles": {
+    "release": {
+      "haex-vault": "self",
+      "haextension": "v2.1.0",
+      "vault-sdk": "v1.5.0",
+      "haex-sync-server": "v1.0.0"
+    },
+    "bleeding-edge": {
+      "haex-vault": "self",
+      "haextension": "develop",
+      "vault-sdk": "develop",
+      "haex-sync-server": "develop"
+    }
+  }
+}

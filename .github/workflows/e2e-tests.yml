@@ -1,0 +1,257 @@
+name: E2E Tests
+
+on:
+  # Callable from other repositories (haex-vault, haextension, etc.)
+  workflow_call:
+    inputs:
+      build_type:
+        description: 'Build type: nightly or release'
+        type: string
+        required: true
+      # Option 1: Load versions from project config (.e2e-versions.json)
+      source_project:
+        description: 'Load versions from this project config (haex-vault, haextension, vault-sdk, haex-sync-server)'
+        type: string
+        default: ''
+      source_ref:
+        description: 'Git ref to load config from (only used with source_project)'
+        type: string
+        default: 'main'
+      version_profile:
+        description: 'Version profile to use from config (only used with source_project)'
+        type: string
+        default: ''
+      # Option 2: Specify versions directly (ignored if source_project is set)
+      haex_vault_version:
+        description: 'haex-vault version (branch, tag, or commit)'
+        type: string
+        default: 'main'
+      haextension_version:
+        description: 'haextension version (branch, tag, or commit)'
+        type: string
+        default: 'main'
+      vault_sdk_version:
+        description: 'vault-sdk version (branch, tag, or commit)'
+        type: string
+        default: 'main'
+      sync_server_version:
+        description: 'haex-sync-server version (branch, tag, or commit)'
+        type: string
+        default: 'main'
+    outputs:
+      success:
+        description: 'Whether tests passed'
+        value: ${{ jobs.e2e.outputs.success }}
+      test_result:
+        description: 'Test result summary'
+        value: ${{ jobs.e2e.outputs.test_result }}
+      artifact_name:
+        description: 'Name of the uploaded artifact'
+        value: ${{ jobs.e2e.outputs.artifact_name }}
+      run_id:
+        description: 'GitHub Actions run ID'
+        value: ${{ jobs.e2e.outputs.run_id }}
+
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        type: choice
+        options:
+          - nightly
+          - release
+        default: nightly
+      # Option 1: Load versions from project config
+      source_project:
+        description: 'Load versions from project config (leave empty to use manual versions)'
+        type: choice
+        options:
+          - ''
+          - haex-vault
+          - haextension
+          - vault-sdk
+          - haex-sync-server
+        default: ''
+      source_ref:
+        description: 'Git ref to load config from'
+        default: 'main'
+      version_profile:
+        description: 'Version profile (leave empty for default)'
+        default: ''
+      # Option 2: Specify versions directly
+      haex_vault_version:
+        description: 'haex-vault version (ignored if source_project is set)'
+        default: 'main'
+      haextension_version:
+        description: 'haextension version (ignored if source_project is set)'
+        default: 'main'
+      vault_sdk_version:
+        description: 'vault-sdk version (ignored if source_project is set)'
+        default: 'main'
+      sync_server_version:
+        description: 'haex-sync-server version (ignored if source_project is set)'
+        default: 'main'
+
+jobs:
+  e2e:
+    name: E2E Tests (${{ inputs.build_type }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # For nightly: continue even if tests fail
+    # For release: fail the workflow if tests fail
+    continue-on-error: ${{ inputs.build_type == 'nightly' }}
+
+    outputs:
+      success: ${{ steps.test.outcome == 'success' }}
+      test_result: ${{ steps.test.outcome }}
+      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
+      run_id: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+
+      - name: Resolve versions from project config
+        id: versions
+        run: |
+          SOURCE_PROJECT="${{ inputs.source_project }}"
+
+          if [ -n "$SOURCE_PROJECT" ]; then
+            echo "Loading versions from $SOURCE_PROJECT config..."
+
+            # Install jq for JSON parsing
+            sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+            # Source the script to get versions
+            source scripts/fetch-project-versions.sh \
+              "$SOURCE_PROJECT" \
+              "${{ inputs.source_ref }}" \
+              "${{ inputs.version_profile }}"
+
+            # Export to GitHub outputs
+            echo "haex_vault_version=$HAEX_VAULT_VERSION" >> $GITHUB_OUTPUT
+            echo "haextension_version=$HAEXTENSION_VERSION" >> $GITHUB_OUTPUT
+            echo "vault_sdk_version=$VAULT_SDK_VERSION" >> $GITHUB_OUTPUT
+            echo "sync_server_version=$HAEX_SYNC_SERVER_VERSION" >> $GITHUB_OUTPUT
+            echo "source=config" >> $GITHUB_OUTPUT
+          else
+            echo "Using manually specified versions..."
+
+            # Use input values directly
+            echo "haex_vault_version=${{ inputs.haex_vault_version }}" >> $GITHUB_OUTPUT
+            echo "haextension_version=${{ inputs.haextension_version }}" >> $GITHUB_OUTPUT
+            echo "vault_sdk_version=${{ inputs.vault_sdk_version }}" >> $GITHUB_OUTPUT
+            echo "sync_server_version=${{ inputs.sync_server_version }}" >> $GITHUB_OUTPUT
+            echo "source=manual" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log test configuration
+        run: |
+          echo "## E2E Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | \`${{ inputs.build_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Source | \`${{ steps.versions.outputs.source }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.versions.outputs.source }}" == "config" ]; then
+            echo "| Source Project | \`${{ inputs.source_project }}@${{ inputs.source_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ inputs.version_profile }}" ]; then
+              echo "| Profile | \`${{ inputs.version_profile }}\` |" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| haextension | \`${{ steps.versions.outputs.haextension_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| vault-sdk | \`${{ steps.versions.outputs.vault_sdk_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.build_type }}" == "nightly" ]; then
+            echo "> **Note:** Nightly build - test failures will not block the pipeline" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> **Note:** Release build - test failures will block the pipeline" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test environment
+        env:
+          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
+          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
+          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
+          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+        run: |
+          echo "Building with versions:"
+          echo "  haex-vault: $HAEX_VAULT_VERSION"
+          echo "  haextension: $HAEXTENSION_VERSION"
+          echo "  vault-sdk: $VAULT_SDK_VERSION"
+          echo "  sync-server: $HAEX_SYNC_SERVER_VERSION"
+
+          docker compose -f docker/docker-compose.yml build
+
+      - name: Start services
+        env:
+          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
+          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
+          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
+          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+        run: |
+          docker compose -f docker/docker-compose.yml up -d db sync-server
+
+          # Wait for services to be healthy
+          echo "Waiting for services to be ready..."
+          sleep 10
+          docker compose -f docker/docker-compose.yml ps
+
+      - name: Run E2E tests
+        id: test
+        env:
+          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
+          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
+          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
+          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+          CI: true
+        run: |
+          docker compose -f docker/docker-compose.yml run --rm e2e-test-env pnpm test
+
+      - name: Copy test results from container
+        if: always()
+        run: |
+          mkdir -p ./test-results
+
+          # Copy from named volume via temporary container
+          docker run --rm \
+            -v haex-e2e-tests_test-results:/results \
+            -v $(pwd)/test-results:/output \
+            alpine sh -c "cp -r /results/* /output/ 2>/dev/null || true"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
+          path: |
+            test-results/artifacts/
+            test-results/html-report/
+            test-results/results.json
+          retention-days: 90
+
+      - name: Write test summary
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Test Result" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.test.outcome }}" == "success" ]; then
+            echo "✅ **Tests passed**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Tests failed**" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.build_type }}" == "nightly" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "_Pipeline continues because this is a nightly build_" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v
