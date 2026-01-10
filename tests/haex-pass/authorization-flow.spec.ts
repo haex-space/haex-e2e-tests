@@ -5,6 +5,7 @@ import {
   VaultAutomation,
   waitForBridgeConnection,
   authorizeClient,
+  HAEX_PASS_METHODS,
 } from "../fixtures";
 
 /**
@@ -89,10 +90,15 @@ test.describe("authorization-flow", () => {
       const state = client.getState();
       expect(state.state).toBe("paired");
 
-      // Try a simple get-logins request
-      const response = await client.getLogins("https://example.com", []);
+      // Small delay to ensure authorization is fully propagated
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
-      // Should get a response (even if empty)
+      // Try a simple get-items request (same as get-logins.spec.ts)
+      const response = await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+        url: "https://example.com",
+      });
+
+      // Should get a response (even if empty entries)
       expect(response).toBeDefined();
     } finally {
       client.disconnect();

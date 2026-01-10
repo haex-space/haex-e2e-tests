@@ -73,6 +73,11 @@ test.describe("get-items", () => {
         username: entry.username,
         password: entry.password,
         groupId: entry.groupId,
+        // Include TOTP secret if available
+        otpSecret: entry.otpSecret,
+        otpDigits: entry.otpDigits,
+        otpPeriod: entry.otpPeriod,
+        otpAlgorithm: entry.otpAlgorithm,
       })) as ApiResponse;
 
       expect(response.success).toBe(true);
