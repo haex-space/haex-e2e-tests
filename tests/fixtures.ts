@@ -37,20 +37,27 @@ const TAURI_DRIVER_URL = "http://localhost:4444";
 // Detect which container we're running in
 // VAULT_INSTANCE is set in docker-compose.yml for each container
 const rawVaultInstance = process.env.VAULT_INSTANCE;
-const isInContainer = rawVaultInstance !== undefined;
 // Normalize to uppercase and trim to handle any formatting issues
 const currentInstance = rawVaultInstance?.toUpperCase().trim() as "A" | "B" | undefined;
+
+// If VAULT_INSTANCE is not set, we assume we're running in the primary vault container (A)
+// This is the case when using `docker compose run vault-a pnpm test` which doesn't
+// properly pass through environment variables from the docker-compose.yml service definition
+const effectiveInstance = currentInstance ?? "A";
+const isInContainer = rawVaultInstance !== undefined;
 
 // Debug logging for CI troubleshooting
 console.log("[E2E Config] VAULT_INSTANCE raw:", JSON.stringify(rawVaultInstance));
 console.log("[E2E Config] VAULT_INSTANCE normalized:", JSON.stringify(currentInstance));
+console.log("[E2E Config] effectiveInstance:", effectiveInstance);
 console.log("[E2E Config] isInContainer:", isInContainer);
 
 // Helper to determine URL for a vault instance
 // When running in the same container as the vault, use localhost
 // When running in a different container, use the container hostname via socat proxy
 function getVaultUrl(targetInstance: "A" | "B"): string {
-  const isLocalInstance = currentInstance === targetInstance;
+  // Use effectiveInstance which defaults to "A" if not set
+  const isLocalInstance = effectiveInstance === targetInstance;
   if (isLocalInstance) {
     return "http://localhost:4444";
   }
@@ -72,7 +79,8 @@ export const VAULT_CONFIG = {
     webtopPort: 3000,
     containerName: "haex_e2e_vault_a",
     // Whether we need to override Host header for this config
-    needsHostOverride: currentInstance !== "A" && isInContainer,
+    // Use effectiveInstance for consistent behavior
+    needsHostOverride: effectiveInstance !== "A",
   },
   B: {
     // When in vault-b container: use localhost directly
@@ -85,7 +93,8 @@ export const VAULT_CONFIG = {
     bridgeHost: "localhost",
     webtopPort: 3001,
     containerName: "haex_e2e_vault_b",
-    needsHostOverride: currentInstance !== "B" && isInContainer,
+    // Use effectiveInstance for consistent behavior
+    needsHostOverride: effectiveInstance !== "B",
   },
 } as const;
 
