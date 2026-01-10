@@ -111,6 +111,9 @@ jobs:
     steps:
       - name: Checkout E2E tests
         uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: main
 
       - name: Resolve versions from project config
         id: versions
