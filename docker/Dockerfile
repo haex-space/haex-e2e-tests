@@ -55,6 +55,8 @@ RUN apt-get update && apt-get install -y \
     libasound2t64 \
     # socat for cross-container communication (dual-vault tests)
     socat \
+    # ffmpeg for desktop screen recording during tests
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Node.js via NodeSource

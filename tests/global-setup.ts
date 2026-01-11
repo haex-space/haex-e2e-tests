@@ -1,9 +1,12 @@
 import * as fs from "node:fs";
+import { spawn } from "node:child_process";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
 const SESSION_FILE = "/tmp/e2e-webdriver-session.json";
 const EXTENSION_ID_FILE = "/tmp/e2e-haex-pass-extension-id.txt";
+const FFMPEG_PID_FILE = "/tmp/e2e-ffmpeg-recording.pid";
+const VIDEO_OUTPUT_PATH = "/app/test-results/artifacts/desktop-recording.webm";
 
 // Test vault configuration
 const TEST_VAULT_NAME = "e2e-test-vault";
@@ -30,6 +33,68 @@ const HAEX_PASS_MANIFEST = {
   displayMode: "auto",
   migrationsDir: "database/migrations",
 };
+
+/**
+ * Start desktop screen recording using ffmpeg
+ * Records the X11 display to a webm file for debugging test failures
+ */
+function startScreenRecording(): void {
+  // Ensure output directory exists
+  const outputDir = "/app/test-results/artifacts";
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  console.log("[Setup] Starting desktop screen recording...");
+
+  // Use ffmpeg to record the X11 display
+  // -f x11grab: capture X11 display
+  // -video_size 1280x720: resolution (matches webtop default)
+  // -framerate 10: 10 fps is enough for debugging, keeps file size small
+  // -i :1: display number (webtop uses :1)
+  // -c:v libvpx-vp9: VP9 codec for webm
+  // -crf 30: quality (higher = smaller file, lower quality)
+  // -b:v 0: let CRF control quality
+  const ffmpegProcess = spawn("ffmpeg", [
+    "-f", "x11grab",
+    "-video_size", "1280x720",
+    "-framerate", "10",
+    "-i", ":1",
+    "-c:v", "libvpx-vp9",
+    "-crf", "35",
+    "-b:v", "0",
+    "-y", // Overwrite output file
+    VIDEO_OUTPUT_PATH,
+  ], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  // Log ffmpeg output for debugging
+  ffmpegProcess.stdout?.on("data", (data: Buffer) => {
+    console.log(`[ffmpeg] ${data.toString().trim()}`);
+  });
+  ffmpegProcess.stderr?.on("data", (data: Buffer) => {
+    // ffmpeg writes progress to stderr
+    const msg = data.toString().trim();
+    if (msg && !msg.startsWith("frame=")) {
+      console.log(`[ffmpeg] ${msg}`);
+    }
+  });
+
+  ffmpegProcess.on("error", (err: Error) => {
+    console.error("[Setup] ffmpeg error:", err.message);
+  });
+
+  // Save PID for teardown to stop recording
+  if (ffmpegProcess.pid) {
+    fs.writeFileSync(FFMPEG_PID_FILE, ffmpegProcess.pid.toString());
+    console.log("[Setup] Screen recording started, PID:", ffmpegProcess.pid);
+  }
+
+  // Unref so the process doesn't prevent Node from exiting
+  ffmpegProcess.unref();
+}
 
 /**
  * Wait for tauri-driver to be ready
@@ -513,6 +578,9 @@ async function globalSetup() {
   // Services are now auto-started by /custom-cont-init.d/99-start-services.sh
   // when the container starts. We just need to wait for them to be ready.
   console.log("[Setup] Waiting for services (started by container init)...");
+
+  // Start screen recording early to capture the entire test session
+  startScreenRecording();
 
   // Clean up any old WebDriver session before creating a new one
   await cleanupOldSession();
