@@ -87,23 +87,37 @@ test.describe("authorization-flow", () => {
       const authorized = await authorizeClient(client, EXTENSION_ID);
       expect(authorized).toBe(true);
 
-      // Should be able to send requests now
+      // Verify paired state
       const state = client.getState();
       expect(state.state).toBe("paired");
 
-      // Longer delay to ensure authorization is fully propagated to the bridge
-      // The bridge may need time to update its internal state after DB write
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      // Wait for authorization to propagate and haex-pass extension to be ready
+      // The extension may need time to fully initialize after vault startup
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Try a simple get-items request with longer timeout
-      const response = await client.sendRequest(
+      // First, create a test entry so we have something to query
+      // This also verifies the set-item handler is working
+      const setResponse = await client.sendRequest(
+        HAEX_PASS_METHODS.SET_ITEM,
+        {
+          url: "https://authorization-test.example.com",
+          title: "Authorization Test Entry",
+          username: "authtest",
+          password: "authpass123",
+        },
+        15000
+      );
+      expect(setResponse).toBeDefined();
+
+      // Now try to get items - should return the entry we just created
+      const getResponse = await client.sendRequest(
         HAEX_PASS_METHODS.GET_ITEMS,
-        { url: "https://example.com" },
-        15000 // 15 second timeout
+        { url: "https://authorization-test.example.com" },
+        15000
       );
 
-      // Should get a response (even if empty entries)
-      expect(response).toBeDefined();
+      // Should get a response with the entry we created
+      expect(getResponse).toBeDefined();
     } finally {
       client.disconnect();
     }
