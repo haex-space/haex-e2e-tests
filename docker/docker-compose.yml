@@ -8,6 +8,13 @@
 # Version configuration via environment variables:
 #   HAEX_VAULT_VERSION=v1.0.0 docker compose build
 #   VERSION_PRESET=release docker compose build
+#
+# Pre-built artifact mode:
+#   USE_PREBUILT_VAULT=true docker compose build
+#   (requires binary in docker/prebuilt/haex-vault/haex-space)
+#
+#   SYNC_SERVER_IMAGE=ghcr.io/haex-space/haex-sync-server:latest docker compose up
+#   (uses pre-built sync-server image instead of building)
 
 services:
   # PostgreSQL Database with Supabase extensions
@@ -108,8 +115,10 @@ services:
     networks:
       - e2e-network
 
-  # haex-sync-server for sync tests (built from GitHub)
+  # haex-sync-server for sync tests
+  # Can use pre-built image (SYNC_SERVER_IMAGE) or build from GitHub (HAEX_SYNC_SERVER_VERSION)
   sync-server:
+    image: ${SYNC_SERVER_IMAGE:-}
     build:
       context: .
       dockerfile: Dockerfile.sync-server
@@ -153,6 +162,7 @@ services:
         - HAEX_VAULT_REF=${HAEX_VAULT_VERSION:-main}
         - HAEXTENSION_REF=${HAEXTENSION_VERSION:-main}
         - VAULT_SDK_REF=${VAULT_SDK_VERSION:-main}
+        - USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT:-false}
     container_name: haex_e2e_vault_a
     # webtop requires s6-overlay to run as PID 1, so we can't use init: true
     tty: true
@@ -204,6 +214,7 @@ services:
         - HAEX_VAULT_REF=${HAEX_VAULT_VERSION:-main}
         - HAEXTENSION_REF=${HAEXTENSION_VERSION:-main}
         - VAULT_SDK_REF=${VAULT_SDK_VERSION:-main}
+        - USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT:-false}
     container_name: haex_e2e_vault_b
     tty: true
     stdin_open: true

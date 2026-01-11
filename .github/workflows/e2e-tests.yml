@@ -38,6 +38,23 @@ on:
         description: 'haex-sync-server version (branch, tag, or commit)'
         type: string
         default: 'main'
+      # Option 3: Use pre-built artifacts (skips building that component)
+      haex_vault_artifact:
+        description: 'GitHub artifact name containing pre-built haex-vault (skips vault build if set)'
+        type: string
+        default: ''
+      haex_vault_artifact_run_id:
+        description: 'Run ID to download haex-vault artifact from (required if haex_vault_artifact is set)'
+        type: string
+        default: ''
+      sync_server_image:
+        description: 'Pre-built sync-server Docker image (e.g., ghcr.io/haex-space/haex-sync-server:latest)'
+        type: string
+        default: ''
+    secrets:
+      ARTIFACT_TOKEN:
+        description: 'Token with permission to download artifacts from other repos (defaults to GITHUB_TOKEN)'
+        required: false
     outputs:
       success:
         description: 'Whether tests passed'
@@ -115,6 +132,42 @@ jobs:
           repository: haex-space/haex-e2e-tests
           ref: main
 
+      - name: Download haex-vault artifact (if provided)
+        if: inputs.haex_vault_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.haex_vault_artifact }}
+          run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+          path: ./docker/prebuilt/haex-vault
+
+      - name: Prepare pre-built artifacts
+        id: prebuilt
+        run: |
+          USE_PREBUILT_VAULT="false"
+          USE_PREBUILT_SYNC_SERVER="false"
+
+          # Check if haex-vault artifact was downloaded
+          if [ -d "./docker/prebuilt/haex-vault" ]; then
+            echo "Found pre-built haex-vault artifact"
+            ls -la ./docker/prebuilt/haex-vault/
+            USE_PREBUILT_VAULT="true"
+
+            # Make binary executable
+            if [ -f "./docker/prebuilt/haex-vault/haex-space" ]; then
+              chmod +x ./docker/prebuilt/haex-vault/haex-space
+            fi
+          fi
+
+          # Check if sync-server image is specified
+          if [ -n "${{ inputs.sync_server_image }}" ]; then
+            echo "Using pre-built sync-server image: ${{ inputs.sync_server_image }}"
+            USE_PREBUILT_SYNC_SERVER="true"
+          fi
+
+          echo "use_prebuilt_vault=$USE_PREBUILT_VAULT" >> $GITHUB_OUTPUT
+          echo "use_prebuilt_sync_server=$USE_PREBUILT_SYNC_SERVER" >> $GITHUB_OUTPUT
+
       - name: Resolve versions from project config
         id: versions
         run: |
@@ -163,10 +216,24 @@ jobs:
               echo "| Profile | \`${{ inputs.version_profile }}\` |" >> $GITHUB_STEP_SUMMARY
             fi
           fi
-          echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          # Show haex-vault source
+          if [ "${{ steps.prebuilt.outputs.use_prebuilt_vault }}" == "true" ]; then
+            echo "| haex-vault | \`PRE-BUILT ARTIFACT\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "| haextension | \`${{ steps.versions.outputs.haextension_version }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| vault-sdk | \`${{ steps.versions.outputs.vault_sdk_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          # Show sync-server source
+          if [ "${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}" == "true" ]; then
+            echo "| sync-server | \`${{ inputs.sync_server_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.build_type }}" == "nightly" ]; then
             echo "> **Note:** Nightly build - test failures will not block the pipeline" >> $GITHUB_STEP_SUMMARY
@@ -196,12 +263,15 @@ jobs:
           HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
           VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
           HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
+          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
         run: |
-          echo "Building with versions:"
-          echo "  haex-vault: $HAEX_VAULT_VERSION"
+          echo "Building with:"
+          echo "  haex-vault: ${USE_PREBUILT_VAULT == 'true' && 'PRE-BUILT' || $HAEX_VAULT_VERSION}"
           echo "  haextension: $HAEXTENSION_VERSION"
           echo "  vault-sdk: $VAULT_SDK_VERSION"
-          echo "  sync-server: $HAEX_SYNC_SERVER_VERSION"
+          echo "  sync-server: ${USE_PREBUILT_SYNC_SERVER == 'true' && $SYNC_SERVER_IMAGE || $HAEX_SYNC_SERVER_VERSION}"
 
           docker compose -f docker/docker-compose.yml build
 
@@ -211,6 +281,9 @@ jobs:
           HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
           VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
           HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
+          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
         run: |
           docker compose -f docker/docker-compose.yml up -d db sync-server
 
@@ -226,6 +299,9 @@ jobs:
           HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
           VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
           HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
+          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           CI: true
         run: |
           # Run tests in vault-a container which has Playwright installed

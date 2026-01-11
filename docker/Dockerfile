@@ -2,6 +2,10 @@
 #
 # Based on webtop for GUI support (needed for Tauri apps)
 # Includes: Rust, Node.js, tauri-driver, Playwright browsers
+#
+# Supports two modes:
+# 1. Build from source: Set HAEX_VAULT_REF to a git ref (default)
+# 2. Use pre-built binary: Set USE_PREBUILT_VAULT=true and copy binary to prebuilt/haex-vault/
 
 FROM lscr.io/linuxserver/webtop:ubuntu-xfce
 
@@ -10,11 +14,13 @@ ARG NODE_VERSION=22
 ARG HAEX_VAULT_REF=main
 ARG HAEXTENSION_REF=main
 ARG VAULT_SDK_REF=main
+ARG USE_PREBUILT_VAULT=false
 
 ENV DISPLAY=:1
 ENV HAEX_VAULT_REF=${HAEX_VAULT_REF}
 ENV HAEXTENSION_REF=${HAEXTENSION_REF}
 ENV VAULT_SDK_REF=${VAULT_SDK_REF}
+ENV USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT}
 
 # Install system dependencies for Tauri
 RUN apt-get update && apt-get install -y \
@@ -76,14 +82,18 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
 RUN npx playwright install chromium --with-deps
 
 # Create directories
-RUN mkdir -p /app /app/test-results /repos
+RUN mkdir -p /app /app/test-results /repos /prebuilt
 
 WORKDIR /repos
 
-# Clone repositories at specified refs
+# Copy pre-built artifacts (if any) - these are provided by the build context
+COPY prebuilt/ /prebuilt/
+
+# Clone haex-vault repository (always needed for Nuxt source code)
 RUN git clone --depth 1 --branch ${HAEX_VAULT_REF} https://github.com/haex-space/haex-vault.git || \
     (git clone https://github.com/haex-space/haex-vault.git && cd haex-vault && git checkout ${HAEX_VAULT_REF})
 
+# Clone other repositories
 RUN git clone --depth 1 --branch ${HAEXTENSION_REF} https://github.com/haex-space/haextension.git || \
     (git clone https://github.com/haex-space/haextension.git && cd haextension && git checkout ${HAEXTENSION_REF})
 
@@ -106,55 +116,92 @@ RUN jq '.build.frontendDist = "http://localhost:3003" | .app.security.csp["defau
     cat src-tauri/tauri.conf.json | head -20 && \
     echo "Modified tauri.conf.json to use dev-server mode"
 
-# Build without bundling (--no-bundle produces binary that will connect to dev server)
-RUN /root/.cargo/bin/cargo tauri build --no-bundle
-
-# Note: We use the dev-server built binary instead of copying a pre-built one
-# The pre-built binary would have embedded assets and cause the about:blank origin issue
-# If you need to test a local fix, rebuild with: docker build --no-cache ...
+# Build Tauri binary OR use pre-built one
+# If USE_PREBUILT_VAULT=true and pre-built binary exists, skip the cargo build
+RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-space" ]; then \
+      echo "Using pre-built haex-vault binary"; \
+      mkdir -p /repos/haex-vault/src-tauri/target/release; \
+      cp /prebuilt/haex-vault/haex-space /repos/haex-vault/src-tauri/target/release/haex-space; \
+      chmod +x /repos/haex-vault/src-tauri/target/release/haex-space; \
+    else \
+      echo "Building haex-vault from source (USE_PREBUILT_VAULT=$USE_PREBUILT_VAULT)"; \
+      /root/.cargo/bin/cargo tauri build --no-bundle; \
+    fi
 
 # Build vault-sdk
 WORKDIR /repos/vault-sdk
 RUN pnpm install && pnpm build
 
-# Build haextension (monorepo with haex-pass and haex-pass-browser)
+# Build haextension (monorepo with all core extensions: haex-pass, haex-files, haex-send)
 WORKDIR /repos/haextension
 RUN pnpm install
 
-# Generate E2E test keypair BEFORE building haex-pass
+# Generate E2E test keypair BEFORE building extensions
 # This ensures migrations use the correct table prefix based on our test public key
-WORKDIR /repos/haextension/apps/haex-pass
+# The keypair is shared across all extensions for consistency
 RUN mkdir -p /tmp/e2e-keys && \
-    pnpm exec haex keygen -o /tmp/e2e-keys && \
-    # Read the new public key and the old one from manifest
-    NEW_KEY=$(cat /tmp/e2e-keys/public.key) && \
-    OLD_KEY=$(jq -r '.publicKey' haextension/manifest.json) && \
-    # Update public.key file
-    cp /tmp/e2e-keys/public.key haextension/public.key && \
-    # Update publicKey in manifest.json
-    jq --arg pk "$NEW_KEY" '.publicKey = $pk' haextension/manifest.json > /tmp/manifest.json && \
-    mv /tmp/manifest.json haextension/manifest.json && \
-    # Replace old public key prefix with new one in all migration SQL files
-    find app/database/migrations -name "*.sql" -exec sed -i "s/${OLD_KEY}/${NEW_KEY}/g" {} \; && \
-    echo "Replaced key prefix in migrations: ${OLD_KEY} -> ${NEW_KEY}"
+    cd apps/haex-pass && \
+    pnpm exec haex keygen -o /tmp/e2e-keys
+
+# Update all extensions with the new test keypair
+# Each extension needs its manifest.json and migrations updated
+RUN NEW_KEY=$(cat /tmp/e2e-keys/public.key) && \
+    echo "Generated E2E test key: $NEW_KEY" && \
+    for EXT in haex-pass haex-files haex-send; do \
+      EXT_DIR="/repos/haextension/apps/$EXT"; \
+      if [ -d "$EXT_DIR/haextension" ]; then \
+        echo "Updating $EXT with new keypair..."; \
+        # Get old key from manifest
+        OLD_KEY=$(jq -r '.publicKey' "$EXT_DIR/haextension/manifest.json" 2>/dev/null || echo ""); \
+        if [ -n "$OLD_KEY" ] && [ "$OLD_KEY" != "null" ]; then \
+          # Update public.key file
+          cp /tmp/e2e-keys/public.key "$EXT_DIR/haextension/public.key"; \
+          # Update publicKey in manifest.json
+          jq --arg pk "$NEW_KEY" '.publicKey = $pk' "$EXT_DIR/haextension/manifest.json" > /tmp/manifest.json && \
+          mv /tmp/manifest.json "$EXT_DIR/haextension/manifest.json"; \
+          # Replace old public key prefix in migration SQL files
+          if [ -d "$EXT_DIR/app/database/migrations" ]; then \
+            find "$EXT_DIR/app/database/migrations" -name "*.sql" -exec sed -i "s/${OLD_KEY}/${NEW_KEY}/g" {} \; ; \
+            echo "  Updated migrations for $EXT"; \
+          fi; \
+        fi; \
+      fi; \
+    done
 
 # Nuxt needs prepare step to generate tsconfig files for all packages
 WORKDIR /repos/haextension/packages/haex-ui
 RUN pnpm exec nuxt prepare || true
-WORKDIR /repos/haextension/apps/haex-pass
-RUN pnpm exec nuxt prepare || true
+
+# Prepare each extension app
 WORKDIR /repos/haextension
+RUN for EXT in haex-pass haex-files haex-send; do \
+      if [ -d "apps/$EXT" ]; then \
+        echo "Preparing $EXT..."; \
+        cd "apps/$EXT" && pnpm exec nuxt prepare || true; \
+        cd /repos/haextension; \
+      fi; \
+    done
+
+# Build all extensions
 RUN pnpm --filter haex-pass build
+RUN pnpm --filter haex-files build || echo "haex-files build skipped (may not exist yet)"
+RUN pnpm --filter haex-send build || echo "haex-send build skipped (may not exist yet)"
 RUN pnpm --filter haex-pass-browser build
 
-# Package haex-pass extension for E2E tests
+# Package all extensions for E2E tests
 # Sign with the previously generated test keypair
-WORKDIR /repos/haextension/apps/haex-pass
-RUN pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o /app/haex-pass.haex || \
-    echo "Warning: haex sign failed, extension tests may not work"
+RUN for EXT in haex-pass haex-files haex-send; do \
+      EXT_DIR="/repos/haextension/apps/$EXT"; \
+      if [ -d "$EXT_DIR/.output/public" ]; then \
+        echo "Signing $EXT..."; \
+        cd "$EXT_DIR" && \
+        pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o "/app/$EXT.haex" || \
+        echo "Warning: haex sign failed for $EXT"; \
+      fi; \
+    done
 
 # Copy the extension public key for E2E tests to use in requests
-RUN cp /tmp/e2e-keys/public.key /app/haex-pass-public.key
+RUN cp /tmp/e2e-keys/public.key /app/e2e-extensions-public.key
 
 # Copy test files from build context
 WORKDIR /app
