@@ -80,7 +80,8 @@ test.describe("authorization-flow", () => {
 
   // This test verifies that a newly authorized client can send requests.
   // Note: There's a race condition between authorization and the extension
-  // being ready to handle requests. We use retries to handle this.
+  // being ready to handle requests. The extension needs time to auto-start
+  // and register its event handlers. We use a longer wait and retries.
   test("should be able to send request after authorization", async () => {
     const client = new VaultBridgeClient();
 
@@ -94,17 +95,21 @@ test.describe("authorization-flow", () => {
       const state = client.getState();
       expect(state.state).toBe("paired");
 
-      // Wait for authorization to propagate
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Wait for extension to auto-start and initialize.
+      // The first request triggers ensure_extension_loaded() which emits an
+      // auto-start event. The extension needs time to load its webview/iframe,
+      // initialize JavaScript, and register event handlers.
+      // We wait 5 seconds before the first request to give the extension time.
+      await new Promise((resolve) => setTimeout(resolve, 5000));
 
-      // Retry the request with backoff - extension may need time to be ready
+      // Retry the request - extension may need more time to be fully ready
       let lastError: Error | null = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
         try {
           const response = await client.sendRequest(
             HAEX_PASS_METHODS.GET_ITEMS,
             { url: "https://example.com" },
-            10000
+            15000 // Longer timeout for extension to respond
           );
           // Success - response received
           expect(response).toBeDefined();
@@ -113,8 +118,8 @@ test.describe("authorization-flow", () => {
           lastError = err as Error;
           console.log(`[E2E] Request attempt ${attempt}/3 failed: ${lastError.message}`);
           if (attempt < 3) {
-            // Wait before retry with exponential backoff
-            await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+            // Wait before retry - give extension more time to initialize
+            await new Promise((resolve) => setTimeout(resolve, 5000));
           }
         }
       }
@@ -124,7 +129,7 @@ test.describe("authorization-flow", () => {
     } finally {
       client.disconnect();
     }
-  });
+  }, 90000); // 90 second timeout for this test
 
   test("should fail request when not authorized", async () => {
     const client = new VaultBridgeClient();
