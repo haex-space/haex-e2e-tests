@@ -78,12 +78,10 @@ test.describe("authorization-flow", () => {
     }
   });
 
-  // Skip this test - it requires haex-pass extension to immediately recognize
-  // a newly authorized client, which has race conditions. The extension
-  // registration happens asynchronously and may not be ready when we send
-  // the first request. Other tests verify request functionality works with
-  // pre-authorized clients from global-setup.
-  test.skip("should be able to send request after authorization", async () => {
+  // This test verifies that a newly authorized client can send requests.
+  // Note: There's a race condition between authorization and the extension
+  // being ready to handle requests. We use retries to handle this.
+  test("should be able to send request after authorization", async () => {
     const client = new VaultBridgeClient();
 
     try {
@@ -96,18 +94,33 @@ test.describe("authorization-flow", () => {
       const state = client.getState();
       expect(state.state).toBe("paired");
 
-      // Wait for authorization to propagate and haex-pass extension to be ready
+      // Wait for authorization to propagate
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // Try a simple get-items request
-      const response = await client.sendRequest(
-        HAEX_PASS_METHODS.GET_ITEMS,
-        { url: "https://example.com" },
-        15000
-      );
+      // Retry the request with backoff - extension may need time to be ready
+      let lastError: Error | null = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const response = await client.sendRequest(
+            HAEX_PASS_METHODS.GET_ITEMS,
+            { url: "https://example.com" },
+            10000
+          );
+          // Success - response received
+          expect(response).toBeDefined();
+          return; // Test passed
+        } catch (err) {
+          lastError = err as Error;
+          console.log(`[E2E] Request attempt ${attempt}/3 failed: ${lastError.message}`);
+          if (attempt < 3) {
+            // Wait before retry with exponential backoff
+            await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+          }
+        }
+      }
 
-      // Should get a response (even if empty entries)
-      expect(response).toBeDefined();
+      // All retries failed
+      throw lastError || new Error("Request failed after 3 attempts");
     } finally {
       client.disconnect();
     }
