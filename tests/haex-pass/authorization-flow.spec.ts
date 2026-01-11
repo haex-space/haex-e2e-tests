@@ -137,7 +137,7 @@ test.describe("authorization-flow", () => {
       if (state.state !== "paired") {
         // Should fail when trying to send request
         await expect(
-          client.sendRequest("get-logins", { url: "https://example.com" })
+          client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, { url: "https://example.com" })
         ).rejects.toThrow("Not authorized");
       } else {
         // If already paired, skip this test
