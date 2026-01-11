@@ -287,6 +287,9 @@ jobs:
             echo "  sync-server: $HAEX_SYNC_SERVER_VERSION"
           fi
 
+          # Ensure prebuilt directory exists (even if empty)
+          mkdir -p docker/prebuilt
+
           docker compose -f docker/docker-compose.yml build
 
       - name: Start services
