@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       build_type:
-        description: 'Build type: nightly or release'
+        description: 'Build type: build (PR/push), nightly, or release'
         type: string
         required: true
       # Option 1: Load versions from project config (.e2e-versions.json)
@@ -76,9 +76,10 @@ on:
         description: 'Build type'
         type: choice
         options:
+          - build
           - nightly
           - release
-        default: nightly
+        default: build
       # Option 1: Load versions from project config
       source_project:
         description: 'Load versions from project config (leave empty to use manual versions)'
@@ -115,9 +116,7 @@ jobs:
     name: E2E Tests (${{ inputs.build_type }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    # For nightly: continue even if tests fail
-    # For release: fail the workflow if tests fail
-    continue-on-error: ${{ inputs.build_type == 'nightly' }}
+    # All build types are blocking - E2E test failures fail the pipeline
 
     outputs:
       success: ${{ steps.test.outcome == 'success' }}
@@ -339,10 +338,6 @@ jobs:
             echo "✅ **Tests passed**" >> $GITHUB_STEP_SUMMARY
           else
             echo "❌ **Tests failed**" >> $GITHUB_STEP_SUMMARY
-            if [ "${{ inputs.build_type }}" == "nightly" ]; then
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "_Pipeline continues because this is a nightly build_" >> $GITHUB_STEP_SUMMARY
-            fi
           fi
 
       - name: Stop services
