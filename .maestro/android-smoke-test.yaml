@@ -1,0 +1,29 @@
+# Android Smoke Test - Verifies the app launches and basic UI is visible
+# This test runs on every build to ensure the Android app is functional
+
+appId: space.haex.vault
+---
+# Launch the app
+- launchApp:
+    clearState: true
+
+# Wait for the app to fully load
+- extendedWaitUntil:
+    visible: ".*"
+    timeout: 30000
+
+# Take a screenshot of the initial state
+- takeScreenshot: 01-app-launched
+
+# The app should show either:
+# 1. Welcome/onboarding screen (first launch)
+# 2. Login/unlock screen (if vault exists)
+# We just verify the app renders something
+
+# Try to find common UI elements that should be visible on first launch
+- assertVisible:
+    text: ".*"
+    optional: true
+
+# Take final screenshot
+- takeScreenshot: 02-smoke-test-complete

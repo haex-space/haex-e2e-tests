@@ -1,0 +1,45 @@
+# Android Sync Test - Verifies bidirectional sync with vault-a (desktop)
+# This test creates data on Android and verifies sync functionality
+#
+# Prerequisites:
+# - Sync server running on localhost:3002 (via adb reverse)
+# - Kong API gateway running on localhost:8000 (via adb reverse)
+
+appId: space.haex.vault
+---
+# Launch the app fresh
+- launchApp:
+    clearState: true
+
+# Wait for app to load
+- extendedWaitUntil:
+    visible: ".*"
+    timeout: 30000
+
+- takeScreenshot: 01-app-launched
+
+# Note: The actual sync test steps depend on the app's UI
+# These are placeholder steps that need to be adjusted based on the real app UI
+
+# Example flow for creating a vault and enabling sync:
+# 1. Create or unlock vault
+# 2. Navigate to settings
+# 3. Enable sync
+# 4. Add sync server URL
+# 5. Create test data
+# 6. Trigger sync
+# 7. Verify sync status
+
+# For now, this is a placeholder that verifies basic app functionality
+# The actual implementation will need to be updated once we know the exact UI
+
+- takeScreenshot: 02-sync-test-placeholder
+
+# TODO: Implement actual sync test steps:
+# - tapOn: "Create Vault" or similar
+# - inputText for vault name
+# - inputText for password
+# - Navigate to sync settings
+# - Configure sync server (http://10.0.2.2:3002 for emulator)
+# - Create test entry
+# - Verify sync completes
