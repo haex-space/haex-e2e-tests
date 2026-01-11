@@ -445,10 +445,20 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
+          working-directory: ${{ github.workspace }}
           script: |
-            # Find the APK file
-            APK_FILE=$(find ./apk -name "*.apk" -type f | head -1)
-            echo "Installing APK: $APK_FILE"
+            # Debug: show current directory and contents
+            echo "Working directory: $(pwd)"
+            ls -la
+
+            # Find the APK file using absolute path
+            APK_FILE=$(find ${{ github.workspace }}/apk -name "*.apk" -type f | head -1)
+            echo "Found APK file: $APK_FILE"
+
+            if [ -z "$APK_FILE" ]; then
+              echo "ERROR: No APK file found!"
+              exit 1
+            fi
 
             # Install the APK
             adb install "$APK_FILE"
@@ -461,12 +471,12 @@ jobs:
 
             # Run Maestro tests
             echo "Running Maestro smoke test..."
-            ~/.maestro/bin/maestro test .maestro/android-smoke-test.yaml --format junit --output maestro-results.xml || true
+            ~/.maestro/bin/maestro test ${{ github.workspace }}/.maestro/android-smoke-test.yaml --format junit --output ${{ github.workspace }}/maestro-results.xml || true
 
             # Check if there are sync tests
-            if [ -f ".maestro/android-sync-test.yaml" ]; then
+            if [ -f "${{ github.workspace }}/.maestro/android-sync-test.yaml" ]; then
               echo "Running Maestro sync test..."
-              ~/.maestro/bin/maestro test .maestro/android-sync-test.yaml --format junit --output maestro-sync-results.xml || true
+              ~/.maestro/bin/maestro test ${{ github.workspace }}/.maestro/android-sync-test.yaml --format junit --output ${{ github.workspace }}/maestro-sync-results.xml || true
             fi
 
       - name: Upload Maestro test results
