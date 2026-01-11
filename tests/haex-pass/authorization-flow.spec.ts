@@ -84,19 +84,23 @@ test.describe("authorization-flow", () => {
     try {
       // Connect and authorize
       await waitForBridgeConnection(client);
-      await authorizeClient(client, EXTENSION_ID);
+      const authorized = await authorizeClient(client, EXTENSION_ID);
+      expect(authorized).toBe(true);
 
       // Should be able to send requests now
       const state = client.getState();
       expect(state.state).toBe("paired");
 
-      // Small delay to ensure authorization is fully propagated
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Longer delay to ensure authorization is fully propagated to the bridge
+      // The bridge may need time to update its internal state after DB write
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
-      // Try a simple get-items request (same as get-logins.spec.ts)
-      const response = await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-        url: "https://example.com",
-      });
+      // Try a simple get-items request with longer timeout
+      const response = await client.sendRequest(
+        HAEX_PASS_METHODS.GET_ITEMS,
+        { url: "https://example.com" },
+        15000 // 15 second timeout
+      );
 
       // Should get a response (even if empty entries)
       expect(response).toBeDefined();

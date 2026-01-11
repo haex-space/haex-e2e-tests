@@ -30,7 +30,7 @@ export const TEST_ENTRIES: TestEntry[] = [
     groupId: null,
   },
 
-  // Entry with TOTP (default settings: 6 digits, 30s, SHA1)
+  // Entry with TOTP (explicit settings: 6 digits, 30s, SHA1)
   {
     id: "test-entry-google",
     title: "Google Account",
@@ -38,6 +38,9 @@ export const TEST_ENTRIES: TestEntry[] = [
     username: "testuser@gmail.com",
     password: "googlepass456",
     otpSecret: "JBSWY3DPEHPK3PXP", // Test secret
+    otpDigits: 6,
+    otpPeriod: 30,
+    otpAlgorithm: "SHA1",
     groupId: null,
   },
 
