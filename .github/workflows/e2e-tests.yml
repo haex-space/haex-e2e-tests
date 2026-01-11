@@ -440,6 +440,8 @@ jobs:
       - name: Run Android E2E Tests
         id: test
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          WORKSPACE: ${{ github.workspace }}
         with:
           api-level: 30
           arch: x86_64
@@ -447,37 +449,19 @@ jobs:
           disable-animations: true
           working-directory: ${{ github.workspace }}
           script: |
-            # Debug: show current directory and contents
             echo "Working directory: $(pwd)"
+            echo "WORKSPACE: $WORKSPACE"
             ls -la
-
-            # Find the APK file using absolute path
-            APK_FILE=$(find ${{ github.workspace }}/apk -name "*.apk" -type f | head -1)
+            ls -la "$WORKSPACE/apk/" || echo "apk directory not found"
+            APK_FILE=$(find "$WORKSPACE/apk" -name "*.apk" -type f 2>/dev/null | head -1)
             echo "Found APK file: $APK_FILE"
-
-            if [ -z "$APK_FILE" ]; then
-              echo "ERROR: No APK file found!"
-              exit 1
-            fi
-
-            # Install the APK
+            test -n "$APK_FILE" || { echo "ERROR: No APK file found!"; exit 1; }
             adb install "$APK_FILE"
-
-            # Set up port forwarding for sync server
-            # 10.0.2.2 is the host from Android emulator's perspective
-            # We use adb reverse to make localhost:3002 accessible from the app
             adb reverse tcp:3002 tcp:3002
             adb reverse tcp:8000 tcp:8000
-
-            # Run Maestro tests
             echo "Running Maestro smoke test..."
-            ~/.maestro/bin/maestro test ${{ github.workspace }}/.maestro/android-smoke-test.yaml --format junit --output ${{ github.workspace }}/maestro-results.xml || true
-
-            # Check if there are sync tests
-            if [ -f "${{ github.workspace }}/.maestro/android-sync-test.yaml" ]; then
-              echo "Running Maestro sync test..."
-              ~/.maestro/bin/maestro test ${{ github.workspace }}/.maestro/android-sync-test.yaml --format junit --output ${{ github.workspace }}/maestro-sync-results.xml || true
-            fi
+            ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-smoke-test.yaml" --format junit --output "$WORKSPACE/maestro-results.xml" || true
+            test -f "$WORKSPACE/.maestro/android-sync-test.yaml" && ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-sync-test.yaml" --format junit --output "$WORKSPACE/maestro-sync-results.xml" || true
 
       - name: Upload Maestro test results
         if: always()
