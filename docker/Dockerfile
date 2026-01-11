@@ -201,7 +201,8 @@ RUN for EXT in haex-pass haex-files haex-send; do \
     done
 
 # Copy the extension public key for E2E tests to use in requests
-RUN cp /tmp/e2e-keys/public.key /app/e2e-extensions-public.key
+# Named haex-pass-public.key since haex-pass is the primary extension being tested
+RUN cp /tmp/e2e-keys/public.key /app/haex-pass-public.key
 
 # Copy test files from build context
 WORKDIR /app
