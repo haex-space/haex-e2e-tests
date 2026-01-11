@@ -79,9 +79,8 @@ RUN /root/.cargo/bin/cargo install tauri-cli tauri-driver
 # Install WebKitWebDriver (required for tauri-driver)
 RUN apt-get update && apt-get install -y webkit2gtk-driver && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright (set consistent browser path)
+# Set Playwright browser path (browsers installed later after pnpm install)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-RUN npx playwright install chromium --with-deps
 
 # Create directories
 RUN mkdir -p /app /app/test-results /repos /prebuilt
@@ -222,6 +221,10 @@ RUN chmod +x /custom-cont-init.d/*.sh
 
 # Install test dependencies
 RUN pnpm install
+
+# Install Playwright browsers AFTER pnpm install (avoids "install dependencies first" warning)
+# This ensures @playwright/test is installed before downloading browsers
+RUN pnpm exec playwright install chromium --with-deps
 
 # Link vault-sdk for type imports
 RUN pnpm link /repos/vault-sdk
