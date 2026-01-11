@@ -288,7 +288,8 @@ jobs:
           fi
 
           # Ensure prebuilt directory exists (even if empty)
-          mkdir -p docker/prebuilt
+          # The Dockerfile's build context is the repo root (..), so prebuilt/ must be there
+          mkdir -p prebuilt
 
           docker compose -f docker/docker-compose.yml build
 
