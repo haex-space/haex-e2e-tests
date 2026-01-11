@@ -437,31 +437,42 @@ jobs:
           # Verify all services are up
           docker compose -f docker/docker-compose.yml ps
 
+      - name: Create test script
+        run: |
+          cat > /tmp/android-e2e-test.sh << 'SCRIPT'
+          #!/bin/bash
+          set -e
+          WORKSPACE="$1"
+          echo "Working directory: $(pwd)"
+          echo "WORKSPACE: $WORKSPACE"
+          ls -la "$WORKSPACE/apk/"
+          APK_FILE=$(find "$WORKSPACE/apk" -name "*.apk" -type f 2>/dev/null | head -1)
+          echo "Found APK file: $APK_FILE"
+          if [ -z "$APK_FILE" ]; then
+            echo "ERROR: No APK file found!"
+            exit 1
+          fi
+          adb install "$APK_FILE"
+          adb reverse tcp:3002 tcp:3002
+          adb reverse tcp:8000 tcp:8000
+          echo "Running Maestro smoke test..."
+          ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-smoke-test.yaml" --format junit --output "$WORKSPACE/maestro-results.xml" || true
+          if [ -f "$WORKSPACE/.maestro/android-sync-test.yaml" ]; then
+            ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-sync-test.yaml" --format junit --output "$WORKSPACE/maestro-sync-results.xml" || true
+          fi
+          SCRIPT
+          chmod +x /tmp/android-e2e-test.sh
+
       - name: Run Android E2E Tests
         id: test
         uses: reactivecircus/android-emulator-runner@v2
-        env:
-          WORKSPACE: ${{ github.workspace }}
         with:
           api-level: 30
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: ${{ github.workspace }}
-          script: |
-            echo "Working directory: $(pwd)"
-            echo "WORKSPACE: $WORKSPACE"
-            ls -la
-            ls -la "$WORKSPACE/apk/" || echo "apk directory not found"
-            APK_FILE=$(find "$WORKSPACE/apk" -name "*.apk" -type f 2>/dev/null | head -1)
-            echo "Found APK file: $APK_FILE"
-            test -n "$APK_FILE" || { echo "ERROR: No APK file found!"; exit 1; }
-            adb install "$APK_FILE"
-            adb reverse tcp:3002 tcp:3002
-            adb reverse tcp:8000 tcp:8000
-            echo "Running Maestro smoke test..."
-            ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-smoke-test.yaml" --format junit --output "$WORKSPACE/maestro-results.xml" || true
-            test -f "$WORKSPACE/.maestro/android-sync-test.yaml" && ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-sync-test.yaml" --format junit --output "$WORKSPACE/maestro-sync-results.xml" || true
+          script: /tmp/android-e2e-test.sh ${{ github.workspace }}
 
       - name: Upload Maestro test results
         if: always()
