@@ -596,19 +596,20 @@ async function globalSetup() {
   console.log("[Setup] Starting haex-vault via tauri-driver...");
   const sessionId = await createWebDriverSession();
 
-  // Wait for WebSocket bridge to be ready (app was just started)
+  // Save session ID for tests to reuse
+  fs.writeFileSync(SESSION_FILE, JSON.stringify({ sessionId }));
+  console.log("[Setup] Session ID saved to", SESSION_FILE);
+
+  // Initialize test vault - this must happen before waiting for WebSocket bridge
+  // because the bridge only starts after a vault is opened
+  await initializeTestVault(sessionId);
+
+  // Wait for WebSocket bridge to be ready (starts after vault is opened)
   console.log("[Setup] Waiting for WebSocket bridge...");
   const bridgeReady = await waitForWebSocketBridge();
   if (!bridgeReady) {
     throw new Error("WebSocket bridge did not start within timeout");
   }
-
-  // Save session ID for tests to reuse
-  fs.writeFileSync(SESSION_FILE, JSON.stringify({ sessionId }));
-  console.log("[Setup] Session ID saved to", SESSION_FILE);
-
-  // Initialize test vault
-  await initializeTestVault(sessionId);
 
   // Register haex-pass extension (required for browser extension authorization)
   await installHaexPassExtension(sessionId);
