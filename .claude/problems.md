@@ -410,6 +410,100 @@ NUXT_HOST=0.0.0.0 pnpm dev &
 
 ---
 
+### tauri-driver GTK Initialization Race Condition (GELÖST)
+**Problem:** tauri-driver crashte beim Container-Start mit:
+```
+Failed to initialize gtk backend!: BoolError { message: "Failed to initialize GTK" }
+```
+
+**Ursache:** Das init-Script (`99-start-services.sh`) startete tauri-driver bevor X11 und GTK vollständig initialisiert waren. Obwohl `xdpyinfo` erfolgreich war, waren die GTK-Bibliotheken noch nicht bereit.
+
+**Lösung:**
+1. **GTK-Readiness-Check hinzugefügt:**
+```bash
+echo "Waiting for GTK to be ready..."
+for i in {1..30}; do
+    if DISPLAY=:1 gtk-query-settings 2>/dev/null | head -1 >/dev/null; then
+        echo "GTK is ready!"
+        break
+    fi
+    sleep 1
+done
+```
+
+2. **Retry-Logik für tauri-driver:**
+```bash
+start_tauri_driver() {
+    DISPLAY=:1 nohup tauri-driver > /var/log/tauri-driver.log 2>&1 &
+    TAURI_PID=$!
+    for i in {1..15}; do
+        if curl -s http://localhost:4444/status >/dev/null 2>&1; then
+            return 0
+        fi
+        if ! kill -0 $TAURI_PID 2>/dev/null; then
+            return 1  # Crashed
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+# 3 Versuche mit 5s Pause
+for attempt in 1 2 3; do
+    if start_tauri_driver; then break; fi
+    sleep 5
+done
+```
+
+**Geänderte Dateien:**
+- `docker/custom-cont-init.d/99-start-services.sh`
+
+**Status:** ✅ GELÖST - tauri-driver startet jetzt zuverlässig beim ersten oder zweiten Versuch.
+
+---
+
+### Sync Tests - Fehlende Tauri Commands (BEKANNT)
+**Problem:** Alle Sync-Tests in `tests/sync/realtime-sync.spec.ts` schlagen fehl mit:
+```
+Command get_sync_status not found
+```
+
+**Ursache:** haex-vault hat den Command `get_sync_status` nicht implementiert.
+
+**Betroffene Tests:**
+- `should establish realtime subscription after sync setup`
+- `should recover from CHANNEL_ERROR with retry`
+- `should maintain connection when auth token is refreshed`
+- `should fall back to periodic pull when realtime fails`
+- `should properly cleanup channel on unsubscribe`
+
+**Status:** ❌ OFFEN - Erfordert Änderungen in haex-vault (neue Tauri Commands für Sync-Status).
+
+---
+
+### haex-pass Extension Request Timeout (BEKANNT)
+**Problem:** Nach Autorisierung schlagen Requests an die haex-pass Extension mit Timeout fehl.
+
+**Symptome:**
+```
+[E2E] Request attempt 1/3 failed: Request timeout
+```
+
+**Betroffene Tests:**
+- `should be able to send request after authorization`
+- `should create entry with URL and credentials`
+- `setup: create test entries via set-item`
+- `setup: create test entries for TOTP tests`
+
+**Mögliche Ursachen:**
+1. Extension wird installiert aber nicht automatisch gestartet
+2. Extension Event-Handler werden nicht registriert
+3. Kommunikation zwischen Bridge und Extension ist gestört
+
+**Status:** ❌ OFFEN - Erfordert weitere Analyse des Extension-Lifecycles in haex-vault.
+
+---
+
 ## Debugging-Tipps
 
 ### WebSocket-Kommunikation loggen
