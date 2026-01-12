@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
@@ -35,6 +35,26 @@ const HAEX_PASS_MANIFEST = {
 };
 
 /**
+ * Get the current X11 display resolution
+ */
+function getDisplayResolution(): string {
+  try {
+    const output = execSync("DISPLAY=:1 xdpyinfo 2>/dev/null | grep dimensions", {
+      encoding: "utf-8",
+    });
+    // Output format: "  dimensions:    1024x768 pixels (271x203 millimeters)"
+    const match = output.match(/(\d+x\d+)/);
+    if (match) {
+      console.log("[Setup] Detected display resolution:", match[1]);
+      return match[1];
+    }
+  } catch {
+    console.log("[Setup] Could not detect display resolution, using default");
+  }
+  return "1024x768"; // webtop default
+}
+
+/**
  * Start desktop screen recording using ffmpeg
  * Records the X11 display to a webm file for debugging test failures
  */
@@ -47,17 +67,20 @@ function startScreenRecording(): void {
 
   console.log("[Setup] Starting desktop screen recording...");
 
+  // Get actual display resolution
+  const resolution = getDisplayResolution();
+
   // Use ffmpeg to record the X11 display
   // -f x11grab: capture X11 display
-  // -video_size 1280x720: resolution (matches webtop default)
+  // -video_size: detected from xdpyinfo
   // -framerate 10: 10 fps is enough for debugging, keeps file size small
   // -i :1: display number (webtop uses :1)
   // -c:v libvpx-vp9: VP9 codec for webm
-  // -crf 30: quality (higher = smaller file, lower quality)
+  // -crf 35: quality (higher = smaller file, lower quality)
   // -b:v 0: let CRF control quality
   const ffmpegProcess = spawn("ffmpeg", [
     "-f", "x11grab",
-    "-video_size", "1280x720",
+    "-video_size", resolution,
     "-framerate", "10",
     "-i", ":1",
     "-c:v", "libvpx-vp9",
