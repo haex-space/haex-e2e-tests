@@ -1696,6 +1696,100 @@ export async function waitForBridgeConnection(
 }
 
 /**
+ * Options for sendRequestWithRetry
+ */
+interface RetryOptions {
+  /** Maximum number of attempts (default: 3) */
+  maxAttempts?: number;
+  /** Initial delay between retries in ms (default: 2000) */
+  initialDelay?: number;
+  /** Delay multiplier for exponential backoff (default: 1.5) */
+  backoffMultiplier?: number;
+  /** Request timeout in ms (default: 15000) */
+  requestTimeout?: number;
+  /** Initial wait before first request in ms (default: 0) */
+  initialWait?: number;
+}
+
+/**
+ * Helper to send request with retry logic and exponential backoff.
+ * Useful for requests that may fail due to extension initialization timing.
+ */
+export async function sendRequestWithRetry<T = unknown>(
+  client: VaultBridgeClient,
+  action: string,
+  payload: object,
+  options: RetryOptions = {}
+): Promise<T> {
+  const {
+    maxAttempts = 3,
+    initialDelay = 2000,
+    backoffMultiplier = 1.5,
+    requestTimeout = 15000,
+    initialWait = 0,
+  } = options;
+
+  // Wait before first request if specified
+  if (initialWait > 0) {
+    console.log(`[E2E] Waiting ${initialWait}ms before first request...`);
+    await new Promise((resolve) => setTimeout(resolve, initialWait));
+  }
+
+  let lastError: Error | null = null;
+  let delay = initialDelay;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await client.sendRequest<T>(action, payload, requestTimeout);
+      return response;
+    } catch (err) {
+      lastError = err as Error;
+      console.log(`[E2E] Request attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
+
+      if (attempt < maxAttempts) {
+        console.log(`[E2E] Retrying in ${delay}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.round(delay * backoffMultiplier);
+      }
+    }
+  }
+
+  throw lastError || new Error(`Request failed after ${maxAttempts} attempts`);
+}
+
+/**
+ * Helper to wait for extension to be ready and send first request.
+ * Use this after authorization to ensure the extension is fully initialized.
+ */
+export async function waitForExtensionReady(
+  client: VaultBridgeClient,
+  options: { timeout?: number; testAction?: string; testPayload?: object } = {}
+): Promise<boolean> {
+  const {
+    timeout = 30000,
+    testAction = HAEX_PASS_METHODS.GET_ITEMS,
+    testPayload = { url: "https://example.com" },
+  } = options;
+
+  console.log("[E2E] Waiting for extension to be ready...");
+
+  try {
+    await sendRequestWithRetry(client, testAction, testPayload, {
+      maxAttempts: 5,
+      initialDelay: 2000,
+      backoffMultiplier: 1.5,
+      requestTimeout: timeout / 5,
+      initialWait: 3000, // Give extension time to auto-start
+    });
+    console.log("[E2E] Extension is ready!");
+    return true;
+  } catch (err) {
+    console.error("[E2E] Extension failed to become ready:", err);
+    return false;
+  }
+}
+
+/**
  * Helper to complete the authorization flow
  * Note: The extensionId parameter is the Chrome extension ID (for Playwright).
  * For vault authorization, we use the haex-vault extension ID from global-setup.

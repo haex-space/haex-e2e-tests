@@ -4,6 +4,8 @@ import {
   VaultBridgeClient,
   waitForBridgeConnection,
   authorizeClient,
+  waitForExtensionReady,
+  sendRequestWithRetry,
   HAEX_PASS_METHODS,
 } from "../fixtures";
 import { TEST_ENTRIES } from "../../fixtures/test-data";
@@ -59,6 +61,12 @@ test.describe("get-items", () => {
     if (!authorized) {
       throw new Error("Failed to authorize client");
     }
+
+    // Wait for extension to be fully ready before running tests
+    const ready = await waitForExtensionReady(client);
+    if (!ready) {
+      throw new Error("Extension failed to become ready");
+    }
   });
 
   test.afterAll(async () => {
@@ -67,18 +75,24 @@ test.describe("get-items", () => {
 
   test("setup: create test entries via set-item", async () => {
     for (const entry of TEST_ENTRIES) {
-      const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
-        url: entry.url,
-        title: entry.title,
-        username: entry.username,
-        password: entry.password,
-        groupId: entry.groupId,
-        // Include TOTP secret if available
-        otpSecret: entry.otpSecret,
-        otpDigits: entry.otpDigits,
-        otpPeriod: entry.otpPeriod,
-        otpAlgorithm: entry.otpAlgorithm,
-      })) as ApiResponse;
+      // Use retry logic for set-item requests
+      const response = (await sendRequestWithRetry(
+        client,
+        HAEX_PASS_METHODS.SET_ITEM,
+        {
+          url: entry.url,
+          title: entry.title,
+          username: entry.username,
+          password: entry.password,
+          groupId: entry.groupId,
+          // Include TOTP secret if available
+          otpSecret: entry.otpSecret,
+          otpDigits: entry.otpDigits,
+          otpPeriod: entry.otpPeriod,
+          otpAlgorithm: entry.otpAlgorithm,
+        },
+        { maxAttempts: 3, initialDelay: 1000 }
+      )) as ApiResponse;
 
       expect(response.success).toBe(true);
     }

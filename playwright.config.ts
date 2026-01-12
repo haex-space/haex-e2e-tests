@@ -10,6 +10,11 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
+  // Global timeout for tests - extension initialization can be slow
+  timeout: 60000, // 60 seconds per test
+  expect: {
+    timeout: 10000, // 10 seconds for expect assertions
+  },
   reporter: [
     ["html", { outputFolder: "test-results/html-report" }],
     ["json", { outputFile: "test-results/results.json" }],
