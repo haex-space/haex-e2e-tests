@@ -1,0 +1,114 @@
+# =============================================================================
+# E2E Test Configuration
+# =============================================================================
+#
+# This file documents the E2E test configuration options and provides
+# defaults for local development.
+#
+# For CI, versions are typically loaded from project .e2e-versions.json files
+# or passed as workflow inputs. See .github/workflows/e2e-tests.yml
+#
+# Local Usage:
+#   export $(cat e2e.config.yaml | grep -v '^#' | grep '=' | xargs)
+#   npm run docker:build
+#   npm run docker:test
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Service Versions
+# -----------------------------------------------------------------------------
+# Use 'main' for latest development, or specify a branch/tag/commit
+
+# haex-vault desktop app
+HAEX_VAULT_VERSION=main
+
+# Browser extension (haex-pass)
+HAEXTENSION_VERSION=main
+
+# TypeScript SDK for vault API
+VAULT_SDK_VERSION=main
+
+# Sync server for multi-device sync
+HAEX_SYNC_SERVER_VERSION=main
+
+# -----------------------------------------------------------------------------
+# Build Options
+# -----------------------------------------------------------------------------
+
+# Use pre-built binaries instead of building from source
+# Set to 'true' to use binaries in docker/prebuilt/
+USE_PREBUILT_VAULT=false
+
+# Use a specific Docker image for sync-server
+# Example: ghcr.io/haex-space/haex-sync-server:latest
+SYNC_SERVER_IMAGE=
+
+# -----------------------------------------------------------------------------
+# Test Options
+# -----------------------------------------------------------------------------
+
+# Run tests in headed mode (visible browser)
+# DISPLAY=:0 npm run test:headed
+HEADED=false
+
+# Run only specific test file(s)
+# npm run docker:test -- --grep "pattern"
+TEST_PATTERN=
+
+# Number of test retries on failure
+RETRIES=2
+
+# Test timeout in milliseconds
+TIMEOUT=120000
+
+# -----------------------------------------------------------------------------
+# Container Configuration
+# -----------------------------------------------------------------------------
+
+# Docker compose project name
+COMPOSE_PROJECT_NAME=haex-e2e
+
+# Ports (change if conflicts with local services)
+VAULT_A_WEBTOP_PORT=3000
+VAULT_B_WEBTOP_PORT=3001
+SYNC_SERVER_PORT=3002
+POSTGRES_PORT=5432
+KONG_PORT=8000
+GOTRUE_PORT=9999
+
+# =============================================================================
+# Version Profiles
+# =============================================================================
+#
+# Projects can define version profiles in their .e2e-versions.json:
+#
+# {
+#   "dependencies": {
+#     "haex-vault": "self",        // Use the PR/branch being tested
+#     "haextension": "main",
+#     "vault-sdk": "main",
+#     "haex-sync-server": "main"
+#   },
+#   "profiles": {
+#     "release": {
+#       "haex-vault": "v1.0.0",
+#       "haextension": "v1.0.0",
+#       "vault-sdk": "v1.0.0",
+#       "haex-sync-server": "v1.0.0"
+#     },
+#     "canary": {
+#       "haex-vault": "self",
+#       "haextension": "canary",
+#       "vault-sdk": "canary",
+#       "haex-sync-server": "canary"
+#     }
+#   }
+# }
+#
+# CI Usage:
+#   - workflow_call with source_project="haex-vault" loads from that project
+#   - version_profile="release" uses the release profile
+#   - "self" is replaced with the ref being tested
+#
+# =============================================================================
