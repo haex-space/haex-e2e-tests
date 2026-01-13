@@ -97,6 +97,8 @@ test.describe("authorization-flow", () => {
       expect(state.state).toBe("paired");
 
       // Use retry helper with initial wait for extension to auto-start
+      // Note: Timeout increased to 30s to handle GitHub Actions runner variability
+      // where responses can take 15-20+ seconds due to resource constraints
       const response = await sendRequestWithRetry(
         client,
         HAEX_PASS_METHODS.GET_ITEMS,
@@ -105,7 +107,7 @@ test.describe("authorization-flow", () => {
           maxAttempts: 5,
           initialDelay: 3000,
           backoffMultiplier: 1.5,
-          requestTimeout: 15000,
+          requestTimeout: 30000,
           initialWait: 5000, // Wait for extension to auto-start
         }
       );

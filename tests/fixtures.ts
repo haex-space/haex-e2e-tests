@@ -1705,7 +1705,7 @@ interface RetryOptions {
   initialDelay?: number;
   /** Delay multiplier for exponential backoff (default: 1.5) */
   backoffMultiplier?: number;
-  /** Request timeout in ms (default: 15000) */
+  /** Request timeout in ms (default: 30000, increased to handle CI variability) */
   requestTimeout?: number;
   /** Initial wait before first request in ms (default: 0) */
   initialWait?: number;
@@ -1725,7 +1725,7 @@ export async function sendRequestWithRetry<T = unknown>(
     maxAttempts = 3,
     initialDelay = 2000,
     backoffMultiplier = 1.5,
-    requestTimeout = 15000,
+    requestTimeout = 30000, // Increased to handle GitHub Actions runner variability
     initialWait = 0,
   } = options;
 
@@ -1763,10 +1763,9 @@ export async function sendRequestWithRetry<T = unknown>(
  */
 export async function waitForExtensionReady(
   client: VaultBridgeClient,
-  options: { timeout?: number; testAction?: string; testPayload?: object } = {}
+  options: { testAction?: string; testPayload?: object } = {}
 ): Promise<boolean> {
   const {
-    timeout = 30000,
     testAction = HAEX_PASS_METHODS.GET_ITEMS,
     testPayload = { url: "https://example.com" },
   } = options;
@@ -1774,11 +1773,13 @@ export async function waitForExtensionReady(
   console.log("[E2E] Waiting for extension to be ready...");
 
   try {
+    // Use 30s per request (not timeout/5) to handle slow CI environments
+    // where responses can take 15-20+ seconds due to resource constraints
     await sendRequestWithRetry(client, testAction, testPayload, {
       maxAttempts: 5,
       initialDelay: 2000,
       backoffMultiplier: 1.5,
-      requestTimeout: timeout / 5,
+      requestTimeout: 30000,
       initialWait: 3000, // Give extension time to auto-start
     });
     console.log("[E2E] Extension is ready!");
