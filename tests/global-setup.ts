@@ -53,6 +53,28 @@ function getHaexPassManifest() {
 }
 
 /**
+ * Wait for X11 display to be ready
+ */
+async function waitForX11Display(timeout = 60000): Promise<boolean> {
+  const start = Date.now();
+  console.log("[Setup] Waiting for X11 display :1 to be ready...");
+
+  while (Date.now() - start < timeout) {
+    try {
+      execSync("DISPLAY=:1 xdpyinfo >/dev/null 2>&1", { encoding: "utf-8" });
+      console.log("[Setup] X11 display is ready");
+      return true;
+    } catch {
+      // Not ready yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  console.log("[Setup] WARNING: X11 display not ready within timeout");
+  return false;
+}
+
+/**
  * Get the current X11 display resolution
  */
 function getDisplayResolution(): string {
@@ -619,6 +641,9 @@ async function globalSetup() {
   // Services are now auto-started by /custom-cont-init.d/99-start-services.sh
   // when the container starts. We just need to wait for them to be ready.
   console.log("[Setup] Waiting for services (started by container init)...");
+
+  // Wait for X11 display to be ready before starting screen recording
+  await waitForX11Display();
 
   // Start screen recording early to capture the entire test session
   startScreenRecording();
