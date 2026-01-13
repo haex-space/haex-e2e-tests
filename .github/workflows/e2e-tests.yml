@@ -322,8 +322,16 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           CI: true
         run: |
-          # Run tests in vault-a container which has Playwright installed
-          docker compose -f docker/docker-compose.yml run --rm vault-a pnpm test
+          # Start vault-a with all services and run tests
+          # Using 'up' ensures the named volume is properly mounted for test results
+          docker compose -f docker/docker-compose.yml up -d vault-a
+
+          # Wait for services to initialize (tauri-driver, nuxt dev server, etc.)
+          echo "Waiting for E2E services to initialize..."
+          sleep 60
+
+          # Run tests inside the container
+          docker compose -f docker/docker-compose.yml exec vault-a pnpm test
 
       - name: Copy test results from container
         if: always()
