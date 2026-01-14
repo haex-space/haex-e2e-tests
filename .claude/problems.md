@@ -481,7 +481,7 @@ Command get_sync_status not found
 
 ---
 
-### haex-pass Extension Request Timeout (BEKANNT)
+### haex-pass Extension Request Timeout (GELÖST)
 **Problem:** Nach Autorisierung schlagen Requests an die haex-pass Extension mit Timeout fehl.
 
 **Symptome:**
@@ -489,18 +489,22 @@ Command get_sync_status not found
 [E2E] Request attempt 1/3 failed: Request timeout
 ```
 
-**Betroffene Tests:**
-- `should be able to send request after authorization`
-- `should create entry with URL and credentials`
-- `setup: create test entries via set-item`
-- `setup: create test entries for TOTP tests`
+**Root Cause:**
+Das Script `scripts/stop-all.sh` enthielt `pkill -f tauri-driver`, was den tauri-driver nach jedem Test-Run killte. Da tauri-driver vom Container-Init-Script (`99-start-services.sh`) verwaltet wird und zwischen Test-Runs weiterlaufen sollte, führte dies zu Timeouts in nachfolgenden Tests.
 
-**Mögliche Ursachen:**
-1. Extension wird installiert aber nicht automatisch gestartet
-2. Extension Event-Handler werden nicht registriert
-3. Kommunikation zwischen Bridge und Extension ist gestört
+**Lösung:**
+Entfernung der `pkill -f tauri-driver` Zeile aus `stop-all.sh`:
+```bash
+# Don't stop tauri-driver - it's managed by the container init script
+# and should remain running for subsequent test runs.
+# pkill -f tauri-driver 2>/dev/null || true  # REMOVED
+```
 
-**Status:** ❌ OFFEN - Erfordert weitere Analyse des Extension-Lifecycles in haex-vault.
+**Geänderte Dateien:**
+- `scripts/stop-all.sh` - tauri-driver kill entfernt
+- `tests/fixtures.ts` - Debug-Logging für Request-Tracing hinzugefügt
+
+**Status:** ✅ GELÖST - Alle 68 haex-pass Tests bestehen jetzt.
 
 ---
 
