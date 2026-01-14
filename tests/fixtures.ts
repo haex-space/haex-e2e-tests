@@ -587,9 +587,19 @@ export class VaultBridgeClient {
       extensionName: HAEX_PASS_EXTENSION_NAME,
     };
 
+    console.log("[E2E] Sending request:", {
+      action,
+      requestId,
+      extensionPublicKey: extensionPublicKey.substring(0, 16) + "...",
+      extensionName: HAEX_PASS_EXTENSION_NAME,
+      clientId: this.clientId,
+      timeout,
+    });
+
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(requestId);
+        console.log("[E2E] Request timeout for requestId:", requestId);
         reject(new Error("Request timeout"));
       }, timeout);
 
@@ -600,6 +610,7 @@ export class VaultBridgeClient {
       });
 
       this.ws!.send(JSON.stringify(request));
+      console.log("[E2E] Request sent via WebSocket");
     });
   }
 
