@@ -338,12 +338,24 @@ jobs:
         run: |
           mkdir -p ./test-results
 
+          # Debug: List volumes
+          echo "Available Docker volumes:"
+          docker volume ls
+
           # Copy from named volume via temporary container
           # Volume name is docker_test-results (docker/ directory prefix)
+          echo "Contents of test-results volume:"
+          docker run --rm \
+            -v docker_test-results:/results \
+            alpine sh -c "find /results -type f 2>/dev/null | head -50 || echo 'Volume empty or not found'"
+
           docker run --rm \
             -v docker_test-results:/results \
             -v $(pwd)/test-results:/output \
-            alpine sh -c "cp -r /results/* /output/ 2>/dev/null || true"
+            alpine sh -c "cp -r /results/* /output/ 2>&1 || echo 'Copy completed (may be empty)'"
+
+          echo "Contents of local test-results:"
+          find ./test-results -type f 2>/dev/null | head -50 || echo "No files found"
 
       - name: Upload test artifacts
         if: always()

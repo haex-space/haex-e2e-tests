@@ -23,7 +23,7 @@ export default defineConfig({
   outputDir: "test-results/artifacts",
 
   use: {
-    trace: "on-first-retry",
+    trace: "on",
     screenshot: "on",
     video: "on",
   },
