@@ -100,9 +100,7 @@ services:
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
     volumes:
       - ./kong/kong.yml:/home/kong/kong.yml:ro
-    ports:
-      - "8000:8000"
-      - "8443:8443"
+    # Ports only exposed within e2e-network, no public ports needed
     depends_on:
       gotrue:
         condition: service_healthy
@@ -137,8 +135,7 @@ services:
       PORT: 3002
       NODE_ENV: test
       CORS_ORIGIN: "*"
-    ports:
-      - "3002:3002"
+    # Ports only exposed within e2e-network, no public ports needed
     depends_on:
       db:
         condition: service_healthy
@@ -189,13 +186,7 @@ services:
     volumes:
       # Named volume for test results (no permission issues)
       - test-results:/app/test-results
-    ports:
-      # Webtop desktop access
-      - "3000:3000"
-      # WebSocket bridge (via socat proxy on 19456)
-      - "19455:19456"
-      # tauri-driver (via socat proxy on 4446)
-      - "4444:4446"
+    # No public ports needed - all services communicate within e2e-network
     shm_size: "2gb"
     depends_on:
       db:
@@ -237,13 +228,7 @@ services:
       - CI=${CI:-false}
       # Instance identifier
       - VAULT_INSTANCE=B
-    ports:
-      # Webtop desktop access (different port)
-      - "3001:3000"
-      # WebSocket bridge (via socat proxy on 19456)
-      - "19456:19456"
-      # tauri-driver (via socat proxy on 4446)
-      - "4445:4446"
+    # No public ports needed - all services communicate within e2e-network
     shm_size: "2gb"
     depends_on:
       db:

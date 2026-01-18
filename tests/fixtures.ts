@@ -1611,6 +1611,74 @@ export class VaultAutomation {
   }
 
   /**
+   * Navigate to a specific route in the app
+   * Uses Vue Router navigation via JavaScript execution
+   */
+  async navigateTo(path: string): Promise<void> {
+    if (!this.sessionId) {
+      throw new Error("No WebDriver session");
+    }
+
+    // Use Vue Router for navigation - this is more reliable than WebDriver URL navigation
+    // for Tauri apps which use a custom URL scheme
+    const script = `
+      // Try to use Vue Router if available
+      const router = window.__NUXT__?.vueApp?.config?.globalProperties?.$router
+        || window.$nuxt?.$router
+        || window.__VUE_APP__?.config?.globalProperties?.$router;
+
+      if (router) {
+        router.push('${path}');
+        return { success: true, method: 'router' };
+      }
+
+      // Fallback: use window.location for relative paths
+      const basePath = window.location.origin;
+      const fullPath = '${path}'.startsWith('/') ? '${path}' : '/' + '${path}';
+      window.location.href = basePath + fullPath;
+      return { success: true, method: 'location' };
+    `;
+
+    await this.executeScript(script);
+
+    // Wait for navigation to complete
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  /**
+   * Get the current page source (HTML)
+   * Useful for checking if elements are present
+   */
+  async getPageSource(): Promise<string> {
+    if (!this.sessionId) {
+      throw new Error("No WebDriver session");
+    }
+
+    const config = VAULT_CONFIG[this.instance];
+
+    if (config.needsHostOverride) {
+      const data = await this.httpRequest("GET", `/session/${this.sessionId}/source`, undefined);
+      return (data.value as string) || "";
+    } else {
+      const response = await fetch(
+        `${this.tauriDriverUrl}/session/${this.sessionId}/source`,
+        {
+          method: "GET",
+          headers: this.buildHeaders(),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to get page source: ${response.status} - ${errorText}`);
+      }
+
+      const data = await response.json();
+      return data.value || "";
+    }
+  }
+
+  /**
    * Get the current vault ID from the vault store
    */
   async getCurrentVaultId(): Promise<string | null> {

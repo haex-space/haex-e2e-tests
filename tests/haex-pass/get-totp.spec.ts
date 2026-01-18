@@ -4,18 +4,19 @@ import {
   VaultBridgeClient,
   waitForBridgeConnection,
   authorizeClient,
+  waitForExtensionReady,
+  sendRequestWithRetry,
   HAEX_PASS_METHODS,
 } from "../fixtures";
 
 /**
  * E2E Tests for haex-pass get-totp API
  *
- * Tests TOTP code generation with various configurations.
+ * Tests TOTP code generation via the browser bridge.
  */
 
 const EXTENSION_ID = "haex-pass";
 
-// Generic API response wrapper
 interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
@@ -37,9 +38,7 @@ test.describe("get-totp", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
-
-  // Store entry IDs from setup
-  let entryWithTotp6: string;
+  let entryWithTotp: string;
   let entryWithoutTotp: string;
 
   test.beforeAll(async () => {
@@ -53,54 +52,70 @@ test.describe("get-totp", () => {
     if (!authorized) {
       throw new Error("Failed to authorize client");
     }
+
+    const ready = await waitForExtensionReady(client);
+    if (!ready) {
+      throw new Error("Extension failed to become ready");
+    }
   });
 
   test.afterAll(async () => {
     client?.disconnect();
   });
 
-  test("setup: create test entries for TOTP tests", async () => {
-    // Entry with default TOTP (6 digits, SHA1, 30s)
-    const resp1 = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
-      title: "TOTP Test 6-digit",
-      url: "https://totp-test-6.example.com",
-      username: "user6",
-      password: "pass6",
-    })) as ApiResponse<SetLoginResponse>;
-    expect(resp1.success).toBe(true);
-    entryWithTotp6 = resp1.data!.entryId;
+  test("setup: create test entries", async () => {
+    // Entry WITH TOTP (6 digits, SHA1, 30s period)
+    const resp1 = (await sendRequestWithRetry(
+      client,
+      HAEX_PASS_METHODS.SET_ITEM,
+      {
+        title: "TOTP Test Entry",
+        url: "https://totp-test.example.com",
+        username: "totpuser",
+        password: "totppass",
+        otpSecret: "JBSWY3DPEHPK3PXP", // Test secret
+        otpDigits: 6,
+        otpPeriod: 30,
+        otpAlgorithm: "SHA1",
+      },
+      { maxAttempts: 3, initialDelay: 1000 }
+    )) as ApiResponse<SetLoginResponse>;
 
-    // Entry without TOTP
-    const resp2 = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
-      title: "No TOTP Entry",
-      url: "https://no-totp.example.com",
-      username: "nototp",
-      password: "nototp",
-    })) as ApiResponse<SetLoginResponse>;
+    expect(resp1.success).toBe(true);
+    entryWithTotp = resp1.data!.entryId;
+
+    // Entry WITHOUT TOTP
+    const resp2 = (await sendRequestWithRetry(
+      client,
+      HAEX_PASS_METHODS.SET_ITEM,
+      {
+        title: "No TOTP Entry",
+        url: "https://no-totp.example.com",
+        username: "nototp",
+        password: "notoppass",
+      },
+      { maxAttempts: 3, initialDelay: 1000 }
+    )) as ApiResponse<SetLoginResponse>;
+
     expect(resp2.success).toBe(true);
     entryWithoutTotp = resp2.data!.entryId;
   });
 
   test("should return valid 6-digit TOTP code", async () => {
-    // Note: This test requires the entry to have TOTP configured
-    // which set-item doesn't support yet
-    test.skip(true, "set-item does not support TOTP configuration");
-
     const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {
-      entryId: entryWithTotp6,
+      entryId: entryWithTotp,
     })) as ApiResponse<GetTotpResponse>;
 
     expect(response.success).toBe(true);
+    expect(response.data).toBeDefined();
     expect(response.data!.code).toMatch(/^\d{6}$/);
     expect(response.data!.validFor).toBeGreaterThan(0);
     expect(response.data!.validFor).toBeLessThanOrEqual(30);
   });
 
-  test("should return correct validFor countdown", async () => {
-    test.skip(true, "set-item does not support TOTP configuration");
-
+  test("should return countdown within valid range", async () => {
     const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {
-      entryId: entryWithTotp6,
+      entryId: entryWithTotp,
     })) as ApiResponse<GetTotpResponse>;
 
     expect(response.success).toBe(true);
@@ -119,7 +134,7 @@ test.describe("get-totp", () => {
 
   test("should fail for non-existent entry", async () => {
     const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {
-      entryId: "non-existent-entry-id-12345",
+      entryId: "00000000-0000-0000-0000-000000000000",
     })) as ApiResponse;
 
     expect(response.success).toBe(false);
@@ -127,7 +142,10 @@ test.describe("get-totp", () => {
   });
 
   test("should fail without entryId", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {})) as ApiResponse;
+    const response = (await client.sendRequest(
+      HAEX_PASS_METHODS.GET_TOTP,
+      {}
+    )) as ApiResponse;
 
     expect(response.success).toBe(false);
     expect(response.error).toContain("entryId");
