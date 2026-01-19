@@ -1685,6 +1685,7 @@ export class VaultAutomation {
   /**
    * Open the Settings window and navigate to a specific category.
    * haex-vault uses a window-based UI system, not URL routing for settings.
+   * This method uses data-testid attributes for reliable element selection.
    *
    * @param category - The settings category to open:
    *   'general', 'appearance', 'extensions', 'externalClients',
@@ -1693,79 +1694,37 @@ export class VaultAutomation {
   async openSettings(category: string = "general"): Promise<void> {
     console.log(`[E2E] Opening Settings → ${category} on Vault ${this.instance}`);
 
-    // Step 1: Open Settings window via window manager
+    // Step 1: Click the launcher button to open the App Launcher drawer
     await this.executeScript(`
-      const pinia = window.__NUXT__?.vueApp?.$pinia || window.__VUE_APP__?.$pinia;
-      if (!pinia) throw new Error('Pinia not found');
+      const launcherBtn = document.querySelector('[data-testid="launcher-button"]');
+      if (!launcherBtn) throw new Error('Launcher button not found');
+      launcherBtn.click();
+    `);
 
-      const windowManagerStore = pinia._s.get('windowManager');
-      if (!windowManagerStore) throw new Error('Window manager store not found');
+    // Wait for launcher drawer to open
+    await this.wait(1000);
 
-      // Open the settings window
-      windowManagerStore.openWindowAsync({
-        type: 'system',
-        sourceId: 'settings',
-        title: 'Settings',
-      });
+    // Step 2: Click on "Settings" in the launcher (system window with id "settings")
+    await this.executeScript(`
+      const settingsItem = document.querySelector('[data-testid="launcher-item-system-settings"]');
+      if (!settingsItem) throw new Error('Settings launcher item not found');
+      settingsItem.click();
     `);
 
     // Wait for settings window to open
     await this.wait(2000);
 
-    // Step 2: Click on the specified category in the sidebar
-    const categoryClicked = await this.executeScript<boolean>(`
-      const category = ${JSON.stringify(category)};
+    // Step 3: If a specific category is requested (not 'general'), click on it in the sidebar
+    if (category !== "general") {
+      await this.executeScript(`
+        const categoryBtn = document.querySelector('[data-testid="settings-category-${category}"]');
+        if (!categoryBtn) throw new Error('Settings category button not found: ${category}');
+        categoryBtn.click();
+      `);
 
-      // Map category names to their identifying characteristics
-      const categoryMap = {
-        'general': { icon: 'cog', text: 'general' },
-        'appearance': { icon: 'palette', text: 'appearance' },
-        'extensions': { icon: 'puzzle', text: 'extension' },
-        'externalClients': { icon: 'link', text: 'external' },
-        'database': { icon: 'database', text: 'database' },
-        'sync': { icon: 'cloud', text: 'sync' },
-        'storage': { icon: 'folder', text: 'storage' },
-        'devices': { icon: 'device', text: 'device' },
-        'developer': { icon: 'code', text: 'developer' },
-        'debugLogs': { icon: 'bug', text: 'debug' },
-      };
-
-      const config = categoryMap[category] || { icon: category, text: category };
-
-      // Find the category button in the settings sidebar
-      const buttons = [...document.querySelectorAll('nav button, aside button, [class*="sidebar"] button')];
-
-      for (const btn of buttons) {
-        const hasIcon = btn.querySelector('[class*="' + config.icon + '"]');
-        const text = btn.textContent?.toLowerCase() || '';
-        const hasText = text.includes(config.text);
-
-        if (hasIcon || hasText) {
-          btn.click();
-          return true;
-        }
-      }
-
-      // Fallback: look for any button with matching text
-      const allButtons = [...document.querySelectorAll('button')];
-      for (const btn of allButtons) {
-        const text = btn.textContent?.toLowerCase() || '';
-        if (text.includes(config.text)) {
-          btn.click();
-          return true;
-        }
-      }
-
-      console.log('[E2E Debug] Could not find category button. Available buttons:', allButtons.map(b => b.textContent?.trim().substring(0, 30)));
-      return false;
-    `);
-
-    if (!categoryClicked) {
-      throw new Error(`Could not find settings category button for: ${category}`);
+      // Wait for category panel to load
+      await this.wait(1500);
     }
-
-    // Wait for category panel to load
-    await this.wait(1500);
   }
 
   /**
