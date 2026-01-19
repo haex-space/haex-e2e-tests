@@ -138,14 +138,46 @@ jobs:
           repository: haex-space/haex-e2e-tests
           ref: main
 
-      - name: Download haex-vault artifact (if provided)
-        if: inputs.haex_vault_artifact != ''
+      - name: Download haex-vault artifact (if provided via workflow_call)
+        if: inputs.haex_vault_artifact != '' && inputs.haex_vault_artifact_run_id != ''
         uses: actions/download-artifact@v4
         with:
           name: ${{ inputs.haex_vault_artifact }}
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./docker/prebuilt/haex-vault
+
+      - name: Download latest haex-vault binary (for standalone runs)
+        if: inputs.haex_vault_artifact == '' || inputs.haex_vault_artifact_run_id == ''
+        env:
+          GH_TOKEN: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+        run: |
+          echo "Fetching latest successful haex-vault build artifact..."
+
+          # Find the latest successful workflow run with the artifact
+          RUN_ID=$(gh api repos/haex-space/haex-vault/actions/workflows/build.yml/runs \
+            --jq '.workflow_runs | map(select(.conclusion == "success" and .head_branch == "main")) | .[0].id' \
+            2>/dev/null || echo "")
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ]; then
+            echo "No successful build found, will build from source"
+            exit 0
+          fi
+
+          echo "Found successful run: $RUN_ID"
+
+          # Download the artifact
+          mkdir -p ./docker/prebuilt/haex-vault
+          cd ./docker/prebuilt/haex-vault
+
+          if gh run download "$RUN_ID" --repo haex-space/haex-vault --name haex-vault-linux-e2e 2>/dev/null; then
+            echo "Successfully downloaded pre-built haex-vault binary"
+            ls -la
+            chmod +x haex-space 2>/dev/null || true
+          else
+            echo "Could not download artifact, will build from source"
+            rm -rf ./docker/prebuilt/haex-vault
+          fi
 
       - name: Prepare pre-built artifacts
         id: prebuilt
