@@ -1698,7 +1698,12 @@ export class VaultAutomation {
     // The data-testid is on the wrapper div, so we find the button inside it
     await this.executeScript(`
       const launcherWrapper = document.querySelector('[data-testid="launcher-button"]');
-      if (!launcherWrapper) throw new Error('Launcher button not found');
+      if (!launcherWrapper) {
+        // Debug: log what data-testid elements exist
+        const allTestIds = [...document.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
+        console.log('[E2E Debug] Available data-testid elements:', allTestIds);
+        throw new Error('Launcher button not found. Available testids: ' + allTestIds.join(', '));
+      }
       const button = launcherWrapper.querySelector('button') || launcherWrapper;
       button.click();
     `);
