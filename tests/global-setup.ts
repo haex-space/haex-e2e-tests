@@ -79,13 +79,29 @@ async function waitForX11Display(timeout = 60000): Promise<boolean> {
  */
 function getDisplayResolution(): string {
   try {
-    const output = execSync("DISPLAY=:1 xdpyinfo 2>/dev/null | grep dimensions", {
+    // Use xrandr to get the actual screen resolution (more reliable than xdpyinfo)
+    // xdpyinfo can return the virtual screen size which may be larger than actual display
+    const output = execSync("DISPLAY=:1 xrandr 2>/dev/null | grep ' connected' | head -1", {
       encoding: "utf-8",
     });
-    // Output format: "  dimensions:    1024x768 pixels (271x203 millimeters)"
+    // Output format: "Virtual-1 connected primary 1024x768+0+0 ..."
     const match = output.match(/(\d+x\d+)/);
     if (match) {
-      console.log("[Setup] Detected display resolution:", match[1]);
+      console.log("[Setup] Detected display resolution (xrandr):", match[1]);
+      return match[1];
+    }
+  } catch {
+    console.log("[Setup] xrandr failed, trying xdpyinfo...");
+  }
+
+  // Fallback to xdpyinfo with explicit screen 0
+  try {
+    const output = execSync("DISPLAY=:1.0 xdpyinfo 2>/dev/null | grep -A1 'screen #0' | grep dimensions", {
+      encoding: "utf-8",
+    });
+    const match = output.match(/(\d+x\d+)/);
+    if (match) {
+      console.log("[Setup] Detected display resolution (xdpyinfo):", match[1]);
       return match[1];
     }
   } catch {
