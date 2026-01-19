@@ -162,33 +162,13 @@ test.describe("Remote Sync Workflow", () => {
     // Wait for vault creation
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Complete welcome dialog quickly - skip to sync step
-    let pageSource = await vaultA.getPageSource();
-
-    // Navigate through welcome dialog
-    while (
-      pageSource.includes("Device Name") ||
-      pageSource.includes("Extensions") ||
-      pageSource.includes("Next")
-    ) {
-      // Click Next or Skip
-      await vaultA.executeScript(`
-        const buttons = document.querySelectorAll('button');
-        for (const btn of buttons) {
-          if (btn.textContent?.includes('Skip') || btn.textContent?.includes('Next')) {
-            btn.click();
-            break;
-          }
-        }
-      `);
-      await new Promise((r) => setTimeout(r, 1000));
-      pageSource = await vaultA.getPageSource();
-
-      // Break if we reached sync step or finished
-      if (pageSource.includes("Synchronization") || !pageSource.includes("Next")) {
-        break;
-      }
-    }
+    // Complete welcome dialog - skip all optional steps
+    // The sync backend will be created via Settings view later, not in the welcome dialog
+    await vaultA.completeWelcomeDialog({
+      deviceName: "E2E-Test-Device-A",
+      skipExtensions: true,
+      skipSync: true,
+    });
 
     console.log("[Sync Test] Vault A created successfully");
   });

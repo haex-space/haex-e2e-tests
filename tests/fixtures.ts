@@ -1577,6 +1577,112 @@ export class VaultAutomation {
   }
 
   /**
+   * Complete the welcome dialog that appears when a new vault is created.
+   * The dialog has 3 steps: Device Name, Extensions, Sync.
+   * Uses data-testid attributes for reliable element selection.
+   */
+  async completeWelcomeDialog(options: {
+    deviceName: string;
+    skipExtensions?: boolean;
+    skipSync?: boolean;
+  }): Promise<void> {
+    console.log(`[E2E] Completing welcome dialog on Vault ${this.instance}`);
+
+    // Wait for welcome dialog to appear
+    await this.wait(2000);
+
+    const maxIterations = 15;
+    let iteration = 0;
+
+    while (iteration < maxIterations) {
+      iteration++;
+
+      // Check which step we're on by looking for data-testid elements
+      const stepInfo = await this.executeScript<{ step: string | null; hasDialog: boolean }>(`
+        const deviceInput = document.querySelector('[data-testid="welcome-device-name-input"]');
+        const skipExtBtn = document.querySelector('[data-testid="welcome-skip-extensions-button"]');
+        const skipSyncBtn = document.querySelector('[data-testid="welcome-skip-sync-button"]');
+        const nextBtn = document.querySelector('[data-testid="welcome-next-button"]');
+
+        if (deviceInput) return { step: 'device', hasDialog: true };
+        if (skipExtBtn) return { step: 'extensions', hasDialog: true };
+        if (skipSyncBtn) return { step: 'sync', hasDialog: true };
+        if (nextBtn) return { step: 'unknown', hasDialog: true };
+        return { step: null, hasDialog: false };
+      `);
+
+      if (!stepInfo?.hasDialog) {
+        console.log(`[E2E] Welcome dialog completed (iteration ${iteration})`);
+        return;
+      }
+
+      // Step 0: Device Name
+      if (stepInfo.step === "device") {
+        console.log(`[E2E] Welcome dialog: Setting device name`);
+        await this.executeScript(`
+          const input = document.querySelector('[data-testid="welcome-device-name-input"] input') ||
+                       document.querySelector('[data-testid="welcome-device-name-input"]');
+          if (input) {
+            input.value = ${JSON.stringify(options.deviceName)};
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        `);
+        await this.wait(500);
+        // Click Next
+        await this.executeScript(`
+          const nextBtn = document.querySelector('[data-testid="welcome-next-button"]');
+          if (nextBtn) nextBtn.click();
+        `);
+        await this.wait(1500);
+        continue;
+      }
+
+      // Step 1: Extensions
+      if (stepInfo.step === "extensions") {
+        if (options.skipExtensions) {
+          console.log(`[E2E] Welcome dialog: Skipping extensions`);
+          await this.executeScript(`
+            const skipBtn = document.querySelector('[data-testid="welcome-skip-extensions-button"]');
+            if (skipBtn) skipBtn.click();
+          `);
+        } else {
+          console.log(`[E2E] Welcome dialog: Continuing past extensions`);
+          await this.executeScript(`
+            const nextBtn = document.querySelector('[data-testid="welcome-next-button"]');
+            if (nextBtn) nextBtn.click();
+          `);
+        }
+        await this.wait(1500);
+        continue;
+      }
+
+      // Step 2: Sync
+      if (stepInfo.step === "sync") {
+        if (options.skipSync) {
+          console.log(`[E2E] Welcome dialog: Skipping sync setup`);
+          await this.executeScript(`
+            const skipBtn = document.querySelector('[data-testid="welcome-skip-sync-button"]');
+            if (skipBtn) skipBtn.click();
+          `);
+        } else {
+          console.log(`[E2E] Welcome dialog: Clicking Finish`);
+          await this.executeScript(`
+            const nextBtn = document.querySelector('[data-testid="welcome-next-button"]');
+            if (nextBtn) nextBtn.click();
+          `);
+        }
+        await this.wait(2000);
+        continue;
+      }
+
+      // If we get here, wait a bit and check again
+      await this.wait(1000);
+    }
+
+    console.log(`[E2E] Warning: Welcome dialog may not have completed properly`);
+  }
+
+  /**
    * Create a sync connection via the Settings UI
    * This uses the real UI flow: Settings → Sync → Add Backend
    */
@@ -1591,29 +1697,16 @@ export class VaultAutomation {
     await this.navigateTo("/settings/sync");
     await this.wait(500); // Wait for page load
 
-    // Step 2: Click the "Add Backend" button
-    // Try multiple selectors for the add button
-    let addBackendButton = await this.findElement('button[class*="lucide-plus"]');
-    if (!addBackendButton) {
-      addBackendButton = await this.findElement('button .i-lucide-plus');
-    }
-    if (!addBackendButton) {
-      // Find button containing "Hinzufügen" or "Add" text via script
-      const buttonId = await this.executeScript<string | null>(`
-        const buttons = [...document.querySelectorAll('button')];
-        const btn = buttons.find(b =>
-          b.textContent?.includes('Hinzufügen') ||
-          b.textContent?.includes('Add') ||
-          b.querySelector('.i-lucide-plus')
-        );
-        if (btn) {
-          btn.setAttribute('data-e2e-temp', 'add-backend');
-          return 'found';
-        }
-        return null;
-      `);
-      if (buttonId) {
-        addBackendButton = await this.findElement('[data-e2e-temp="add-backend"]');
+    // Step 2: Click the "Add Backend" button using data-testid
+    let addBackendButton: string | null = null;
+    const maxRetries = 5;
+
+    for (let attempt = 1; attempt <= maxRetries && !addBackendButton; attempt++) {
+      console.log(`[E2E] Looking for Add Backend button (attempt ${attempt}/${maxRetries})`);
+      addBackendButton = await this.findElement('[data-testid="sync-add-backend-button"]');
+
+      if (!addBackendButton && attempt < maxRetries) {
+        await this.wait(1000);
       }
     }
 
@@ -1662,19 +1755,9 @@ export class VaultAutomation {
 
     await this.wait(200);
 
-    // Step 4: Click the submit button
-    // Look for the button with mdi-plus icon or "Hinzufügen" text in the card footer
+    // Step 4: Click the submit button using data-testid
     await this.executeScript(`
-      // Find the submit button - it's in the card footer with mdi-plus icon
-      const buttons = [...document.querySelectorAll('button')];
-      const submitBtn = buttons.find(b =>
-        (b.querySelector('.mdi-plus') || b.querySelector('[class*="mdi-plus"]')) &&
-        !b.querySelector('.i-lucide-plus') // Not the "Add Backend" button at the top
-      ) || buttons.find(b =>
-        b.closest('[class*="footer"]') &&
-        (b.textContent?.includes('Hinzufügen') || b.textContent?.includes('Add'))
-      );
-
+      const submitBtn = document.querySelector('[data-testid="sync-submit-button"]');
       if (submitBtn) {
         submitBtn.click();
       } else {
