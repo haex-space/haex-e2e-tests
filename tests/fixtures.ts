@@ -1683,6 +1683,92 @@ export class VaultAutomation {
   }
 
   /**
+   * Open the Settings window and navigate to a specific category.
+   * haex-vault uses a window-based UI system, not URL routing for settings.
+   *
+   * @param category - The settings category to open:
+   *   'general', 'appearance', 'extensions', 'externalClients',
+   *   'database', 'sync', 'storage', 'devices', 'developer', 'debugLogs'
+   */
+  async openSettings(category: string = "general"): Promise<void> {
+    console.log(`[E2E] Opening Settings → ${category} on Vault ${this.instance}`);
+
+    // Step 1: Open Settings window via window manager
+    await this.executeScript(`
+      const pinia = window.__NUXT__?.vueApp?.$pinia || window.__VUE_APP__?.$pinia;
+      if (!pinia) throw new Error('Pinia not found');
+
+      const windowManagerStore = pinia._s.get('windowManager');
+      if (!windowManagerStore) throw new Error('Window manager store not found');
+
+      // Open the settings window
+      windowManagerStore.openWindowAsync({
+        type: 'system',
+        sourceId: 'settings',
+        title: 'Settings',
+      });
+    `);
+
+    // Wait for settings window to open
+    await this.wait(2000);
+
+    // Step 2: Click on the specified category in the sidebar
+    const categoryClicked = await this.executeScript<boolean>(`
+      const category = ${JSON.stringify(category)};
+
+      // Map category names to their identifying characteristics
+      const categoryMap = {
+        'general': { icon: 'cog', text: 'general' },
+        'appearance': { icon: 'palette', text: 'appearance' },
+        'extensions': { icon: 'puzzle', text: 'extension' },
+        'externalClients': { icon: 'link', text: 'external' },
+        'database': { icon: 'database', text: 'database' },
+        'sync': { icon: 'cloud', text: 'sync' },
+        'storage': { icon: 'folder', text: 'storage' },
+        'devices': { icon: 'device', text: 'device' },
+        'developer': { icon: 'code', text: 'developer' },
+        'debugLogs': { icon: 'bug', text: 'debug' },
+      };
+
+      const config = categoryMap[category] || { icon: category, text: category };
+
+      // Find the category button in the settings sidebar
+      const buttons = [...document.querySelectorAll('nav button, aside button, [class*="sidebar"] button')];
+
+      for (const btn of buttons) {
+        const hasIcon = btn.querySelector('[class*="' + config.icon + '"]');
+        const text = btn.textContent?.toLowerCase() || '';
+        const hasText = text.includes(config.text);
+
+        if (hasIcon || hasText) {
+          btn.click();
+          return true;
+        }
+      }
+
+      // Fallback: look for any button with matching text
+      const allButtons = [...document.querySelectorAll('button')];
+      for (const btn of allButtons) {
+        const text = btn.textContent?.toLowerCase() || '';
+        if (text.includes(config.text)) {
+          btn.click();
+          return true;
+        }
+      }
+
+      console.log('[E2E Debug] Could not find category button. Available buttons:', allButtons.map(b => b.textContent?.trim().substring(0, 30)));
+      return false;
+    `);
+
+    if (!categoryClicked) {
+      throw new Error(`Could not find settings category button for: ${category}`);
+    }
+
+    // Wait for category panel to load
+    await this.wait(1500);
+  }
+
+  /**
    * Create a sync connection via the Settings UI
    * This uses the real UI flow: Settings → Sync → Add Backend
    */
@@ -1693,10 +1779,8 @@ export class VaultAutomation {
   }): Promise<string | null> {
     console.log(`[E2E] Creating sync connection via UI on Vault ${this.instance}`);
 
-    // Step 1: Navigate to Settings → Sync
-    await this.navigateTo("/settings/sync");
-    // Wait longer for page load and Vue component initialization
-    await this.wait(3000);
+    // Step 1: Open Settings → Sync
+    await this.openSettings("sync");
 
     // Step 2: Click the "Add Backend" button using data-testid
     let addBackendButton: string | null = null;
@@ -1704,14 +1788,13 @@ export class VaultAutomation {
 
     for (let attempt = 1; attempt <= maxRetries && !addBackendButton; attempt++) {
       // Debug: Log current page state
-      const pageDebug = await this.executeScript<{ url: string; hasButton: boolean; buttonCount: number }>(`
+      const pageDebug = await this.executeScript<{ hasButton: boolean; buttonCount: number }>(`
         return {
-          url: window.location.href,
           hasButton: !!document.querySelector('[data-testid="sync-add-backend-button"]'),
           buttonCount: document.querySelectorAll('button').length
         };
       `);
-      console.log(`[E2E] Looking for Add Backend button (attempt ${attempt}/${maxRetries}) - URL: ${pageDebug?.url}, hasButton: ${pageDebug?.hasButton}, buttons: ${pageDebug?.buttonCount}`);
+      console.log(`[E2E] Looking for Add Backend button (attempt ${attempt}/${maxRetries}) - hasButton: ${pageDebug?.hasButton}, buttons: ${pageDebug?.buttonCount}`);
 
       addBackendButton = await this.findElement('[data-testid="sync-add-backend-button"]');
 
