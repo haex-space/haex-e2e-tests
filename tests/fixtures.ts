@@ -1695,10 +1695,12 @@ export class VaultAutomation {
     console.log(`[E2E] Opening Settings → ${category} on Vault ${this.instance}`);
 
     // Step 1: Click the launcher button to open the App Launcher drawer
+    // The data-testid is on the wrapper div, so we find the button inside it
     await this.executeScript(`
-      const launcherBtn = document.querySelector('[data-testid="launcher-button"]');
-      if (!launcherBtn) throw new Error('Launcher button not found');
-      launcherBtn.click();
+      const launcherWrapper = document.querySelector('[data-testid="launcher-button"]');
+      if (!launcherWrapper) throw new Error('Launcher button not found');
+      const button = launcherWrapper.querySelector('button') || launcherWrapper;
+      button.click();
     `);
 
     // Wait for launcher drawer to open
