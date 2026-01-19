@@ -1695,14 +1695,24 @@ export class VaultAutomation {
 
     // Step 1: Navigate to Settings → Sync
     await this.navigateTo("/settings/sync");
-    await this.wait(500); // Wait for page load
+    // Wait longer for page load and Vue component initialization
+    await this.wait(3000);
 
     // Step 2: Click the "Add Backend" button using data-testid
     let addBackendButton: string | null = null;
-    const maxRetries = 5;
+    const maxRetries = 10;
 
     for (let attempt = 1; attempt <= maxRetries && !addBackendButton; attempt++) {
-      console.log(`[E2E] Looking for Add Backend button (attempt ${attempt}/${maxRetries})`);
+      // Debug: Log current page state
+      const pageDebug = await this.executeScript<{ url: string; hasButton: boolean; buttonCount: number }>(`
+        return {
+          url: window.location.href,
+          hasButton: !!document.querySelector('[data-testid="sync-add-backend-button"]'),
+          buttonCount: document.querySelectorAll('button').length
+        };
+      `);
+      console.log(`[E2E] Looking for Add Backend button (attempt ${attempt}/${maxRetries}) - URL: ${pageDebug?.url}, hasButton: ${pageDebug?.hasButton}, buttons: ${pageDebug?.buttonCount}`);
+
       addBackendButton = await this.findElement('[data-testid="sync-add-backend-button"]');
 
       if (!addBackendButton && attempt < maxRetries) {
