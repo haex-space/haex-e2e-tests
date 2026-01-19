@@ -23,9 +23,10 @@ export default defineConfig({
   outputDir: "test-results/artifacts",
 
   use: {
-    trace: "on",
-    screenshot: "on",
-    video: "on",
+    // Only capture artifacts on failure to reduce overhead
+    trace: "on-first-retry",
+    screenshot: "only-on-failure",
+    video: "retain-on-failure",
   },
 
   projects: [

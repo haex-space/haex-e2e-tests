@@ -530,8 +530,8 @@ async function switchToAppWindow(sessionId: string): Promise<void> {
 async function waitForDocumentReady(sessionId: string, timeout = 60000): Promise<void> {
   const start = Date.now();
 
-  // Wait for app to start loading
-  await new Promise((resolve) => setTimeout(resolve, 5000));
+  // Wait for app to start loading (reduced from 5s to 1s - poll-based approach is more efficient)
+  await new Promise((resolve) => setTimeout(resolve, 1000));
 
   while (Date.now() - start < timeout) {
     // Try to switch to the correct window each iteration
@@ -592,8 +592,8 @@ async function waitForAppReady(sessionId: string, timeout = 30000): Promise<void
   // First, ensure document is loaded
   await waitForDocumentReady(sessionId);
 
-  // Add a small delay to ensure Tauri IPC is fully initialized
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  // Small delay to ensure Tauri IPC is fully initialized (reduced from 2s to 500ms)
+  await new Promise((resolve) => setTimeout(resolve, 500));
 
   const start = Date.now();
   let lastError: Error | null = null;

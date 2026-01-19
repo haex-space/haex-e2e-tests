@@ -337,9 +337,16 @@ jobs:
           # vault-b: Secondary vault for sync verification
           docker compose -f docker/docker-compose.yml up -d vault-a vault-b
 
-          # Wait for services to initialize (tauri-driver, nuxt dev server, etc.)
-          echo "Waiting for E2E services to initialize..."
-          sleep 60
+          # Wait for tauri-driver to be ready (replaces fixed 60s sleep)
+          echo "Waiting for tauri-driver to be ready..."
+          for i in {1..30}; do
+            if docker compose -f docker/docker-compose.yml exec -T vault-a curl -s http://localhost:4444/status > /dev/null 2>&1; then
+              echo "tauri-driver ready after ~$((i*2))s"
+              break
+            fi
+            echo "Waiting for tauri-driver... ($i/30)"
+            sleep 2
+          done
 
           # Verify both containers are running
           echo "Container status:"
