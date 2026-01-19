@@ -334,18 +334,18 @@ jobs:
           docker images | grep -E "(vault|sync)" || true
 
           # Get actual image names (format: <project>-<service>)
-          # Note: vault-a and vault-b use the same image definition
-          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          VAULT_A_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          VAULT_B_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-b" | head -1)
           SYNC_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "sync-server" | head -1)
 
-          if [ -z "$VAULT_IMAGE" ] || [ -z "$SYNC_IMAGE" ]; then
+          if [ -z "$VAULT_A_IMAGE" ] || [ -z "$VAULT_B_IMAGE" ] || [ -z "$SYNC_IMAGE" ]; then
             echo "ERROR: Could not find required images"
             docker images
             exit 1
           fi
 
-          echo "Saving images: $VAULT_IMAGE, $SYNC_IMAGE"
-          docker save $VAULT_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
+          echo "Saving images: $VAULT_A_IMAGE, $VAULT_B_IMAGE, $SYNC_IMAGE"
+          docker save $VAULT_A_IMAGE $VAULT_B_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
           ls -lh docker-images.tar.gz
 
       - name: Upload Docker images artifact
@@ -398,13 +398,6 @@ jobs:
         run: |
           echo "Loading Docker images..."
           gunzip -c docker-images.tar.gz | docker load
-
-          # Tag vault-a image as vault-b too (they use same Dockerfile)
-          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
-          if [ -n "$VAULT_IMAGE" ]; then
-            docker tag "$VAULT_IMAGE" docker-vault-b:latest
-          fi
-
           docker images
 
       - name: Pull base images
