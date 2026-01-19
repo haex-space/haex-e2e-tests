@@ -303,12 +303,22 @@ jobs:
           USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
         run: |
-          docker compose -f docker/docker-compose.yml up -d db sync-server
+          docker compose -f docker/docker-compose.yml up -d db gotrue kong sync-server
 
           # Wait for services to be healthy
           echo "Waiting for services to be ready..."
-          sleep 10
+          sleep 15
           docker compose -f docker/docker-compose.yml ps
+
+          # Check sync-server health and show logs if unhealthy
+          SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync 2>/dev/null || echo "unknown")
+          echo "Sync server health status: $SYNC_STATUS"
+
+          if [ "$SYNC_STATUS" != "healthy" ]; then
+            echo "=== Sync server logs (last 100 lines) ==="
+            docker logs haex_e2e_sync --tail 100 2>&1 || true
+            echo "=== End sync server logs ==="
+          fi
 
       - name: Run E2E tests
         id: test
@@ -322,15 +332,20 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           CI: true
         run: |
-          # Start vault-a with all services and run tests
-          # Using 'up' ensures the named volume is properly mounted for test results
-          docker compose -f docker/docker-compose.yml up -d vault-a
+          # Start both vault containers for multi-device sync tests
+          # vault-a: Primary test runner with Playwright
+          # vault-b: Secondary vault for sync verification
+          docker compose -f docker/docker-compose.yml up -d vault-a vault-b
 
           # Wait for services to initialize (tauri-driver, nuxt dev server, etc.)
           echo "Waiting for E2E services to initialize..."
           sleep 60
 
-          # Run tests inside the container
+          # Verify both containers are running
+          echo "Container status:"
+          docker compose -f docker/docker-compose.yml ps
+
+          # Run tests inside vault-a container
           docker compose -f docker/docker-compose.yml exec vault-a pnpm test
 
       - name: Copy test results from container
