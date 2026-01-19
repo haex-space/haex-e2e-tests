@@ -453,21 +453,21 @@ jobs:
             sleep 2
           done
 
-          # Determine test pattern based on shard
+          # Determine test directory based on shard
           case "${{ matrix.shard }}" in
             "workflows")
-              TEST_PATTERN="tests/workflows/**/*.spec.ts"
+              TEST_DIR="tests/workflows"
               ;;
             "haex-pass")
-              TEST_PATTERN="tests/haex-pass/**/*.spec.ts"
+              TEST_DIR="tests/haex-pass"
               ;;
             "other")
-              TEST_PATTERN="tests/{database,ui,limits}/**/*.spec.ts"
+              TEST_DIR="tests/database tests/ui tests/limits"
               ;;
           esac
 
-          echo "Running tests matching: $TEST_PATTERN"
-          docker compose -f docker/docker-compose.yml exec vault-a pnpm test -- "$TEST_PATTERN"
+          echo "Running tests in: $TEST_DIR"
+          docker compose -f docker/docker-compose.yml exec vault-a pnpm test $TEST_DIR
 
       - name: Copy test results from container
         if: always()
