@@ -132,12 +132,6 @@ test.describe("Vault Import/Export Workflow", () => {
       }
     }
 
-    // Get vault path for later comparison
-    const vaultInfo = await vault.invokeTauriCommand<{ path: string }>("get_current_vault_info");
-    if (vaultInfo?.path) {
-      originalVaultPath = vaultInfo.path;
-      console.log(`[Import Test] Original vault path: ${originalVaultPath}`);
-    }
   });
 
   test("Step 2: Install haex-pass and add test data", async () => {

@@ -1577,37 +1577,160 @@ export class VaultAutomation {
   }
 
   /**
-   * Create a sync connection using the frontend composable
-   * This handles the full flow: create backend, login, sync key, enable, start sync
+   * Create a sync connection via the Settings UI
+   * This uses the real UI flow: Settings → Sync → Add Backend
    */
   async createSyncConnection(credentials: {
     serverUrl: string;
     email: string;
     password: string;
   }): Promise<string | null> {
-    // Execute the sync connection creation in the frontend context
-    // The useCreateSyncConnection composable handles everything
-    const script = `
-      const { useCreateSyncConnection } = await import('/src/composables/useCreateSyncConnection');
-      const { createConnectionAsync } = useCreateSyncConnection();
+    console.log(`[E2E] Creating sync connection via UI on Vault ${this.instance}`);
 
-      const backendId = await createConnectionAsync({
-        serverUrl: ${JSON.stringify(credentials.serverUrl)},
-        email: ${JSON.stringify(credentials.email)},
-        password: ${JSON.stringify(credentials.password)},
-      });
+    // Step 1: Navigate to Settings → Sync
+    await this.navigateTo("/settings/sync");
+    await this.wait(500); // Wait for page load
 
-      return backendId;
-    `;
-
-    try {
-      const backendId = await this.executeScript<string | null>(script);
-      console.log(`[E2E] Sync connection created on Vault ${this.instance}: ${backendId}`);
-      return backendId;
-    } catch (error) {
-      console.error(`[E2E] Failed to create sync connection:`, error);
-      throw error;
+    // Step 2: Click the "Add Backend" button
+    // Try multiple selectors for the add button
+    let addBackendButton = await this.findElement('button[class*="lucide-plus"]');
+    if (!addBackendButton) {
+      addBackendButton = await this.findElement('button .i-lucide-plus');
     }
+    if (!addBackendButton) {
+      // Find button containing "Hinzufügen" or "Add" text via script
+      const buttonId = await this.executeScript<string | null>(`
+        const buttons = [...document.querySelectorAll('button')];
+        const btn = buttons.find(b =>
+          b.textContent?.includes('Hinzufügen') ||
+          b.textContent?.includes('Add') ||
+          b.querySelector('.i-lucide-plus')
+        );
+        if (btn) {
+          btn.setAttribute('data-e2e-temp', 'add-backend');
+          return 'found';
+        }
+        return null;
+      `);
+      if (buttonId) {
+        addBackendButton = await this.findElement('[data-e2e-temp="add-backend"]');
+      }
+    }
+
+    if (!addBackendButton) {
+      throw new Error("Add Backend button not found");
+    }
+    await this.clickElement(addBackendButton);
+    await this.wait(300); // Wait for form to appear
+
+    // Step 3: Fill in the form fields using executeScript
+    // This is more reliable than WebDriver value setting for Vue components
+    await this.executeScript(`
+      const serverUrl = ${JSON.stringify(credentials.serverUrl)};
+      const email = ${JSON.stringify(credentials.email)};
+      const password = ${JSON.stringify(credentials.password)};
+
+      // Find and fill server URL input or select custom option
+      const serverInputs = document.querySelectorAll('input[placeholder*="Server"], input[type="url"]');
+      if (serverInputs.length > 0) {
+        const serverInput = serverInputs[0];
+        serverInput.value = serverUrl;
+        serverInput.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        // Try to find a select/dropdown for server
+        const select = document.querySelector('[role="combobox"], select');
+        if (select) {
+          // Click to open, then look for custom option
+          select.click();
+        }
+      }
+
+      // Find and fill email input
+      const emailInput = document.querySelector('input[type="email"]');
+      if (emailInput) {
+        emailInput.value = email;
+        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // Find and fill password input
+      const passwordInput = document.querySelector('input[type="password"]');
+      if (passwordInput) {
+        passwordInput.value = password;
+        passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    `);
+
+    await this.wait(200);
+
+    // Step 4: Click the submit button
+    // Look for the button with mdi-plus icon or "Hinzufügen" text in the card footer
+    await this.executeScript(`
+      // Find the submit button - it's in the card footer with mdi-plus icon
+      const buttons = [...document.querySelectorAll('button')];
+      const submitBtn = buttons.find(b =>
+        (b.querySelector('.mdi-plus') || b.querySelector('[class*="mdi-plus"]')) &&
+        !b.querySelector('.i-lucide-plus') // Not the "Add Backend" button at the top
+      ) || buttons.find(b =>
+        b.closest('[class*="footer"]') &&
+        (b.textContent?.includes('Hinzufügen') || b.textContent?.includes('Add'))
+      );
+
+      if (submitBtn) {
+        submitBtn.click();
+      } else {
+        throw new Error('Submit button not found');
+      }
+    `);
+
+    // Step 5: Wait for the connection to be established (max 30 seconds)
+    const maxWaitTime = 30000;
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < maxWaitTime) {
+      await this.wait(500);
+
+      // Check if loading overlay is gone and form is closed
+      const isStillLoading = await this.executeScript<boolean>(`
+        const loader = document.querySelector('.loading-spinner, [class*="loading"][class*="spinner"]');
+        const emailInput = document.querySelector('input[type="email"]');
+        // Form should close on success
+        return !!(loader || emailInput);
+      `);
+
+      if (!isStillLoading) {
+        break;
+      }
+    }
+
+    // Step 6: Check for success by looking for the backend in database
+    await this.wait(500);
+
+    const backends = await this.getSyncBackends();
+    const newBackend = backends.find(
+      (b) => b.serverUrl === credentials.serverUrl && b.email === credentials.email
+    );
+
+    if (newBackend) {
+      console.log(`[E2E] Sync connection created successfully: ${newBackend.id}`);
+      return newBackend.id;
+    }
+
+    // Check if form is still visible (error case)
+    const formVisible = await this.findElement('input[type="email"]');
+    if (formVisible) {
+      console.error(`[E2E] Sync connection setup failed - form still visible`);
+      throw new Error("Sync connection failed - form still visible after timeout");
+    }
+
+    console.log(`[E2E] Sync connection may have been created but couldn't verify`);
+    return null;
+  }
+
+  /**
+   * Helper to wait for a specified time
+   */
+  private async wait(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   /**
@@ -1837,20 +1960,77 @@ export async function sendRequestWithRetry<T = unknown>(
 }
 
 /**
- * Helper to wait for extension to be ready and send first request.
- * Use this after authorization to ensure the extension is fully initialized.
+ * Helper to wait for extension to be ready.
+ *
+ * When a VaultAutomation instance is provided, this uses the real
+ * useExtensionReadyStore().waitForReady() from haex-vault via executeScript.
+ * This is the preferred method as it uses the actual haex-vault functionality.
+ *
+ * When only a VaultBridgeClient is provided (legacy), it falls back to
+ * polling via sendRequestWithRetry.
  */
 export async function waitForExtensionReady(
   client: VaultBridgeClient,
-  options: { testAction?: string; testPayload?: object } = {}
+  options: {
+    testAction?: string;
+    testPayload?: object;
+    vault?: VaultAutomation;
+    extensionId?: string;
+    timeout?: number;
+  } = {}
 ): Promise<boolean> {
   const {
     testAction = HAEX_PASS_METHODS.GET_ITEMS,
     testPayload = { url: "https://example.com" },
+    vault,
+    extensionId = "haex-pass",
+    timeout = 30000,
   } = options;
 
   console.log("[E2E] Waiting for extension to be ready...");
 
+  // Preferred method: Use haex-vault's useExtensionReadyStore().waitForReady()
+  if (vault) {
+    try {
+      const isReady = await vault.executeScript<boolean>(`
+        // Access the Pinia store for extension ready state
+        const pinia = window.__NUXT__?.vueApp?.$pinia
+          || window.__NUXT__?._context?.provides?.pinia
+          || window.$pinia;
+
+        if (!pinia) {
+          throw new Error('Pinia not available');
+        }
+
+        const extensionReadyStore = pinia._s.get('extensionReady');
+        if (!extensionReadyStore) {
+          throw new Error('extensionReady store not found');
+        }
+
+        // Wait for the extension to signal ready (with timeout)
+        const result = await extensionReadyStore.waitForReady(
+          ${JSON.stringify(extensionId)},
+          ${timeout}
+        );
+
+        return result;
+      `);
+
+      if (isReady) {
+        console.log("[E2E] Extension is ready (via useExtensionReadyStore)!");
+        return true;
+      } else {
+        console.error("[E2E] Extension ready check returned false");
+        return false;
+      }
+    } catch (err) {
+      console.error("[E2E] Extension ready check failed:", err);
+      // Fall through to legacy method
+    }
+  }
+
+  // Legacy fallback: Polling via sendRequestWithRetry
+  console.log("[E2E] Using legacy polling method for extension ready...");
   try {
     // Use 30s per request (not timeout/5) to handle slow CI environments
     // where responses can take 15-20+ seconds due to resource constraints
@@ -1873,6 +2053,10 @@ export async function waitForExtensionReady(
  * Helper to complete the authorization flow
  * Note: The extensionId parameter is the Chrome extension ID (for Playwright).
  * For vault authorization, we use the haex-vault extension ID from global-setup.
+ *
+ * IMPORTANT: This function waits for the extension to be registered in the database
+ * before attempting authorization. This prevents FOREIGN KEY constraint failures
+ * when the authorization is persisted (remember=true).
  */
 export async function authorizeClient(
   client: VaultBridgeClient,
@@ -1889,6 +2073,16 @@ export async function authorizeClient(
   try {
     // Create WebDriver session - the vault should already be running from global setup
     await vault.createSession();
+
+    // CRITICAL: Wait for the extension to exist in database before authorizing
+    // This prevents FOREIGN KEY constraint failures when persisting authorization
+    console.log("[E2E] Waiting for extension to be registered in database...");
+    const extensionReady = await waitForExtensionInDatabase(vault, vaultExtensionId, timeout);
+    if (!extensionReady) {
+      console.error("[E2E] Extension not found in database after timeout");
+      return false;
+    }
+    console.log("[E2E] Extension found in database, proceeding with authorization");
 
     // Wait for the client to be in pending_approval state
     const start = Date.now();
@@ -1932,6 +2126,38 @@ export async function authorizeClient(
   } finally {
     await vault.deleteSession();
   }
+}
+
+/**
+ * Wait for an extension to be registered in the haex_extensions database table.
+ * This is required before authorization can be persisted (due to FOREIGN KEY constraint).
+ */
+async function waitForExtensionInDatabase(
+  vault: VaultAutomation,
+  extensionId: string,
+  timeout: number
+): Promise<boolean> {
+  const start = Date.now();
+
+  while (Date.now() - start < timeout) {
+    try {
+      // Query the extensions table to check if extension exists
+      const extensions = await vault.invokeTauriCommand<Array<{ id: string; name: string }>>(
+        "get_all_extensions"
+      );
+
+      const found = extensions.some((ext) => ext.id === extensionId || ext.name === extensionId);
+      if (found) {
+        return true;
+      }
+    } catch (error) {
+      console.log("[E2E] Error checking extension in database:", error);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  return false;
 }
 
 /**
