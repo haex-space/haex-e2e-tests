@@ -62,19 +62,19 @@ on:
     outputs:
       success:
         description: 'Whether all tests passed (desktop and android if enabled)'
-        value: ${{ jobs.e2e.outputs.success && (inputs.haex_vault_android_artifact == '' || jobs.android-e2e.outputs.success) }}
+        value: ${{ jobs.e2e-results.outputs.success && (inputs.haex_vault_android_artifact == '' || jobs.android-e2e.outputs.success) }}
       test_result:
         description: 'Desktop test result summary'
-        value: ${{ jobs.e2e.outputs.test_result }}
+        value: ${{ jobs.e2e-results.outputs.test_result }}
       android_test_result:
         description: 'Android test result summary'
         value: ${{ jobs.android-e2e.outputs.test_result }}
       artifact_name:
         description: 'Name of the uploaded artifact'
-        value: ${{ jobs.e2e.outputs.artifact_name }}
+        value: ${{ jobs.e2e-results.outputs.artifact_name }}
       run_id:
         description: 'GitHub Actions run ID'
-        value: ${{ jobs.e2e.outputs.run_id }}
+        value: ${{ jobs.e2e-results.outputs.run_id }}
 
   # Manual trigger for testing
   workflow_dispatch:
@@ -119,17 +119,19 @@ on:
         default: 'main'
 
 jobs:
-  e2e:
-    name: E2E Tests (${{ inputs.build_type }})
+  # Build Docker image and save it for parallel test jobs
+  build-env:
+    name: Build Test Environment
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    # All build types are blocking - E2E test failures fail the pipeline
+    timeout-minutes: 30
 
     outputs:
-      success: ${{ steps.test.outcome == 'success' }}
-      test_result: ${{ steps.test.outcome }}
-      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
-      run_id: ${{ github.run_id }}
+      image_artifact: e2e-docker-image-${{ github.run_id }}
+      use_prebuilt_vault: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+      haex_vault_version: ${{ steps.versions.outputs.haex_vault_version }}
+      haextension_version: ${{ steps.versions.outputs.haextension_version }}
+      vault_sdk_version: ${{ steps.versions.outputs.vault_sdk_version }}
+      sync_server_version: ${{ steps.versions.outputs.sync_server_version }}
 
     steps:
       - name: Checkout E2E tests
@@ -295,7 +297,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build test environment
+      - name: Build and export Docker images
         env:
           HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
           HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
@@ -320,56 +322,116 @@ jobs:
           fi
 
           # Ensure prebuilt directory exists (even if empty)
-          # The Dockerfile's build context is the repo root (..), so prebuilt/ must be there
           mkdir -p prebuilt
 
+          # Build all images
           docker compose -f docker/docker-compose.yml build
+
+          # Export vault and sync-server images for parallel test jobs
+          # docker-compose uses project name from directory (docker/)
+          echo "Exporting Docker images..."
+          echo "Available images:"
+          docker images | grep -E "(vault|sync)" || true
+
+          # Get actual image names (format: <project>-<service>)
+          VAULT_A_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          VAULT_B_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-b" | head -1)
+          SYNC_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "sync-server" | head -1)
+
+          echo "Saving images: $VAULT_A_IMAGE, $VAULT_B_IMAGE, $SYNC_IMAGE"
+          docker save $VAULT_A_IMAGE $VAULT_B_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
+          ls -lh docker-images.tar.gz
+
+      - name: Upload Docker images artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+          path: docker-images.tar.gz
+          retention-days: 1
+          compression-level: 0  # Already gzipped
+
+  # Parallel test execution using matrix strategy
+  e2e:
+    name: E2E Tests - ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: build-env
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - "workflows"    # vault-lifecycle, vault-import, remote-sync
+          - "haex-pass"    # get-logins, get-totp, authorization-flow, set-login
+          - "other"        # database, ui, limits
+
+    outputs:
+      success: ${{ steps.test.outcome == 'success' }}
+      test_result: ${{ steps.test.outcome }}
+      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}-${{ matrix.shard }}
+      run_id: ${{ github.run_id }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: main
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android
+          sudo apt-get clean
+
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+
+      - name: Load Docker images
+        run: |
+          echo "Loading Docker images..."
+          gunzip -c docker-images.tar.gz | docker load
+          docker images
+
+      - name: Pull base images
+        run: |
+          # Pull images that weren't exported (base images from registry)
+          docker pull supabase/postgres:15.8.1.085
+          docker pull supabase/gotrue:v2.169.0
+          docker pull kong:2.8.1
 
       - name: Start services
         env:
-          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
-          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
-          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
-          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
-          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
-          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
         run: |
           docker compose -f docker/docker-compose.yml up -d db gotrue kong sync-server
 
           # Wait for services to be healthy
           echo "Waiting for services to be ready..."
-          sleep 15
+          for i in {1..30}; do
+            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync 2>/dev/null || echo "starting")
+            if [ "$SYNC_STATUS" == "healthy" ]; then
+              echo "All services ready after ~$((i*5))s"
+              break
+            fi
+            echo "Waiting for services... ($i/30) - sync-server: $SYNC_STATUS"
+            sleep 5
+          done
+
           docker compose -f docker/docker-compose.yml ps
 
-          # Check sync-server health and show logs if unhealthy
-          SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync 2>/dev/null || echo "unknown")
-          echo "Sync server health status: $SYNC_STATUS"
-
-          if [ "$SYNC_STATUS" != "healthy" ]; then
-            echo "=== Sync server logs (last 100 lines) ==="
-            docker logs haex_e2e_sync --tail 100 2>&1 || true
-            echo "=== End sync server logs ==="
-          fi
-
-      - name: Run E2E tests
+      - name: Run E2E tests (${{ matrix.shard }})
         id: test
         env:
-          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
-          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
-          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
-          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
-          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
-          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
-          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           CI: true
         run: |
-          # Start both vault containers for multi-device sync tests
-          # vault-a: Primary test runner with Playwright
-          # vault-b: Secondary vault for sync verification
+          # Start vault containers
           docker compose -f docker/docker-compose.yml up -d vault-a vault-b
 
-          # Wait for tauri-driver to be ready (replaces fixed 60s sleep)
+          # Wait for tauri-driver to be ready
           echo "Waiting for tauri-driver to be ready..."
           for i in {1..30}; do
             if docker compose -f docker/docker-compose.yml exec -T vault-a curl -s http://localhost:4444/status > /dev/null 2>&1; then
@@ -380,70 +442,81 @@ jobs:
             sleep 2
           done
 
-          # Verify both containers are running
-          echo "Container status:"
-          docker compose -f docker/docker-compose.yml ps
+          # Determine test pattern based on shard
+          case "${{ matrix.shard }}" in
+            "workflows")
+              TEST_PATTERN="tests/workflows/**/*.spec.ts"
+              ;;
+            "haex-pass")
+              TEST_PATTERN="tests/haex-pass/**/*.spec.ts"
+              ;;
+            "other")
+              TEST_PATTERN="tests/{database,ui,limits}/**/*.spec.ts"
+              ;;
+          esac
 
-          # Run tests inside vault-a container
-          docker compose -f docker/docker-compose.yml exec vault-a pnpm test
+          echo "Running tests matching: $TEST_PATTERN"
+          docker compose -f docker/docker-compose.yml exec vault-a pnpm test -- "$TEST_PATTERN"
 
       - name: Copy test results from container
         if: always()
         run: |
           mkdir -p ./test-results
-
-          # Debug: List volumes
-          echo "Available Docker volumes:"
-          docker volume ls
-
-          # Copy from named volume via temporary container
-          # Volume name is docker_test-results (docker/ directory prefix)
-          echo "Contents of test-results volume:"
-          docker run --rm \
-            -v docker_test-results:/results \
-            alpine sh -c "find /results -type f 2>/dev/null | head -50 || echo 'Volume empty or not found'"
-
           docker run --rm \
             -v docker_test-results:/results \
             -v $(pwd)/test-results:/output \
             alpine sh -c "cp -r /results/* /output/ 2>&1 || echo 'Copy completed (may be empty)'"
 
-          echo "Contents of local test-results:"
-          find ./test-results -type f 2>/dev/null | head -50 || echo "No files found"
-
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
+          name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}-${{ matrix.shard }}
           path: |
             test-results/artifacts/
             test-results/html-report/
             test-results/results.json
           retention-days: 90
 
-      - name: Write test summary
-        if: always()
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Test Result" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.test.outcome }}" == "success" ]; then
-            echo "✅ **Tests passed**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Tests failed**" >> $GITHUB_STEP_SUMMARY
-          fi
-
       - name: Stop services
         if: always()
         run: |
           docker compose -f docker/docker-compose.yml down -v
+
+  # Aggregate results from parallel test jobs
+  e2e-results:
+    name: E2E Test Results
+    runs-on: ubuntu-latest
+    needs: e2e
+    if: always()
+
+    outputs:
+      success: ${{ steps.check.outputs.success }}
+      test_result: ${{ steps.check.outputs.result }}
+      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
+      run_id: ${{ github.run_id }}
+
+    steps:
+      - name: Check test results
+        id: check
+        run: |
+          # Check if all matrix jobs succeeded
+          if [ "${{ needs.e2e.result }}" == "success" ]; then
+            echo "success=true" >> $GITHUB_OUTPUT
+            echo "result=success" >> $GITHUB_OUTPUT
+            echo "✅ All E2E tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "success=false" >> $GITHUB_OUTPUT
+            echo "result=failure" >> $GITHUB_OUTPUT
+            echo "❌ Some E2E tests failed" >> $GITHUB_STEP_SUMMARY
+          fi
 
   # Android E2E Tests - runs after desktop tests, uses Maestro for UI automation
   android-e2e:
     name: Android E2E Tests (${{ inputs.build_type }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: e2e
+    needs: e2e-results
     # Only run if Android artifact is provided
     if: inputs.haex_vault_android_artifact != ''
 
