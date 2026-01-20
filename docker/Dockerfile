@@ -105,17 +105,8 @@ RUN git clone --depth 1 --branch ${VAULT_SDK_REF} https://github.com/haex-space/
 WORKDIR /repos/haex-vault
 RUN pnpm install
 
-# For E2E tests: Build Nuxt assets for production but configure Tauri for dev-server mode
-# This allows us to start a Nuxt dev server and have the Tauri app connect to it
+# Build Nuxt for production - assets will be embedded in Tauri binary
 RUN pnpm build
-
-# Modify tauri.conf.json to use devUrl as frontendDist (dev-server mode)
-# This makes the production binary connect to http://localhost:3003 instead of embedded assets
-# Also update CSP to allow localhost:3003 connections
-RUN jq '.build.frontendDist = "http://localhost:3003" | .app.security.csp["default-src"] += ["http://localhost:3003"] | .app.security.csp["script-src"] += ["http://localhost:3003"] | .app.security.csp["style-src"] += ["http://localhost:3003"] | .app.security.csp["connect-src"] += ["http://localhost:3003", "ws://localhost:3003"]' src-tauri/tauri.conf.json > /tmp/tauri.conf.json && \
-    mv /tmp/tauri.conf.json src-tauri/tauri.conf.json && \
-    cat src-tauri/tauri.conf.json | head -20 && \
-    echo "Modified tauri.conf.json to use dev-server mode"
 
 # Build Tauri binary OR use pre-built one
 # If USE_PREBUILT_VAULT=true and pre-built binary exists, skip the cargo build

@@ -674,7 +674,7 @@ async function globalSetup() {
   }
 
   // Create WebDriver session - this will start haex-vault via tauri-driver
-  // The app will connect to the already-running Nuxt dev server at http://localhost:3003
+  // The app uses embedded production assets (no dev server needed)
   console.log("[Setup] Starting haex-vault via tauri-driver...");
   const sessionId = await createWebDriverSession();
 

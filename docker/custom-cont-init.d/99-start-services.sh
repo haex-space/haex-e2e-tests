@@ -35,22 +35,6 @@ if [ -d "$VAULT_DATA_DIR" ]; then
     rm -rf "$VAULT_DATA_DIR"
 fi
 
-# Start Nuxt dev server in background
-echo "Starting Nuxt dev server..."
-cd /repos/haex-vault
-NUXT_HOST=0.0.0.0 nohup pnpm dev > /var/log/nuxt-dev.log 2>&1 &
-echo "Nuxt dev server starting (log: /var/log/nuxt-dev.log)"
-
-# Wait for Nuxt dev server
-echo "Waiting for Nuxt dev server on port 3003..."
-for i in {1..120}; do
-    if curl -s http://localhost:3003 >/dev/null 2>&1; then
-        echo "Nuxt dev server is ready!"
-        break
-    fi
-    sleep 1
-done
-
 # Start tauri-driver with retry logic
 start_tauri_driver() {
     echo "Starting tauri-driver..."
@@ -109,7 +93,6 @@ fi
 
 echo ""
 echo "=== E2E services started ==="
-echo "  - Nuxt dev server: http://localhost:3003"
 echo "  - tauri-driver: http://localhost:4444 (iptables redirect from 0.0.0.0)"
 echo "  - WebSocket bridge: ws://localhost:19455 (iptables redirect from 0.0.0.0)"
 echo ""
