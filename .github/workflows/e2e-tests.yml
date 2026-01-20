@@ -8,43 +8,30 @@ on:
         description: 'Build type: build (PR/push), nightly, or release'
         type: string
         required: true
-      # Option 1: Load versions from project config (.e2e-versions.json)
-      source_project:
-        description: 'Load versions from this project config (haex-vault, haextension, vault-sdk, haex-sync-server)'
-        type: string
-        default: ''
-      source_ref:
-        description: 'Git ref to load config from (only used with source_project)'
-        type: string
-        default: 'main'
-      version_profile:
-        description: 'Version profile to use from config (only used with source_project)'
-        type: string
-        default: ''
-      # Option 2: Specify versions directly (ignored if source_project is set)
+      # Version specification (branch, tag, or commit SHA)
       haex_vault_version:
-        description: 'haex-vault version (branch, tag, or commit)'
+        description: 'haex-vault version (branch, tag, or commit SHA)'
         type: string
         default: 'main'
       haextension_version:
-        description: 'haextension version (branch, tag, or commit)'
+        description: 'haextension version (branch, tag, or commit SHA)'
         type: string
         default: 'main'
       vault_sdk_version:
-        description: 'vault-sdk version (branch, tag, or commit)'
+        description: 'vault-sdk version (branch, tag, or commit SHA)'
         type: string
         default: 'main'
       sync_server_version:
-        description: 'haex-sync-server version (branch, tag, or commit)'
+        description: 'haex-sync-server version (branch, tag, or commit SHA)'
         type: string
         default: 'main'
-      # Option 3: Use pre-built artifacts (skips building that component)
+      # Pre-built artifacts (override version if set)
       haex_vault_artifact:
-        description: 'GitHub artifact name containing pre-built haex-vault (skips vault build if set)'
+        description: 'GitHub artifact name containing pre-built haex-vault binary'
         type: string
         default: ''
       haex_vault_artifact_run_id:
-        description: 'Run ID to download haex-vault artifact from (required if haex_vault_artifact is set)'
+        description: 'Run ID to download haex-vault artifact from'
         type: string
         default: ''
       sync_server_image:
@@ -52,16 +39,16 @@ on:
         type: string
         default: ''
       haex_vault_android_artifact:
-        description: 'GitHub artifact name containing pre-built Android APK (enables Android E2E tests if set)'
+        description: 'GitHub artifact name containing pre-built Android APK (enables Android tests)'
         type: string
         default: ''
     secrets:
       ARTIFACT_TOKEN:
-        description: 'Token with permission to download artifacts from other repos (defaults to GITHUB_TOKEN)'
+        description: 'Token with permission to download artifacts from other repos'
         required: false
     outputs:
       success:
-        description: 'Whether all tests passed (desktop and android if enabled)'
+        description: 'Whether all tests passed'
         value: ${{ jobs.e2e-results.outputs.success && (inputs.haex_vault_android_artifact == '' || jobs.android-e2e.outputs.success) }}
       test_result:
         description: 'Desktop test result summary'
@@ -87,35 +74,17 @@ on:
           - nightly
           - release
         default: build
-      # Option 1: Load versions from project config
-      source_project:
-        description: 'Load versions from project config (leave empty to use manual versions)'
-        type: choice
-        options:
-          - ''
-          - haex-vault
-          - haextension
-          - vault-sdk
-          - haex-sync-server
-        default: ''
-      source_ref:
-        description: 'Git ref to load config from'
-        default: 'main'
-      version_profile:
-        description: 'Version profile (leave empty for default)'
-        default: ''
-      # Option 2: Specify versions directly
       haex_vault_version:
-        description: 'haex-vault version (ignored if source_project is set)'
+        description: 'haex-vault version (branch, tag, or commit SHA)'
         default: 'main'
       haextension_version:
-        description: 'haextension version (ignored if source_project is set)'
+        description: 'haextension version (branch, tag, or commit SHA)'
         default: 'main'
       vault_sdk_version:
-        description: 'vault-sdk version (ignored if source_project is set)'
+        description: 'vault-sdk version (branch, tag, or commit SHA)'
         default: 'main'
       sync_server_version:
-        description: 'haex-sync-server version (ignored if source_project is set)'
+        description: 'haex-sync-server version (branch, tag, or commit SHA)'
         default: 'main'
 
 jobs:
@@ -208,54 +177,20 @@ jobs:
           echo "use_prebuilt_vault=$USE_PREBUILT_VAULT" >> $GITHUB_OUTPUT
           echo "use_prebuilt_sync_server=$USE_PREBUILT_SYNC_SERVER" >> $GITHUB_OUTPUT
 
-      - name: Resolve versions from project config
+      - name: Set versions
         id: versions
         run: |
-          SOURCE_PROJECT="${{ inputs.source_project }}"
-
-          if [ -n "$SOURCE_PROJECT" ]; then
-            echo "Loading versions from $SOURCE_PROJECT config..."
-
-            # Install jq for JSON parsing
-            sudo apt-get update -qq && sudo apt-get install -y -qq jq
-
-            # Source the script to get versions
-            source scripts/fetch-project-versions.sh \
-              "$SOURCE_PROJECT" \
-              "${{ inputs.source_ref }}" \
-              "${{ inputs.version_profile }}"
-
-            # Export to GitHub outputs
-            echo "haex_vault_version=$HAEX_VAULT_VERSION" >> $GITHUB_OUTPUT
-            echo "haextension_version=$HAEXTENSION_VERSION" >> $GITHUB_OUTPUT
-            echo "vault_sdk_version=$VAULT_SDK_VERSION" >> $GITHUB_OUTPUT
-            echo "sync_server_version=$HAEX_SYNC_SERVER_VERSION" >> $GITHUB_OUTPUT
-            echo "source=config" >> $GITHUB_OUTPUT
-          else
-            echo "Using manually specified versions..."
-
-            # Use input values directly
-            echo "haex_vault_version=${{ inputs.haex_vault_version }}" >> $GITHUB_OUTPUT
-            echo "haextension_version=${{ inputs.haextension_version }}" >> $GITHUB_OUTPUT
-            echo "vault_sdk_version=${{ inputs.vault_sdk_version }}" >> $GITHUB_OUTPUT
-            echo "sync_server_version=${{ inputs.sync_server_version }}" >> $GITHUB_OUTPUT
-            echo "source=manual" >> $GITHUB_OUTPUT
-          fi
+          echo "haex_vault_version=${{ inputs.haex_vault_version }}" >> $GITHUB_OUTPUT
+          echo "haextension_version=${{ inputs.haextension_version }}" >> $GITHUB_OUTPUT
+          echo "vault_sdk_version=${{ inputs.vault_sdk_version }}" >> $GITHUB_OUTPUT
+          echo "sync_server_version=${{ inputs.sync_server_version }}" >> $GITHUB_OUTPUT
 
       - name: Log test configuration
         run: |
           echo "## E2E Test Configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Setting | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|---------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Type | \`${{ inputs.build_type }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Version Source | \`${{ steps.versions.outputs.source }}\` |" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.versions.outputs.source }}" == "config" ]; then
-            echo "| Source Project | \`${{ inputs.source_project }}@${{ inputs.source_ref }}\` |" >> $GITHUB_STEP_SUMMARY
-            if [ -n "${{ inputs.version_profile }}" ]; then
-              echo "| Profile | \`${{ inputs.version_profile }}\` |" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
+          echo "| Component | Version |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
 
           # Show haex-vault source
           if [ "${{ steps.prebuilt.outputs.use_prebuilt_vault }}" == "true" ]; then
@@ -272,13 +207,6 @@ jobs:
             echo "| sync-server | \`${{ inputs.sync_server_image }}\` |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.build_type }}" == "nightly" ]; then
-            echo "> **Note:** Nightly build - test failures will not block the pipeline" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "> **Note:** Release build - test failures will block the pipeline" >> $GITHUB_STEP_SUMMARY
           fi
 
       - name: Free disk space
