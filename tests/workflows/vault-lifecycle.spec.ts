@@ -68,9 +68,8 @@ test.describe("Vault Lifecycle Workflow", () => {
 
   test("Step 1: Verify vault is accessible via Bridge", async () => {
     // The global-setup opens the vault database and starts the WebSocket bridge
-    // We verify the vault is functional by connecting to the bridge
-    // The UI navigation to /vault is not strictly necessary for testing the workflow
-    // as long as the bridge is accessible and we can interact with extensions
+    // However, other tests (like vault-import) may have opened a different vault.
+    // We need to ensure OUR test vault is open before proceeding.
 
     // Get list of vaults to confirm test vault exists
     const vaults = await vault.invokeTauriCommand<Array<{ name: string; path: string }>>(
@@ -81,7 +80,22 @@ test.describe("Vault Lifecycle Workflow", () => {
     expect(testVault).toBeDefined();
     console.log(`[Workflow] Test vault exists: ${testVault!.name}`);
 
-    // The vault is already opened by global-setup
+    // Ensure the test vault is open (may have been closed by other tests)
+    // open_encrypted_database is idempotent - it returns success if already open
+    try {
+      await vault.invokeTauriCommand("open_encrypted_database", {
+        vaultPath: testVault!.path,
+        key: WORKFLOW_VAULT_PASSWORD,
+      });
+      console.log(`[Workflow] Test vault opened/confirmed: ${testVault!.name}`);
+    } catch (error) {
+      // If already open, we get an error but that's fine
+      console.log(`[Workflow] Vault open status: ${error}`);
+    }
+
+    // Wait a moment for bridge to be ready after vault open
+    await new Promise((r) => setTimeout(r, 1000));
+
     // Verify by checking that the bridge is accessible
     const client = new VaultBridgeClient();
     const connected = await waitForBridgeConnection(client, 10000);
