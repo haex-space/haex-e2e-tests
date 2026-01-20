@@ -1695,15 +1695,16 @@ export class VaultAutomation {
     console.log(`[E2E] Opening Settings → ${category} on Vault ${this.instance}`);
 
     // Step 1: Click the launcher button to open the App Launcher drawer
-    // The v-testid directive sets data-testid directly on the button element
+    // The data-testid is on a wrapper span, find the button inside or use the wrapper itself
     await this.executeScript(`
-      const launcherButton = document.querySelector('[data-testid="launcher-button"]');
-      if (!launcherButton) {
-        // Debug: log what data-testid elements exist
+      const wrapper = document.querySelector('[data-testid="launcher-button"]');
+      if (!wrapper) {
         const allTestIds = [...document.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
         throw new Error('Launcher button not found. Available testids: ' + allTestIds.join(', '));
       }
-      launcherButton.click();
+      // Click the button inside the wrapper, or the wrapper itself if it's clickable
+      const button = wrapper.querySelector('button') || wrapper;
+      button.click();
     `);
 
     // Wait for launcher drawer to open
