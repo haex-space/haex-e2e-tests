@@ -252,19 +252,21 @@ jobs:
           # Ensure prebuilt directory exists (even if empty)
           mkdir -p prebuilt
 
-          # Build only vault-a and sync-server (vault-b uses same image as vault-a)
-          docker compose -f docker/docker-compose.yml build vault-a sync-server
+          # Build vault-a, sync-server, and marketplace (vault-b uses same image as vault-a)
+          echo "Building Docker images..."
+          docker compose -f docker/docker-compose.yml build vault-a sync-server marketplace
 
-          # Export vault and sync-server images for parallel test jobs
+          # Export vault, sync-server, and marketplace images for parallel test jobs
           # docker-compose uses project name from directory (docker/)
           echo "Exporting Docker images..."
           echo "Available images:"
-          docker images | grep -E "(vault|sync)" || true
+          docker images | grep -E "(vault|sync|marketplace)" || true
 
           # Get actual image names (format: <project>-<service>)
           # vault-a and vault-b use identical Dockerfile/args, so we only save vault-a
           VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
           SYNC_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "sync-server" | head -1)
+          MARKETPLACE_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "marketplace" | head -1)
 
           if [ -z "$VAULT_IMAGE" ] || [ -z "$SYNC_IMAGE" ]; then
             echo "ERROR: Could not find required images"
@@ -272,8 +274,14 @@ jobs:
             exit 1
           fi
 
-          echo "Saving images: $VAULT_IMAGE, $SYNC_IMAGE (vault-b will be tagged from vault-a)"
-          docker save $VAULT_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
+          echo "Saving images: $VAULT_IMAGE, $SYNC_IMAGE, $MARKETPLACE_IMAGE (vault-b will be tagged from vault-a)"
+          if [ -n "$MARKETPLACE_IMAGE" ]; then
+            docker save $VAULT_IMAGE $SYNC_IMAGE $MARKETPLACE_IMAGE | gzip > docker-images.tar.gz
+          else
+            # Marketplace build may have failed or is not available
+            echo "Warning: Marketplace image not found, saving without it"
+            docker save $VAULT_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
+          fi
           ls -lh docker-images.tar.gz
 
       - name: Upload Docker images artifact
@@ -339,23 +347,30 @@ jobs:
           docker pull supabase/postgres:15.8.1.085
           docker pull supabase/gotrue:v2.169.0
           docker pull kong:2.8.1
+          docker pull postgrest/postgrest:v12.2.0
+          docker pull supabase/storage-api:v1.14.3
 
       - name: Start services
         env:
           USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
         run: |
-          docker compose -f docker/docker-compose.yml up -d db gotrue kong sync-server
+          # Start sync stack services
+          docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
+
+          # Start marketplace stack services
+          docker compose -f docker/docker-compose.yml up -d marketplace-db marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
 
           # Wait for services to be healthy
           echo "Waiting for services to be ready..."
-          for i in {1..30}; do
-            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync 2>/dev/null || echo "starting")
-            if [ "$SYNC_STATUS" == "healthy" ]; then
+          for i in {1..60}; do
+            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
+            MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
+            if [ "$SYNC_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
               echo "All services ready after ~$((i*5))s"
               break
             fi
-            echo "Waiting for services... ($i/30) - sync-server: $SYNC_STATUS"
+            echo "Waiting for services... ($i/60) - sync-server: $SYNC_STATUS, marketplace: $MARKETPLACE_STATUS"
             sleep 5
           done
 
@@ -518,8 +533,8 @@ jobs:
 
       - name: Start backend services for sync tests
         run: |
-          # Start only the services needed for Android sync tests
-          docker compose -f docker/docker-compose.yml up -d db gotrue kong sync-server
+          # Start sync stack services needed for Android sync tests
+          docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
 
           # Wait for services to be healthy
           echo "Waiting for backend services..."
