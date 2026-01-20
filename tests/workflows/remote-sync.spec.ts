@@ -116,16 +116,27 @@ test.describe("Remote Sync Workflow", () => {
   test("Step 2: Device A - Create vault and connect to sync server", async () => {
     await vaultA.navigateTo("/en");
 
+    // Debug: Take screenshot after navigation
+    await vaultA.takeScreenshot("after-navigate-to-en");
+
+    // Wait for page to load
+    await new Promise((r) => setTimeout(r, 2000));
+    await vaultA.takeScreenshot("after-wait-2s");
+
     // Create a new vault
-    await vaultA.executeScript(`
+    const createClicked = await vaultA.executeScript<boolean>(`
       const buttons = document.querySelectorAll('button');
       for (const btn of buttons) {
         if (btn.textContent?.includes('Create vault')) {
           btn.click();
-          break;
+          return true;
         }
       }
+      console.log('Available buttons:', [...buttons].map(b => b.textContent?.trim()));
+      return false;
     `);
+    console.log(`[Sync Test] Create vault button clicked: ${createClicked}`);
+    await vaultA.takeScreenshot("after-create-vault-click");
 
     await new Promise((r) => setTimeout(r, 500));
 
