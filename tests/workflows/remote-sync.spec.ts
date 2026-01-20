@@ -114,40 +114,20 @@ test.describe("Remote Sync Workflow", () => {
   });
 
   test("Step 2: Device A - Create vault and connect to sync server", async () => {
-    // Debug: Take screenshot of initial state
-    await vaultA.takeScreenshot("initial-state");
+    // App is already ready (waitForAppReady called in createSession)
+    // Navigate to home page to create a new vault
+    await vaultA.navigateTo("/en");
 
-    // Check current page state before any navigation
-    const initialState = await vaultA.executeScript<{ url: string; testIds: number }>(`
-      return {
-        url: window.location.href,
-        testIds: document.querySelectorAll('[data-testid]').length
-      };
-    `);
-    console.log(`[Sync Test] Initial state: url=${initialState?.url}, testIds=${initialState?.testIds}`);
-
-    // Only navigate if not already on a valid page
-    if (!initialState?.testIds || initialState.testIds === 0) {
-      console.log(`[Sync Test] Page not loaded, refreshing...`);
-      await vaultA.executeScript(`window.location.reload()`);
-      await new Promise((r) => setTimeout(r, 3000));
-      await vaultA.takeScreenshot("after-reload");
-    }
-
-    // Create a new vault
-    const createClicked = await vaultA.executeScript<boolean>(`
+    // Create a new vault - click the "Create vault" button
+    await vaultA.executeScript(`
       const buttons = document.querySelectorAll('button');
       for (const btn of buttons) {
         if (btn.textContent?.includes('Create vault')) {
           btn.click();
-          return true;
+          break;
         }
       }
-      console.log('Available buttons:', [...buttons].map(b => b.textContent?.trim()));
-      return false;
     `);
-    console.log(`[Sync Test] Create vault button clicked: ${createClicked}`);
-    await vaultA.takeScreenshot("after-create-vault-click");
 
     await new Promise((r) => setTimeout(r, 500));
 

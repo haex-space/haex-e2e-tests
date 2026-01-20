@@ -1047,6 +1047,9 @@ export class VaultAutomation {
       const sessionData = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
       this.sessionId = sessionData.sessionId;
       console.log(`[E2E] Using existing WebDriver session for Vault ${this.instance}:`, this.sessionId);
+
+      // Even for existing sessions, verify the app is ready
+      await this.waitForAppReady();
     } catch (error) {
       console.log(`[E2E] Failed to load session, creating new one:`, error);
       await this.createNewSession();
@@ -1108,6 +1111,60 @@ export class VaultAutomation {
       ? SESSION_FILE
       : `/tmp/e2e-webdriver-session-${this.instance.toLowerCase()}.json`;
     nodeFs.writeFileSync(sessionFile, JSON.stringify({ sessionId: this.sessionId }));
+
+    // Wait for the app to be fully ready
+    await this.waitForAppReady();
+  }
+
+  /**
+   * Wait for the document and Tauri app to be fully ready.
+   * This ensures the app is loaded and can accept commands before tests run.
+   */
+  async waitForAppReady(timeout = 60000): Promise<void> {
+    const start = Date.now();
+    console.log(`[E2E] Waiting for app to be ready on Vault ${this.instance}...`);
+
+    // First wait for document to be ready with a real URL
+    while (Date.now() - start < timeout) {
+      const state = await this.executeScript<{
+        ready: boolean;
+        hasTauri: boolean;
+        href: string;
+        isRealUrl: boolean;
+      }>(`
+        return {
+          ready: document.readyState === 'complete',
+          hasTauri: !!window.__TAURI_INTERNALS__,
+          href: window.location.href,
+          isRealUrl: window.location.href !== 'about:blank' && window.location.protocol !== 'about:'
+        };
+      `);
+
+      if (state?.ready && state?.hasTauri && state?.isRealUrl) {
+        console.log(`[E2E] Document ready on Vault ${this.instance}: ${state.href}`);
+        break;
+      }
+
+      console.log(`[E2E] Waiting for document... ready=${state?.ready}, hasTauri=${state?.hasTauri}, isRealUrl=${state?.isRealUrl}`);
+      await this.wait(1000);
+    }
+
+    // Then verify Tauri commands work
+    const commandStart = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        await this.invokeTauriCommand("list_vaults", {});
+        console.log(`[E2E] App ready on Vault ${this.instance} after ${Date.now() - commandStart}ms`);
+        return;
+      } catch (error) {
+        if (Date.now() - start >= timeout) {
+          throw new Error(`App not ready within ${timeout}ms: ${error}`);
+        }
+        await this.wait(500);
+      }
+    }
+
+    throw new Error(`App not ready within ${timeout}ms`);
   }
 
   /**
@@ -1968,31 +2025,9 @@ export class VaultAutomation {
       throw new Error("No WebDriver session");
     }
 
-    // First, wait for Nuxt to be ready
-    const maxWaitForNuxt = 15000;
-    const startTime = Date.now();
-    let nuxtReady = false;
-
-    while (Date.now() - startTime < maxWaitForNuxt) {
-      const ready = await this.executeScript<boolean>(`
-        return !!(window.__NUXT__?.vueApp || window.$nuxt);
-      `);
-
-      if (ready) {
-        nuxtReady = true;
-        console.log(`[E2E] Nuxt ready after ${Date.now() - startTime}ms`);
-        break;
-      }
-
-      await this.wait(500);
-    }
-
-    if (!nuxtReady) {
-      console.log(`[E2E] Warning: Nuxt not ready after ${maxWaitForNuxt}ms, proceeding anyway`);
-    }
-
     // Use Vue Router for navigation - this is more reliable than WebDriver URL navigation
     // for Tauri apps which use a custom URL scheme
+    // Note: App should already be ready from waitForAppReady() called in createSession()
     const result = await this.executeScript<{ success: boolean; method: string }>(`
       // Try to use Vue Router if available
       const router = window.__NUXT__?.vueApp?.config?.globalProperties?.$router
@@ -2015,12 +2050,6 @@ export class VaultAutomation {
 
     // Wait for navigation to complete
     await new Promise((r) => setTimeout(r, 1000));
-
-    // If we used location fallback, wait longer for page load
-    if (result?.method === 'location') {
-      console.log(`[E2E] Used location fallback, waiting for page load...`);
-      await new Promise((r) => setTimeout(r, 3000));
-    }
   }
 
   /**
