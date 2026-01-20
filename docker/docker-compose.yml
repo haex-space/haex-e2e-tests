@@ -46,6 +46,7 @@ services:
       test: pg_isready -U postgres -h localhost
       interval: 5s
       timeout: 5s
+      start_period: 60s
       retries: 10
     networks:
       - e2e-network
@@ -170,6 +171,7 @@ services:
       test: pg_isready -U postgres -h localhost
       interval: 5s
       timeout: 5s
+      start_period: 60s
       retries: 10
     networks:
       - e2e-network
