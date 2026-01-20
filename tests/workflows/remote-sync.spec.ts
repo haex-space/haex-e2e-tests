@@ -114,14 +114,25 @@ test.describe("Remote Sync Workflow", () => {
   });
 
   test("Step 2: Device A - Create vault and connect to sync server", async () => {
-    await vaultA.navigateTo("/en");
+    // Debug: Take screenshot of initial state
+    await vaultA.takeScreenshot("initial-state");
 
-    // Debug: Take screenshot after navigation
-    await vaultA.takeScreenshot("after-navigate-to-en");
+    // Check current page state before any navigation
+    const initialState = await vaultA.executeScript<{ url: string; testIds: number }>(`
+      return {
+        url: window.location.href,
+        testIds: document.querySelectorAll('[data-testid]').length
+      };
+    `);
+    console.log(`[Sync Test] Initial state: url=${initialState?.url}, testIds=${initialState?.testIds}`);
 
-    // Wait for page to load
-    await new Promise((r) => setTimeout(r, 2000));
-    await vaultA.takeScreenshot("after-wait-2s");
+    // Only navigate if not already on a valid page
+    if (!initialState?.testIds || initialState.testIds === 0) {
+      console.log(`[Sync Test] Page not loaded, refreshing...`);
+      await vaultA.executeScript(`window.location.reload()`);
+      await new Promise((r) => setTimeout(r, 3000));
+      await vaultA.takeScreenshot("after-reload");
+    }
 
     // Create a new vault
     const createClicked = await vaultA.executeScript<boolean>(`
