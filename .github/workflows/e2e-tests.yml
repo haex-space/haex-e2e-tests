@@ -248,11 +248,9 @@ jobs:
           USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
           USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
-          # Paths to cloned repositories
-          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
-          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
-          HAEX_VAULT_PATH: .
-          HAEX_E2E_TESTS_PATH: ./docker
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
         run: |
           echo "Building with:"
           if [ "$USE_PREBUILT_VAULT" == "true" ]; then
@@ -386,11 +384,9 @@ jobs:
         env:
           USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
-          # Paths to cloned repositories (needed for volume mounts)
-          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
-          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
-          HAEX_VAULT_PATH: .
-          HAEX_E2E_TESTS_PATH: ./docker
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
         run: |
           # Start sync stack services (sync-db, sync-gotrue, sync-kong, sync-server)
           docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
@@ -418,11 +414,9 @@ jobs:
         env:
           USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           CI: true
-          # Paths to cloned repositories
-          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
-          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
-          HAEX_VAULT_PATH: .
-          HAEX_E2E_TESTS_PATH: ./docker
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
         run: |
           # Start vault containers
           docker compose -f docker/docker-compose.yml up -d vault-a vault-b
@@ -581,7 +575,7 @@ jobs:
 
       - name: Start backend services for sync tests
         env:
-          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
         run: |
           # Start sync stack services needed for Android sync tests
           docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
@@ -662,6 +656,6 @@ jobs:
       - name: Stop backend services
         if: always()
         env:
-          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
         run: |
           docker compose -f docker/docker-compose.yml down -v
