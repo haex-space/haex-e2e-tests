@@ -1695,17 +1695,35 @@ export class VaultAutomation {
     console.log(`[E2E] Opening Settings → ${category} on Vault ${this.instance}`);
 
     // Step 1: Click the launcher button to open the App Launcher drawer
-    // The data-testid is on a wrapper span, find the button inside or use the wrapper itself
-    await this.executeScript(`
-      const wrapper = document.querySelector('[data-testid="launcher-button"]');
-      if (!wrapper) {
-        const allTestIds = [...document.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
-        throw new Error('Launcher button not found. Available testids: ' + allTestIds.join(', '));
+    // Wait for launcher button to appear (it only shows when a vault is open)
+    const maxRetries = 10;
+    let clicked = false;
+
+    for (let attempt = 1; attempt <= maxRetries && !clicked; attempt++) {
+      const result = await this.executeScript<{ found: boolean; testIds: string[] }>(`
+        const wrapper = document.querySelector('[data-testid="launcher-button"]');
+        if (!wrapper) {
+          const allTestIds = [...document.querySelectorAll('[data-testid]')].map(el => el.getAttribute('data-testid'));
+          return { found: false, testIds: allTestIds };
+        }
+        const button = wrapper.querySelector('button') || wrapper;
+        button.click();
+        return { found: true, testIds: [] };
+      `);
+
+      if (result?.found) {
+        clicked = true;
+      } else {
+        console.log(`[E2E] Launcher button not found (attempt ${attempt}/${maxRetries}), available testids: ${result?.testIds?.join(', ') || 'none'}`);
+        if (attempt < maxRetries) {
+          await this.wait(1000);
+        }
       }
-      // Click the button inside the wrapper, or the wrapper itself if it's clickable
-      const button = wrapper.querySelector('button') || wrapper;
-      button.click();
-    `);
+    }
+
+    if (!clicked) {
+      throw new Error('Launcher button not found after retries');
+    }
 
     // Wait for launcher drawer to open
     await this.wait(1000);
