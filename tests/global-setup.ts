@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import { spawn, execSync } from "node:child_process";
+import { setupMarketplace } from "./marketplace-setup";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
@@ -657,6 +658,14 @@ async function globalSetup() {
   // Services are now auto-started by /custom-cont-init.d/99-start-services.sh
   // when the container starts. We just need to wait for them to be ready.
   console.log("[Setup] Waiting for services (started by container init)...");
+
+  // Setup marketplace (publish haex-pass extension)
+  // This runs early so the extension is available in the marketplace for UI tests
+  try {
+    await setupMarketplace();
+  } catch (error) {
+    console.log("[Setup] Marketplace setup failed (may not be available):", (error as Error).message);
+  }
 
   // Wait for X11 display to be ready before starting screen recording
   await waitForX11Display();

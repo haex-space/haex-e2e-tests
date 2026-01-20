@@ -1320,6 +1320,72 @@ export class VaultAutomation {
   }
 
   /**
+   * Install an extension from a .haex package file.
+   * Uses preview_extension to get manifest permissions, then installs with those permissions.
+   *
+   * @param packagePath - Path to the .haex file (e.g., "/app/haex-pass.haex")
+   * @returns Extension ID
+   */
+  async installExtension(packagePath: string): Promise<string> {
+    console.log(`[E2E] Installing extension from ${packagePath} on Vault ${this.instance}`);
+
+    // Check if file exists
+    if (!fs.existsSync(packagePath)) {
+      throw new Error(`Extension package not found: ${packagePath}`);
+    }
+
+    // Read the .haex package
+    const fileBytes = fs.readFileSync(packagePath);
+    const fileArray = Array.from(fileBytes);
+
+    console.log(`[E2E] Extension package size: ${fileBytes.length} bytes`);
+
+    // First, preview the extension to get the manifest and permissions
+    interface ExtensionPreview {
+      manifest: {
+        name: string;
+        version: string;
+        permissions: {
+          database?: Array<{ target: string; operation?: string }>;
+          filesystem?: Array<{ target: string; operation?: string }>;
+          http?: Array<{ target: string; operation?: string }>;
+          shell?: Array<{ target: string; operation?: string }>;
+          filesync?: Array<{ target: string; operation?: string }>;
+        };
+      };
+      isValidSignature: boolean;
+      editablePermissions: {
+        database?: Array<{ target: string; operation?: string; status?: string }>;
+        filesystem?: Array<{ target: string; operation?: string; status?: string }>;
+        http?: Array<{ target: string; operation?: string; status?: string }>;
+        shell?: Array<{ target: string; operation?: string; status?: string }>;
+        filesync?: Array<{ target: string; operation?: string; status?: string }>;
+      };
+    }
+
+    const preview = await this.invokeTauriCommand<ExtensionPreview>(
+      "preview_extension",
+      { fileBytes: fileArray }
+    );
+
+    console.log(`[E2E] Extension preview: ${preview.manifest.name} v${preview.manifest.version}`);
+    console.log(`[E2E] Signature valid: ${preview.isValidSignature}`);
+    console.log(`[E2E] Permissions from manifest:`, JSON.stringify(preview.editablePermissions, null, 2));
+
+    // Install with the permissions from the manifest
+    const extensionId = await this.invokeTauriCommand<string>(
+      "install_extension_with_permissions",
+      {
+        fileBytes: fileArray,
+        customPermissions: preview.editablePermissions,
+      }
+    );
+
+    console.log(`[E2E] Extension installed with ID: ${extensionId}`);
+    return extensionId;
+  }
+
+  /**
    * Get pending authorization requests
    */
   async getPendingAuthorizations(): Promise<PendingAuthorization[]> {
@@ -1923,33 +1989,100 @@ export class VaultAutomation {
     await this.clickElement(addBackendButton);
     await this.wait(300); // Wait for form to appear
 
-    // Step 3: Fill in the form fields using executeScript
-    // This is more reliable than WebDriver value setting for Vue components
-    await this.executeScript(`
-      const serverUrl = ${JSON.stringify(credentials.serverUrl)};
-      const email = ${JSON.stringify(credentials.email)};
-      const password = ${JSON.stringify(credentials.password)};
+    // Step 3: Handle server URL selection
+    // E2E tests always use a custom sync server (http://sync-server:3002 in Docker)
+    // We need to:
+    // 1. Open the USelectMenu dropdown
+    // 2. Select "Custom" option
+    // 3. Fill in the custom server URL
 
-      // Find and fill server URL input or select custom option
-      const serverInputs = document.querySelectorAll('input[placeholder*="Server"], input[type="url"]');
-      if (serverInputs.length > 0) {
-        const serverInput = serverInputs[0];
-        serverInput.value = serverUrl;
-        serverInput.dispatchEvent(new Event('input', { bubbles: true }));
+    console.log(`[E2E] Selecting Custom server option for URL: ${credentials.serverUrl}`);
+
+    // Click to open the USelectMenu dropdown
+    await this.executeScript(`
+      const selectMenu = document.querySelector('[role="combobox"]');
+      if (selectMenu) {
+        selectMenu.click();
       } else {
-        // Try to find a select/dropdown for server
-        const select = document.querySelector('[role="combobox"], select');
-        if (select) {
-          // Click to open, then look for custom option
-          select.click();
+        throw new Error('Server select menu not found');
+      }
+    `);
+
+    await this.wait(300); // Wait for dropdown to open
+
+    // Click on the "Custom" option
+    await this.executeScript(`
+      // Find the dropdown options - USelectMenu creates a listbox
+      const options = document.querySelectorAll('[role="option"], [role="listbox"] li, [data-headlessui-state] li');
+      let customOption = null;
+
+      for (const opt of options) {
+        const text = opt.textContent?.toLowerCase() || '';
+        // Look for "Custom" or "Benutzerdefiniert"
+        if (text.includes('custom') || text.includes('benutzerdefiniert')) {
+          customOption = opt;
+          break;
         }
       }
+
+      if (customOption) {
+        customOption.click();
+      } else {
+        // Fallback: click the last option which is typically "Custom"
+        const lastOption = options[options.length - 1];
+        if (lastOption) {
+          lastOption.click();
+        } else {
+          throw new Error('Custom server option not found in dropdown');
+        }
+      }
+    `);
+
+    await this.wait(300); // Wait for custom input to appear
+
+    // Fill in the custom server URL
+    await this.executeScript(`
+      const serverUrl = ${JSON.stringify(credentials.serverUrl)};
+
+      // The custom URL input appears after selecting "Custom"
+      // Find inputs that are not email/password type
+      const inputs = document.querySelectorAll('input');
+      let customInput = null;
+
+      for (const input of inputs) {
+        // Skip email and password inputs
+        if (input.type === 'email' || input.type === 'password') continue;
+        // Skip hidden inputs
+        if (input.type === 'hidden' || input.offsetParent === null) continue;
+        // This should be the custom URL input
+        customInput = input;
+        break;
+      }
+
+      if (customInput) {
+        customInput.value = serverUrl;
+        customInput.dispatchEvent(new Event('input', { bubbles: true }));
+        customInput.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        throw new Error('Custom server URL input not found');
+      }
+    `);
+
+    await this.wait(200);
+
+    // Step 4: Fill in email and password
+    await this.executeScript(`
+      const email = ${JSON.stringify(credentials.email)};
+      const password = ${JSON.stringify(credentials.password)};
 
       // Find and fill email input
       const emailInput = document.querySelector('input[type="email"]');
       if (emailInput) {
         emailInput.value = email;
         emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        throw new Error('Email input not found');
       }
 
       // Find and fill password input
@@ -1957,12 +2090,15 @@ export class VaultAutomation {
       if (passwordInput) {
         passwordInput.value = password;
         passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
+        passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        throw new Error('Password input not found');
       }
     `);
 
     await this.wait(200);
 
-    // Step 4: Click the submit button using data-testid
+    // Step 5: Click the submit button using data-testid
     await this.executeScript(`
       const submitBtn = document.querySelector('[data-testid="sync-submit-button"]');
       if (submitBtn) {
@@ -1972,7 +2108,7 @@ export class VaultAutomation {
       }
     `);
 
-    // Step 5: Wait for the connection to be established (max 30 seconds)
+    // Step 6: Wait for the connection to be established (max 30 seconds)
     const maxWaitTime = 30000;
     const startTime = Date.now();
 
@@ -1992,7 +2128,7 @@ export class VaultAutomation {
       }
     }
 
-    // Step 6: Check for success by looking for the backend in database
+    // Step 7: Check for success by looking for the backend in database
     await this.wait(500);
 
     const backends = await this.getSyncBackends();
@@ -2119,6 +2255,189 @@ export class VaultAutomation {
       }
 
       return null;
+    }
+  }
+
+  /**
+   * Install an extension from the marketplace via UI
+   * This navigates to the marketplace, searches for the extension, and clicks install
+   *
+   * @param extensionName - The name of the extension to install (e.g., "haex-pass")
+   * @param timeout - Maximum time to wait for the installation (default 60s)
+   */
+  async installExtensionFromMarketplace(extensionName: string, timeout = 60000): Promise<void> {
+    console.log(`[E2E] Installing ${extensionName} from marketplace via UI...`);
+    const start = Date.now();
+
+    // Step 1: Navigate to marketplace
+    await this.navigateTo("/en/marketplace");
+    await this.wait(2000); // Wait for marketplace to load
+
+    // Step 2: Wait for extensions to load and find the extension card
+    let extensionFound = false;
+    while (Date.now() - start < timeout && !extensionFound) {
+      const searchResult = await this.executeScript<{
+        found: boolean;
+        loading: boolean;
+        extensionCount: number;
+      }>(`
+        const loading = document.querySelector('[class*="animate-spin"]');
+        const cards = document.querySelectorAll('[data-testid^="marketplace-extension-"]');
+        const targetCard = document.querySelector('[data-testid="marketplace-extension-${extensionName}"]');
+
+        return {
+          found: !!targetCard,
+          loading: !!loading,
+          extensionCount: cards.length
+        };
+      `);
+
+      console.log(`[E2E] Marketplace search: found=${searchResult.found}, loading=${searchResult.loading}, count=${searchResult.extensionCount}`);
+
+      if (searchResult.found) {
+        extensionFound = true;
+        break;
+      }
+
+      if (!searchResult.loading && searchResult.extensionCount === 0) {
+        // If not loading and no extensions, search might help
+        await this.executeScript(`
+          const searchInput = document.querySelector('input[placeholder*="Search"], input[placeholder*="suchen"]');
+          if (searchInput) {
+            searchInput.value = '${extensionName}';
+            searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+        `);
+        await this.wait(1000);
+      }
+
+      await this.wait(500);
+    }
+
+    if (!extensionFound) {
+      throw new Error(`Extension ${extensionName} not found in marketplace after ${timeout}ms`);
+    }
+
+    // Step 3: Click on the extension card to trigger install
+    console.log(`[E2E] Found ${extensionName}, clicking install...`);
+    await this.executeScript(`
+      const card = document.querySelector('[data-testid="marketplace-extension-${extensionName}"]');
+      if (!card) throw new Error('Extension card not found');
+
+      // Look for install button on the card
+      const installBtn = card.querySelector('[data-testid="marketplace-install-button"]')
+        || card.querySelector('button:has([class*="download"])')
+        || card.querySelector('button');
+
+      if (installBtn) {
+        installBtn.click();
+      } else {
+        // Click the card itself to open details
+        card.click();
+      }
+    `);
+
+    await this.wait(1000);
+
+    // Step 4: Wait for install dialog and confirm
+    const dialogHandled = await this.handleInstallDialog(timeout - (Date.now() - start));
+
+    if (!dialogHandled) {
+      throw new Error(`Install dialog for ${extensionName} did not appear or complete`);
+    }
+
+    console.log(`[E2E] Extension ${extensionName} installation completed via UI`);
+  }
+
+  /**
+   * Handle the extension install dialog
+   * Waits for the dialog to appear and clicks the confirm button
+   */
+  private async handleInstallDialog(timeout: number): Promise<boolean> {
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      const dialogState = await this.executeScript<{
+        hasDialog: boolean;
+        hasConfirmButton: boolean;
+        isLoading: boolean;
+        dialogClosed: boolean;
+      }>(`
+        // Check for install confirmation dialog
+        const dialog = document.querySelector('[data-testid="extension-install-dialog"]')
+          || document.querySelector('[role="dialog"]')
+          || document.querySelector('[class*="modal"]');
+
+        const confirmBtn = document.querySelector('[data-testid="extension-install-confirm"]')
+          || document.querySelector('[data-testid="confirm-install-button"]')
+          || (dialog && dialog.querySelector('button[type="submit"]'))
+          || (dialog && dialog.querySelector('button:not([data-testid*="cancel"])'));
+
+        const loadingIndicator = document.querySelector('[class*="loading"]')
+          || document.querySelector('[class*="animate-spin"]');
+
+        return {
+          hasDialog: !!dialog,
+          hasConfirmButton: !!confirmBtn,
+          isLoading: !!loadingIndicator,
+          dialogClosed: !dialog && !loadingIndicator
+        };
+      `);
+
+      console.log(`[E2E] Install dialog state:`, dialogState);
+
+      if (dialogState.dialogClosed) {
+        // Dialog closed, installation might be complete
+        return true;
+      }
+
+      if (dialogState.hasDialog && dialogState.hasConfirmButton && !dialogState.isLoading) {
+        // Click confirm button
+        console.log(`[E2E] Clicking install confirm button...`);
+        await this.executeScript(`
+          const confirmBtn = document.querySelector('[data-testid="extension-install-confirm"]')
+            || document.querySelector('[data-testid="confirm-install-button"]')
+            || document.querySelector('[role="dialog"] button[type="submit"]')
+            || document.querySelector('[role="dialog"] button:not([data-testid*="cancel"])');
+
+          if (confirmBtn) {
+            confirmBtn.click();
+          }
+        `);
+        await this.wait(500);
+      }
+
+      await this.wait(500);
+    }
+
+    // Check final state
+    const finalCheck = await this.executeScript<boolean>(`
+      const dialog = document.querySelector('[data-testid="extension-install-dialog"]')
+        || document.querySelector('[role="dialog"]');
+      return !dialog;
+    `);
+
+    return finalCheck;
+  }
+
+  /**
+   * Check if an extension is installed by checking the extensions store
+   */
+  async isExtensionInstalled(extensionName: string): Promise<boolean> {
+    try {
+      const result = await this.executeScript<boolean>(`
+        const pinia = window.__NUXT__?.vueApp?.$pinia;
+        if (!pinia) return false;
+
+        const extensionStore = pinia._s.get('extensions');
+        if (!extensionStore) return false;
+
+        const extensions = extensionStore.availableExtensions || [];
+        return extensions.some(ext => ext.name === '${extensionName}');
+      `);
+      return result;
+    } catch {
+      return false;
     }
   }
 }
