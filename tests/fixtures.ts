@@ -1491,6 +1491,41 @@ export class VaultAutomation {
   }
 
   /**
+   * Take a screenshot and save it to a file
+   * @param filename - Name of the screenshot file (without extension)
+   * @returns Path to the saved screenshot
+   */
+  async takeScreenshot(filename: string): Promise<string> {
+    if (!this.sessionId) {
+      console.error(`[E2E] Cannot take screenshot: no session`);
+      return "";
+    }
+
+    const response = await fetch(`${this.tauriDriverUrl}/session/${this.sessionId}/screenshot`, {
+      method: "GET",
+    });
+
+    if (!response.ok) {
+      console.error(`[E2E] Screenshot failed: ${response.status}`);
+      return "";
+    }
+
+    const data = await response.json();
+    const base64Data = data.value;
+
+    // Save to /tmp with timestamp
+    const timestamp = Date.now();
+    const filepath = `/tmp/e2e-screenshot-${this.instance}-${filename}-${timestamp}.png`;
+
+    // Write base64 to file using Node.js fs
+    const fs = await import("fs");
+    fs.writeFileSync(filepath, Buffer.from(base64Data, "base64"));
+
+    console.log(`[E2E] Screenshot saved: ${filepath}`);
+    return filepath;
+  }
+
+  /**
    * Configure a sync backend in the vault by inserting directly into the database
    * This bypasses the frontend UI and uses sql_execute_with_crdt
    */
@@ -1591,29 +1626,56 @@ export class VaultAutomation {
     // Wait for welcome dialog to appear
     await this.wait(2000);
 
+    // Take screenshot to see current state
+    await this.takeScreenshot("welcome-dialog-start");
+
     const maxIterations = 15;
     let iteration = 0;
+    let sawDialog = false; // Track if we ever saw the dialog
 
     while (iteration < maxIterations) {
       iteration++;
 
       // Check which step we're on by looking for data-testid elements
-      const stepInfo = await this.executeScript<{ step: string | null; hasDialog: boolean }>(`
+      const stepInfo = await this.executeScript<{ step: string | null; hasDialog: boolean; anyTestIds: number }>(`
         const deviceInput = document.querySelector('[data-testid="welcome-device-name-input"]');
         const skipExtBtn = document.querySelector('[data-testid="welcome-skip-extensions-button"]');
         const skipSyncBtn = document.querySelector('[data-testid="welcome-skip-sync-button"]');
         const nextBtn = document.querySelector('[data-testid="welcome-next-button"]');
+        const anyTestIds = document.querySelectorAll('[data-testid]').length;
 
-        if (deviceInput) return { step: 'device', hasDialog: true };
-        if (skipExtBtn) return { step: 'extensions', hasDialog: true };
-        if (skipSyncBtn) return { step: 'sync', hasDialog: true };
-        if (nextBtn) return { step: 'unknown', hasDialog: true };
-        return { step: null, hasDialog: false };
+        if (deviceInput) return { step: 'device', hasDialog: true, anyTestIds };
+        if (skipExtBtn) return { step: 'extensions', hasDialog: true, anyTestIds };
+        if (skipSyncBtn) return { step: 'sync', hasDialog: true, anyTestIds };
+        if (nextBtn) return { step: 'unknown', hasDialog: true, anyTestIds };
+        return { step: null, hasDialog: false, anyTestIds };
       `);
 
+      if (stepInfo?.hasDialog) {
+        sawDialog = true;
+      }
+
+      // Only consider dialog complete if:
+      // 1. We previously saw the dialog and now it's gone, OR
+      // 2. The page has loaded (has testids) but never showed a dialog (already completed)
       if (!stepInfo?.hasDialog) {
-        console.log(`[E2E] Welcome dialog completed (iteration ${iteration})`);
-        return;
+        if (sawDialog) {
+          console.log(`[E2E] Welcome dialog completed (iteration ${iteration})`);
+          return;
+        }
+        // If we never saw the dialog, check if page is at least loaded
+        if (stepInfo?.anyTestIds && stepInfo.anyTestIds > 0) {
+          console.log(`[E2E] Welcome dialog not present, page has ${stepInfo.anyTestIds} testids (iteration ${iteration})`);
+          return;
+        }
+        // Page not loaded yet, keep waiting
+        console.log(`[E2E] Waiting for page to load... (iteration ${iteration}, testids: ${stepInfo?.anyTestIds || 0})`);
+        if (iteration === 5) {
+          // Take screenshot mid-wait to debug
+          await this.takeScreenshot("welcome-dialog-waiting");
+        }
+        await this.wait(1000);
+        continue;
       }
 
       // Step 0: Device Name
@@ -1715,6 +1777,10 @@ export class VaultAutomation {
         clicked = true;
       } else {
         console.log(`[E2E] Launcher button not found (attempt ${attempt}/${maxRetries}), available testids: ${result?.testIds?.join(', ') || 'none'}`);
+        if (attempt === 5) {
+          // Take screenshot mid-retry to debug
+          await this.takeScreenshot("launcher-button-search");
+        }
         if (attempt < maxRetries) {
           await this.wait(1000);
         }
@@ -1722,6 +1788,7 @@ export class VaultAutomation {
     }
 
     if (!clicked) {
+      await this.takeScreenshot("launcher-button-not-found");
       throw new Error('Launcher button not found after retries');
     }
 

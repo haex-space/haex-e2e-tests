@@ -478,6 +478,17 @@ jobs:
             -v $(pwd)/test-results:/output \
             alpine sh -c "cp -r /results/* /output/ 2>&1 || echo 'Copy completed (may be empty)'"
 
+      - name: Copy screenshots from container
+        if: always()
+        run: |
+          mkdir -p ./test-results/screenshots
+          # Copy screenshots from vault-a container
+          docker cp haex_e2e_vault_a:/tmp/. ./test-results/screenshots/ 2>/dev/null || true
+          # Filter only screenshot files
+          find ./test-results/screenshots -type f ! -name "e2e-screenshot-*.png" -delete 2>/dev/null || true
+          echo "Screenshots collected:"
+          ls -la ./test-results/screenshots/ 2>/dev/null || echo "No screenshots found"
+
       - name: Upload test artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -487,6 +498,7 @@ jobs:
             test-results/artifacts/
             test-results/html-report/
             test-results/results.json
+            test-results/screenshots/
           retention-days: 90
 
       - name: Stop services
