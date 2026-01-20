@@ -201,15 +201,15 @@ test.describe("Vault Import/Export Workflow", () => {
     // The vault file is the SQLite database file
     // We can copy it directly via Tauri command or filesystem
 
-    // Get the vault database path
-    const vaultPath = await vault.executeScript<string>(`
-      const { useVaultStore } = await import('/src/stores/vault');
-      const store = useVaultStore();
-      return store.currentVaultPath;
-    `);
+    // Get the vault database path via list_vaults command
+    // (can't use dynamic ES imports in production builds)
+    const vaults = await vault.invokeTauriCommand<Array<{ name: string; path: string }>>(
+      "list_vaults"
+    );
 
-    if (vaultPath) {
-      originalVaultPath = vaultPath as string;
+    const currentVault = vaults.find((v) => v.name === IMPORT_TEST_VAULT_NAME);
+    if (currentVault) {
+      originalVaultPath = currentVault.path;
       console.log(`[Import Test] Vault path to export: ${originalVaultPath}`);
 
       // Copy the vault file to export path
@@ -220,6 +220,8 @@ test.describe("Vault Import/Export Workflow", () => {
         // If copy_file doesn't exist, we'll use a different approach
         console.log("[Import Test] copy_file command not available, using filesystem directly");
       });
+    } else {
+      console.log("[Import Test] Could not find vault in list:", vaults.map((v) => v.name));
     }
   });
 
