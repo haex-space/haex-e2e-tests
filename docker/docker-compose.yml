@@ -1,15 +1,17 @@
 # haex-e2e-tests Docker Compose Configuration
 #
-# This setup mirrors the production environment by using the actual
-# docker-compose files from each project repository.
+# This setup mirrors the production environment by building services from
+# the actual project repositories (cloned at runtime via GitHub Actions).
 #
 # Architecture:
-# - haex-sync-server stack: PostgreSQL + Kong + GoTrue (for sync)
-# - haex-marketplace-supabase stack: Full Supabase (for marketplace)
-# - haex-marketplace: Marketplace API server
+# - haex-sync-server stack: Built from haex-sync-server repo with its Supabase services
+# - haex-marketplace stack: Marketplace API with simplified Supabase for E2E testing
 # - vault-a, vault-b: Test vault instances
 #
 # Usage:
+#   # Set repo path (cloned by GitHub Actions or point to local checkout)
+#   export HAEX_SYNC_SERVER_PATH=../repos/haex-sync-server
+#
 #   docker compose -f docker/docker-compose.yml build
 #   docker compose -f docker/docker-compose.yml up -d
 #   docker compose -f docker/docker-compose.yml exec vault-a pnpm test
@@ -17,9 +19,10 @@
 services:
   # ===========================================================================
   # SYNC SERVER STACK (haex-sync-server + its Supabase)
+  # Built from the actual haex-sync-server repository
   # ===========================================================================
 
-  # PostgreSQL for Sync Server
+  # PostgreSQL for Sync Server (same config as haex-sync-server repo)
   sync-db:
     image: supabase/postgres:15.8.1.085
     container_name: haex_e2e_sync_db
@@ -32,13 +35,13 @@ services:
       - log_min_messages=fatal
     environment:
       POSTGRES_HOST: /var/run/postgresql
-      POSTGRES_PASSWORD: ${SYNC_POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${SYNC_POSTGRES_DB:-postgres}
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
       POSTGRES_PORT: 5432
-      # Supabase-specific passwords
-      SUPABASE_AUTH_ADMIN_PASSWORD: ${SYNC_POSTGRES_PASSWORD:-postgres}
     volumes:
-      - sync_db_data:/var/lib/postgresql/data:Z
+      - sync_db_data:/var/lib/postgresql/data
+      # Post-init script to set passwords for auth and storage admin roles
+      - ./init/postgresql.schema.sql:/etc/postgresql.schema.sql:ro
     healthcheck:
       test: pg_isready -U postgres -h localhost
       interval: 5s
@@ -54,11 +57,12 @@ services:
     restart: unless-stopped
     environment:
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:${SYNC_POSTGRES_PASSWORD:-postgres}@sync-db:5432/${SYNC_POSTGRES_DB:-postgres}?sslmode=disable
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_auth_admin:postgres@sync-db:5432/postgres?sslmode=disable
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: http://sync-kong:8000
-      GOTRUE_JWT_SECRET: ${SYNC_JWT_SECRET:-super-secret-sync-jwt-token-with-at-least-32-characters}
+      # Must match the JWT secret used to generate the demo keys
+      GOTRUE_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
       GOTRUE_JWT_EXP: 3600
       GOTRUE_JWT_AUD: authenticated
       GOTRUE_SITE_URL: http://localhost:3000
@@ -92,8 +96,11 @@ services:
       KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
       KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
     volumes:
+      # Use custom kong.yml for E2E tests (includes auth routes)
       - ./kong/sync-kong.yml:/home/kong/kong.yml:ro
     depends_on:
+      sync-db:
+        condition: service_healthy
       sync-gotrue:
         condition: service_healthy
     healthcheck:
@@ -105,31 +112,26 @@ services:
     networks:
       - e2e-network
 
-  # haex-sync-server
+  # haex-sync-server - Built from the actual repository
   sync-server:
-    image: ${SYNC_SERVER_IMAGE:-}
     build:
-      context: .
-      dockerfile: Dockerfile.sync-server
-      args:
-        - HAEX_SYNC_SERVER_REF=${HAEX_SYNC_SERVER_VERSION:-main}
+      context: ${HAEX_SYNC_SERVER_PATH:-../repos/haex-sync-server}
+      dockerfile: Dockerfile
     container_name: haex_e2e_sync_server
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql://postgres:${SYNC_POSTGRES_PASSWORD:-postgres}@sync-db:5432/${SYNC_POSTGRES_DB:-postgres}
-      SUPABASE_URL: http://sync-kong:8000
-      SUPABASE_ANON_KEY: ${SYNC_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjk0NTksImV4cCI6MjA4MzM4OTQ1OX0.iLIimpCYBntebpU45lvZBF2_CY0Tf31v1eBFNe3IOSw}
-      SUPABASE_SERVICE_KEY: ${SYNC_SERVICE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODAyOTQ1OSwiZXhwIjoyMDgzMzg5NDU5fQ.d27yJx2pIbqRwFrI3WFm2G0XD4zEpDxSbEtVOlrg93Q}
       PORT: 3002
-      NODE_ENV: test
-      CORS_ORIGIN: "*"
+      DATABASE_URL: postgresql://postgres:postgres@sync-db:5432/postgres
+      SUPABASE_URL: http://sync-kong:8000
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      SUPABASE_SERVICE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
     depends_on:
       sync-db:
         condition: service_healthy
       sync-kong:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://localhost:3002/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test: ["CMD", "bun", "run", "-e", "fetch('http://localhost:3002').then(r => r.ok ? process.exit(0) : process.exit(1))"]
       interval: 10s
       timeout: 5s
       start_period: 30s
@@ -138,7 +140,8 @@ services:
       - e2e-network
 
   # ===========================================================================
-  # MARKETPLACE STACK (haex-marketplace-supabase + haex-marketplace)
+  # MARKETPLACE STACK (simplified Supabase for E2E testing)
+  # Production uses Traefik which isn't suitable for isolated E2E tests
   # ===========================================================================
 
   # PostgreSQL for Marketplace
@@ -157,11 +160,12 @@ services:
       POSTGRES_PASSWORD: ${MARKETPLACE_POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${MARKETPLACE_POSTGRES_DB:-postgres}
       POSTGRES_PORT: 5432
-      SUPABASE_AUTH_ADMIN_PASSWORD: ${MARKETPLACE_POSTGRES_PASSWORD:-postgres}
     volumes:
-      - marketplace_db_data:/var/lib/postgresql/data:Z
-      # Init scripts for storage roles
-      - ./init/marketplace-db-init.sql:/docker-entrypoint-initdb.d/99-marketplace-init.sql:ro
+      - marketplace_db_data:/var/lib/postgresql/data
+      # Post-init script to set passwords for auth and storage admin roles
+      - ./init/postgresql.schema.sql:/etc/postgresql.schema.sql:ro
+      # Custom migration for marketplace storage roles (must be in migrations dir to run after base schema)
+      - ./init/marketplace-db-init.sql:/docker-entrypoint-initdb.d/migrations/99999999999999_marketplace-init.sql:ro
     healthcheck:
       test: pg_isready -U postgres -h localhost
       interval: 5s
@@ -245,7 +249,7 @@ services:
       marketplace-rest:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5000/status"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5000/status"]
       interval: 10s
       timeout: 5s
       start_period: 10s
@@ -281,13 +285,11 @@ services:
     networks:
       - e2e-network
 
-  # haex-marketplace API Server
+  # haex-marketplace API Server - Built from the actual repository
   marketplace:
     build:
-      context: .
-      dockerfile: Dockerfile.marketplace
-      args:
-        - HAEX_MARKETPLACE_REF=${HAEX_MARKETPLACE_VERSION:-main}
+      context: ${HAEX_MARKETPLACE_PATH:-../repos/haex-marketplace}
+      dockerfile: Dockerfile
     container_name: haex_e2e_marketplace
     restart: unless-stopped
     environment:
@@ -338,13 +340,13 @@ services:
       - TZ=${TZ:-Europe/Berlin}
       # Sync server connection
       - SYNC_SERVER_URL=http://sync-server:3002
-      - SUPABASE_ANON_KEY=${SYNC_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjk0NTksImV4cCI6MjA4MzM4OTQ1OX0.iLIimpCYBntebpU45lvZBF2_CY0Tf31v1eBFNe3IOSw}
-      - SUPABASE_SERVICE_KEY=${SYNC_SERVICE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODAyOTQ1OSwiZXhwIjoyMDgzMzg5NDU5fQ.d27yJx2pIbqRwFrI3WFm2G0XD4zEpDxSbEtVOlrg93Q}
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      - SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
       # Marketplace connection
       - MARKETPLACE_URL=http://marketplace:3001
       - MARKETPLACE_SUPABASE_URL=http://marketplace-kong:8000
       # Database for verification
-      - DATABASE_URL=postgresql://postgres:${SYNC_POSTGRES_PASSWORD:-postgres}@sync-db:5432/${SYNC_POSTGRES_DB:-postgres}
+      - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=A
     volumes:
@@ -380,11 +382,11 @@ services:
       - PGID=${PGID:-1000}
       - TZ=${TZ:-Europe/Berlin}
       - SYNC_SERVER_URL=http://sync-server:3002
-      - SUPABASE_ANON_KEY=${SYNC_ANON_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwMjk0NTksImV4cCI6MjA4MzM4OTQ1OX0.iLIimpCYBntebpU45lvZBF2_CY0Tf31v1eBFNe3IOSw}
-      - SUPABASE_SERVICE_KEY=${SYNC_SERVICE_KEY:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImUyZS1zeW5jIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2ODAyOTQ1OSwiZXhwIjoyMDgzMzg5NDU5fQ.d27yJx2pIbqRwFrI3WFm2G0XD4zEpDxSbEtVOlrg93Q}
+      - SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0
+      - SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU
       - MARKETPLACE_URL=http://marketplace:3001
       - MARKETPLACE_SUPABASE_URL=http://marketplace-kong:8000
-      - DATABASE_URL=postgresql://postgres:${SYNC_POSTGRES_PASSWORD:-postgres}@sync-db:5432/${SYNC_POSTGRES_DB:-postgres}
+      - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=B
     shm_size: "2gb"

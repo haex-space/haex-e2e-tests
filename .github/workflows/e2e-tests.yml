@@ -109,6 +109,20 @@ jobs:
           repository: haex-space/haex-e2e-tests
           ref: main
 
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+
+          # Clone haex-sync-server
+          echo "Cloning haex-sync-server (${{ inputs.sync_server_version || 'main' }})..."
+          git clone --depth 1 --branch ${{ inputs.sync_server_version || 'main' }} \
+            https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server || \
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+
+          # Clone haex-marketplace
+          echo "Cloning haex-marketplace (main)..."
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
       - name: Download haex-vault artifact (if provided via workflow_call)
         if: inputs.haex_vault_artifact != '' && inputs.haex_vault_artifact_run_id != ''
         uses: actions/download-artifact@v4
@@ -234,6 +248,11 @@ jobs:
           USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
           USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
+          # Paths to cloned repositories
+          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
+          HAEX_VAULT_PATH: .
+          HAEX_E2E_TESTS_PATH: ./docker
         run: |
           echo "Building with:"
           if [ "$USE_PREBUILT_VAULT" == "true" ]; then
@@ -246,8 +265,9 @@ jobs:
           if [ "$USE_PREBUILT_SYNC_SERVER" == "true" ]; then
             echo "  sync-server: $SYNC_SERVER_IMAGE"
           else
-            echo "  sync-server: $HAEX_SYNC_SERVER_VERSION"
+            echo "  sync-server: $HAEX_SYNC_SERVER_VERSION (from $HAEX_SYNC_SERVER_PATH)"
           fi
+          echo "  marketplace: from $HAEX_MARKETPLACE_PATH"
 
           # Ensure prebuilt directory exists (even if empty)
           mkdir -p prebuilt
@@ -320,6 +340,18 @@ jobs:
           repository: haex-space/haex-e2e-tests
           ref: main
 
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+
+          # Clone haex-sync-server (needed for kong.yml config)
+          echo "Cloning haex-sync-server..."
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+
+          # Clone haex-marketplace
+          echo "Cloning haex-marketplace..."
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android
@@ -354,8 +386,13 @@ jobs:
         env:
           USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
+          # Paths to cloned repositories (needed for volume mounts)
+          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
+          HAEX_VAULT_PATH: .
+          HAEX_E2E_TESTS_PATH: ./docker
         run: |
-          # Start sync stack services
+          # Start sync stack services (sync-db, sync-gotrue, sync-kong, sync-server)
           docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
 
           # Start marketplace stack services
@@ -381,6 +418,11 @@ jobs:
         env:
           USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
           CI: true
+          # Paths to cloned repositories
+          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ./repos/haex-marketplace
+          HAEX_VAULT_PATH: .
+          HAEX_E2E_TESTS_PATH: ./docker
         run: |
           # Start vault containers
           docker compose -f docker/docker-compose.yml up -d vault-a vault-b
@@ -531,7 +573,15 @@ jobs:
           sudo rm -rf /usr/local/lib/android/sdk/ndk
           df -h
 
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+          echo "Cloning haex-sync-server..."
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+
       - name: Start backend services for sync tests
+        env:
+          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
         run: |
           # Start sync stack services needed for Android sync tests
           docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
@@ -611,5 +661,7 @@ jobs:
 
       - name: Stop backend services
         if: always()
+        env:
+          HAEX_SYNC_SERVER_PATH: ./repos/haex-sync-server
         run: |
           docker compose -f docker/docker-compose.yml down -v
