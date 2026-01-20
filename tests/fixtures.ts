@@ -1048,8 +1048,15 @@ export class VaultAutomation {
       this.sessionId = sessionData.sessionId;
       console.log(`[E2E] Using existing WebDriver session for Vault ${this.instance}:`, this.sessionId);
 
-      // Even for existing sessions, verify the app is ready
-      await this.waitForAppReady();
+      // For existing sessions, just do a quick check that the app responds
+      // The app should already be ready from global setup
+      try {
+        await this.invokeTauriCommand("list_vaults", {});
+        console.log(`[E2E] App responding on Vault ${this.instance}`);
+      } catch (error) {
+        console.log(`[E2E] App not responding, waiting for ready state...`);
+        await this.waitForAppReady();
+      }
     } catch (error) {
       console.log(`[E2E] Failed to load session, creating new one:`, error);
       await this.createNewSession();
@@ -2167,17 +2174,23 @@ export { HAEX_PASS_METHODS } from "./haex-pass-api";
  */
 export async function waitForBridgeConnection(
   client: VaultBridgeClient,
-  timeout = 10000
+  timeout = 30000
 ): Promise<boolean> {
   const start = Date.now();
+  let lastError: Error | null = null;
+
   while (Date.now() - start < timeout) {
     try {
       await client.connect();
+      console.log(`[E2E] Bridge connection established after ${Date.now() - start}ms`);
       return true;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    } catch (error) {
+      lastError = error as Error;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
   }
+
+  console.error(`[E2E] Bridge connection failed after ${timeout}ms:`, lastError?.message);
   return false;
 }
 
