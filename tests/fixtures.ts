@@ -1968,9 +1968,32 @@ export class VaultAutomation {
       throw new Error("No WebDriver session");
     }
 
+    // First, wait for Nuxt to be ready
+    const maxWaitForNuxt = 15000;
+    const startTime = Date.now();
+    let nuxtReady = false;
+
+    while (Date.now() - startTime < maxWaitForNuxt) {
+      const ready = await this.executeScript<boolean>(`
+        return !!(window.__NUXT__?.vueApp || window.$nuxt);
+      `);
+
+      if (ready) {
+        nuxtReady = true;
+        console.log(`[E2E] Nuxt ready after ${Date.now() - startTime}ms`);
+        break;
+      }
+
+      await this.wait(500);
+    }
+
+    if (!nuxtReady) {
+      console.log(`[E2E] Warning: Nuxt not ready after ${maxWaitForNuxt}ms, proceeding anyway`);
+    }
+
     // Use Vue Router for navigation - this is more reliable than WebDriver URL navigation
     // for Tauri apps which use a custom URL scheme
-    const script = `
+    const result = await this.executeScript<{ success: boolean; method: string }>(`
       // Try to use Vue Router if available
       const router = window.__NUXT__?.vueApp?.config?.globalProperties?.$router
         || window.$nuxt?.$router
@@ -1986,12 +2009,18 @@ export class VaultAutomation {
       const fullPath = '${path}'.startsWith('/') ? '${path}' : '/' + '${path}';
       window.location.href = basePath + fullPath;
       return { success: true, method: 'location' };
-    `;
+    `);
 
-    await this.executeScript(script);
+    console.log(`[E2E] Navigation to ${path} via ${result?.method}`);
 
     // Wait for navigation to complete
     await new Promise((r) => setTimeout(r, 1000));
+
+    // If we used location fallback, wait longer for page load
+    if (result?.method === 'location') {
+      console.log(`[E2E] Used location fallback, waiting for page load...`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
   }
 
   /**
