@@ -87,7 +87,8 @@ test.describe("Remote Sync Workflow", () => {
     // Or we use the Supabase/GoTrue auth API directly
 
     // For now, we'll use the Kong gateway which proxies to GoTrue
-    const signupUrl = "http://kong:8000/auth/v1/signup";
+    // Note: sync-kong is the service name in docker-compose
+    const signupUrl = "http://sync-kong:8000/auth/v1/signup";
 
     const response = await fetch(signupUrl, {
       method: "POST",
