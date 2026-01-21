@@ -218,6 +218,11 @@ test.describe("Vault Lifecycle Workflow", () => {
     const authorized = await authorizeClient(client, "haex-pass", 30000);
     expect(authorized).toBe(true);
 
+    // Wait for extension to be ready after vault reopen
+    // The extension needs time to start and register its handlers
+    const extensionReady = await waitForExtensionReady(client);
+    expect(extensionReady).toBe(true);
+
     // Verify the entry we created earlier still exists
     const getResponse = (await sendRequestWithRetry(
       client,
