@@ -1999,8 +1999,11 @@ export class VaultAutomation {
     console.log(`[E2E] Selecting Custom server option for URL: ${credentials.serverUrl}`);
 
     // Click to open the USelectMenu dropdown
+    // Use data-testid for reliable selection, fallback to role="combobox"
     await this.executeScript(`
-      const selectMenu = document.querySelector('[role="combobox"]');
+      const selectMenu = document.querySelector('[data-testid="sync-server-select"]')
+        || document.querySelector('[data-testid="sync-server-select"] button')
+        || document.querySelector('[role="combobox"]');
       if (selectMenu) {
         selectMenu.click();
       } else {
