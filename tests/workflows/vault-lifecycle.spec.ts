@@ -80,18 +80,20 @@ test.describe("Vault Lifecycle Workflow", () => {
     expect(testVault).toBeDefined();
     console.log(`[Workflow] Test vault exists: ${testVault!.name}`);
 
-    // Ensure the test vault is open (may have been closed by other tests)
-    // open_encrypted_database is idempotent - it returns success if already open
+    // Close any currently open vault first (other tests may have opened different vaults)
     try {
-      await vault.invokeTauriCommand("open_encrypted_database", {
-        vaultPath: testVault!.path,
-        key: WORKFLOW_VAULT_PASSWORD,
-      });
-      console.log(`[Workflow] Test vault opened/confirmed: ${testVault!.name}`);
-    } catch (error) {
-      // If already open, we get an error but that's fine
-      console.log(`[Workflow] Vault open status: ${error}`);
+      await vault.invokeTauriCommand("close_database");
+      console.log(`[Workflow] Closed previous vault`);
+    } catch {
+      // No vault open, that's fine
     }
+
+    // Open the test vault
+    await vault.invokeTauriCommand("open_encrypted_database", {
+      vaultPath: testVault!.path,
+      key: WORKFLOW_VAULT_PASSWORD,
+    });
+    console.log(`[Workflow] Test vault opened: ${testVault!.name}`);
 
     // Wait a moment for bridge to be ready after vault open
     await new Promise((r) => setTimeout(r, 1000));
