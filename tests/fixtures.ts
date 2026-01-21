@@ -104,9 +104,6 @@ console.log("[E2E Config] VAULT_CONFIG.B.tauriDriverUrl:", VAULT_CONFIG.B.tauriD
 
 export type VaultInstance = keyof typeof VAULT_CONFIG;
 
-// haex-vault extension ID file (written by global-setup)
-const HAEX_VAULT_EXTENSION_ID_FILE = "/tmp/e2e-haex-pass-extension-id.txt";
-
 // haex-pass extension public key file (copied by Dockerfile)
 const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-pass-public.key";
 
@@ -115,21 +112,6 @@ const HAEX_PASS_EXTENSION_NAME = "haex-pass";
 
 // Sync server URL (from docker-compose environment)
 const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL || "http://localhost:3002";
-
-/**
- * Get the haex-vault extension ID (for client authorization)
- * This is different from the Chrome extension ID!
- */
-function getHaexVaultExtensionId(): string {
-  try {
-    return fs.readFileSync(HAEX_VAULT_EXTENSION_ID_FILE, "utf-8").trim();
-  } catch {
-    throw new Error(
-      `Could not read haex-vault extension ID from ${HAEX_VAULT_EXTENSION_ID_FILE}. ` +
-      `Make sure global-setup has run and registered the haex-pass extension.`
-    );
-  }
-}
 
 /**
  * Get the haex-pass extension public key (for request routing)
@@ -2704,10 +2686,6 @@ export async function authorizeClient(
   _extensionId: string, // Chrome extension ID - not used for vault auth
   timeout = 30000
 ): Promise<boolean> {
-  // Get the haex-vault extension ID (different from Chrome extension ID!)
-  const vaultExtensionId = getHaexVaultExtensionId();
-  console.log("[E2E] Using haex-vault extension ID for authorization:", vaultExtensionId);
-
   // Create vault automation
   const vault = new VaultAutomation();
 
@@ -2715,15 +2693,16 @@ export async function authorizeClient(
     // Create WebDriver session - the vault should already be running from global setup
     await vault.createSession();
 
-    // CRITICAL: Wait for the extension to exist in database before authorizing
-    // This prevents FOREIGN KEY constraint failures when persisting authorization
-    console.log("[E2E] Waiting for extension to be registered in database...");
-    const extensionReady = await waitForExtensionInDatabase(vault, vaultExtensionId, timeout);
-    if (!extensionReady) {
-      console.error("[E2E] Extension not found in database after timeout");
+    // CRITICAL: Get the extension ID dynamically from the current vault's database.
+    // The extension ID is vault-specific and can't be read from a file because
+    // different vaults have different extension IDs even for the same extension.
+    console.log("[E2E] Looking up haex-pass extension in current vault...");
+    const vaultExtensionId = await getExtensionIdFromVault(vault, "haex-pass", timeout);
+    if (!vaultExtensionId) {
+      console.error("[E2E] haex-pass extension not found in database after timeout");
       return false;
     }
-    console.log("[E2E] Extension found in database, proceeding with authorization");
+    console.log("[E2E] Found haex-pass extension with ID:", vaultExtensionId);
 
     // Wait for the client to be in pending_approval state
     const start = Date.now();
@@ -2770,26 +2749,27 @@ export async function authorizeClient(
 }
 
 /**
- * Wait for an extension to be registered in the haex_extensions database table.
+ * Get the extension ID for an extension by name from the current vault's database.
  * This is required before authorization can be persisted (due to FOREIGN KEY constraint).
+ * Returns the extension ID if found, or null if not found within timeout.
  */
-async function waitForExtensionInDatabase(
+async function getExtensionIdFromVault(
   vault: VaultAutomation,
-  extensionId: string,
+  extensionName: string,
   timeout: number
-): Promise<boolean> {
+): Promise<string | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeout) {
     try {
-      // Query the extensions table to check if extension exists
+      // Query the extensions table to find the extension by name
       const extensions = await vault.invokeTauriCommand<Array<{ id: string; name: string }>>(
         "get_all_extensions"
       );
 
-      const found = extensions.some((ext) => ext.id === extensionId || ext.name === extensionId);
-      if (found) {
-        return true;
+      const extension = extensions.find((ext) => ext.name === extensionName);
+      if (extension) {
+        return extension.id;
       }
     } catch (error) {
       console.log("[E2E] Error checking extension in database:", error);
@@ -2798,7 +2778,7 @@ async function waitForExtensionInDatabase(
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 
-  return false;
+  return null;
 }
 
 /**
