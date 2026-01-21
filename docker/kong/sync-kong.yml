@@ -54,10 +54,10 @@ services:
   ## Proxy all /auth/login and /sync/* routes to the sync-server
   ## ==========================================================================
   - name: sync-server-auth
-    url: http://sync-server:3002/auth
+    url: http://sync-server:3002
     routes:
       - name: sync-server-auth
-        strip_path: true
+        strip_path: false
         paths:
           - /auth/login
           - /auth/signup
