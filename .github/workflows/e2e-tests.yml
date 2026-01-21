@@ -161,7 +161,8 @@ jobs:
             chmod +x haex-space 2>/dev/null || true
           else
             echo "Could not download artifact, will build from source"
-            rm -rf ./docker/prebuilt/haex-vault
+            cd /
+            rm -rf $GITHUB_WORKSPACE/docker/prebuilt/haex-vault
           fi
 
       - name: Prepare pre-built artifacts
@@ -170,16 +171,16 @@ jobs:
           USE_PREBUILT_VAULT="false"
           USE_PREBUILT_SYNC_SERVER="false"
 
-          # Check if haex-vault artifact was downloaded
-          if [ -d "./docker/prebuilt/haex-vault" ]; then
-            echo "Found pre-built haex-vault artifact"
+          # Check if haex-vault binary was downloaded (check for actual file, not just directory)
+          if [ -f "./docker/prebuilt/haex-vault/haex-space" ]; then
+            echo "Found pre-built haex-vault binary"
             ls -la ./docker/prebuilt/haex-vault/
             USE_PREBUILT_VAULT="true"
-
-            # Make binary executable
-            if [ -f "./docker/prebuilt/haex-vault/haex-space" ]; then
-              chmod +x ./docker/prebuilt/haex-vault/haex-space
-            fi
+            chmod +x ./docker/prebuilt/haex-vault/haex-space
+          else
+            echo "No pre-built haex-vault binary found, will build from source"
+            # Clean up empty directory if it exists
+            rm -rf ./docker/prebuilt/haex-vault 2>/dev/null || true
           fi
 
           # Check if sync-server image is specified
