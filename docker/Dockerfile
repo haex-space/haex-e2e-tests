@@ -103,6 +103,14 @@ RUN git clone --depth 1 --branch ${VAULT_SDK_REF} https://github.com/haex-space/
 
 # Build haex-vault (Nuxt + Tauri app)
 WORKDIR /repos/haex-vault
+
+# Update CSP to allow Docker internal hostnames for E2E testing
+# The vault app's CSP blocks requests to non-whitelisted hosts
+# We need to allow sync-kong, marketplace-kong, etc. for E2E tests
+RUN jq '.app.security.csp["connect-src"] += ["http://sync-kong:*", "http://sync-server:*", "http://marketplace:*", "http://marketplace-kong:*", "ws://sync-kong:*", "ws://sync-server:*"]' \
+    src-tauri/tauri.conf.json > /tmp/tauri.conf.json && \
+    mv /tmp/tauri.conf.json src-tauri/tauri.conf.json
+
 RUN pnpm install
 
 # Build Nuxt for production - assets will be embedded in Tauri binary
