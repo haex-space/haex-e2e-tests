@@ -2645,24 +2645,46 @@ export async function waitForExtensionReady(
     }
   }
 
-  // Legacy fallback: Polling via sendRequestWithRetry
+  // Legacy fallback: Polling with success check
   console.log("[E2E] Using legacy polling method for extension ready...");
-  try {
-    // Use 30s per request (not timeout/5) to handle slow CI environments
-    // where responses can take 15-20+ seconds due to resource constraints
-    await sendRequestWithRetry(client, testAction, testPayload, {
-      maxAttempts: 5,
-      initialDelay: 2000,
-      backoffMultiplier: 1.5,
-      requestTimeout: 30000,
-      initialWait: 3000, // Give extension time to auto-start
-    });
-    console.log("[E2E] Extension is ready!");
-    return true;
-  } catch (err) {
-    console.error("[E2E] Extension failed to become ready:", err);
-    return false;
+
+  const maxAttempts = 10;
+  const initialDelay = 2000;
+  let delay = initialDelay;
+
+  // Give extension time to auto-start
+  await new Promise((resolve) => setTimeout(resolve, 3000));
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await client.sendRequest<{ success: boolean; error?: string }>(
+        testAction,
+        testPayload,
+        30000
+      );
+
+      // Check if the response indicates success (handler is registered and working)
+      if (response && response.success === true) {
+        console.log("[E2E] Extension is ready!");
+        return true;
+      }
+
+      // Handler not registered yet or other error
+      const errorMsg = response?.error || "unknown error";
+      console.log(`[E2E] Extension not ready (attempt ${attempt}/${maxAttempts}): ${errorMsg}`);
+    } catch (err) {
+      console.log(`[E2E] Request failed (attempt ${attempt}/${maxAttempts}): ${(err as Error).message}`);
+    }
+
+    if (attempt < maxAttempts) {
+      console.log(`[E2E] Retrying in ${delay}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.round(delay * 1.5);
+    }
   }
+
+  console.error("[E2E] Extension failed to become ready after all attempts");
+  return false;
 }
 
 /**
