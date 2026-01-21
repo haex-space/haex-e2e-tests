@@ -16,6 +16,7 @@
 // For vault B, we use VaultAutomation (WebDriver) and Tauri commands only.
 // The sync verification happens through the sync server, not direct bridge access.
 
+import fs from "fs";
 import {
   test,
   expect,
@@ -203,8 +204,13 @@ test.describe("Remote Sync Workflow", () => {
 
     if (!hasHaexPass) {
       console.log("[Sync Test] Installing haex-pass extension on Vault A...");
-      // Install haex-pass if not present
-      // This would need the extension file, which is available in the container
+      // Install haex-pass from the package in the container
+      const extensionId = await vaultA.installExtension("/app/haex-pass.haex");
+      console.log(`[Sync Test] haex-pass installed with ID: ${extensionId}`);
+      // Update the extension ID file so authorizeClient can find it
+      fs.writeFileSync("/tmp/e2e-haex-pass-extension-id.txt", extensionId);
+      // Wait for extension to be fully loaded
+      await new Promise((r) => setTimeout(r, 2000));
     }
 
     // VaultBridgeClient connects to localhost - only works for local vault (A)
