@@ -29,7 +29,8 @@ import {
 } from "../fixtures";
 
 // Sync server configuration (from docker-compose)
-const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL || "http://sync-server:3002";
+// Use Kong gateway URL for sync connection (handles authentication)
+const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL || "http://sync-kong:8000";
 
 // Test user credentials - created by the sync server's admin endpoint
 const TEST_USER_EMAIL = `sync-test-${Date.now()}@example.com`;
