@@ -107,7 +107,8 @@ WORKDIR /repos/haex-vault
 # Update CSP to allow Docker internal hostnames for E2E testing
 # The vault app's CSP blocks requests to non-whitelisted hosts
 # We need to allow sync-kong, marketplace-kong, etc. for E2E tests
-RUN jq '.app.security.csp["connect-src"] += ["http://sync-kong:*", "http://sync-server:*", "http://marketplace:*", "http://marketplace-kong:*", "ws://sync-kong:*", "ws://sync-server:*"]' \
+# Note: CSP wildcards like host:* may not work in WebKit, so we add specific ports
+RUN jq '.app.security.csp["connect-src"] += ["http://sync-kong:8000", "http://sync-server:3002", "http://marketplace:3001", "http://marketplace-kong:8000", "ws://sync-kong:8000", "ws://sync-server:3002", "wss://sync-kong:8000", "wss://sync-server:3002"]' \
     src-tauri/tauri.conf.json > /tmp/tauri.conf.json && \
     mv /tmp/tauri.conf.json src-tauri/tauri.conf.json
 
