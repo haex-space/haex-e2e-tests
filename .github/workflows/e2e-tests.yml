@@ -389,14 +389,38 @@ jobs:
           HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
           HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
         run: |
-          # Start sync stack services (sync-db, sync-gotrue, sync-kong, sync-server)
-          docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
+          # Start sync stack - database first, then dependent services
+          echo "Starting sync-db..."
+          docker compose -f docker/docker-compose.yml up -d sync-db
+          echo "Waiting for sync-db to be healthy..."
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_db 2>/dev/null | grep -q healthy; then
+              echo "sync-db healthy after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
 
-          # Start marketplace stack services
-          docker compose -f docker/docker-compose.yml up -d marketplace-db marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
+          echo "Starting sync-gotrue, sync-kong, sync-server..."
+          docker compose -f docker/docker-compose.yml up -d sync-gotrue sync-kong sync-server
 
-          # Wait for services to be healthy
-          echo "Waiting for services to be ready..."
+          # Start marketplace stack - database first, then dependent services
+          echo "Starting marketplace-db..."
+          docker compose -f docker/docker-compose.yml up -d marketplace-db
+          echo "Waiting for marketplace-db to be healthy..."
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace_db 2>/dev/null | grep -q healthy; then
+              echo "marketplace-db healthy after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Starting marketplace dependent services..."
+          docker compose -f docker/docker-compose.yml up -d marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
+
+          # Wait for all services to be healthy
+          echo "Waiting for all services to be ready..."
           for i in {1..60}; do
             SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
             MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
