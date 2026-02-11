@@ -119,11 +119,11 @@ RUN pnpm build
 
 # Build Tauri binary OR use pre-built one
 # If USE_PREBUILT_VAULT=true and pre-built binary exists, skip the cargo build
-RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-space" ]; then \
+RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-vault" ]; then \
       echo "Using pre-built haex-vault binary"; \
       mkdir -p /repos/haex-vault/src-tauri/target/release; \
-      cp /prebuilt/haex-vault/haex-space /repos/haex-vault/src-tauri/target/release/haex-space; \
-      chmod +x /repos/haex-vault/src-tauri/target/release/haex-space; \
+      cp /prebuilt/haex-vault/haex-vault /repos/haex-vault/src-tauri/target/release/haex-vault; \
+      chmod +x /repos/haex-vault/src-tauri/target/release/haex-vault; \
     else \
       echo "Building haex-vault from source (USE_PREBUILT_VAULT=$USE_PREBUILT_VAULT)"; \
       /root/.cargo/bin/cargo tauri build --no-bundle; \

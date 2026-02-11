@@ -207,7 +207,7 @@ async function createWebDriverSession(): Promise<string> {
       capabilities: {
         alwaysMatch: {
           "tauri:options": {
-            application: "/repos/haex-vault/src-tauri/target/release/haex-space",
+            application: "/repos/haex-vault/src-tauri/target/release/haex-vault",
           },
         },
       },

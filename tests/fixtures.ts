@@ -1050,7 +1050,7 @@ export class VaultAutomation {
    * Uses http module when Host header override is needed (Node.js fetch doesn't handle this)
    */
   async createNewSession(): Promise<void> {
-    const vaultBinaryPath = "/repos/haex-vault/src-tauri/target/release/haex-space";
+    const vaultBinaryPath = "/repos/haex-vault/src-tauri/target/release/haex-vault";
 
     const capabilities = {
       capabilities: {

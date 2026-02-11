@@ -3,8 +3,8 @@
 
 set -e
 
-# Binary name is "haex-space" (from Cargo.toml [package].name)
-VAULT_BIN="/repos/haex-vault/src-tauri/target/release/haex-space"
+# Binary name is "haex-vault" (from Cargo.toml [package].name)
+VAULT_BIN="/repos/haex-vault/src-tauri/target/release/haex-vault"
 
 if [ ! -f "$VAULT_BIN" ]; then
     echo "Error: haex-vault binary not found at $VAULT_BIN"

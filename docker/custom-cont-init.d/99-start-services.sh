@@ -29,7 +29,7 @@ done
 sleep 3
 
 # Clear vault data for fresh start
-VAULT_DATA_DIR="${HOME}/.local/share/haex-space"
+VAULT_DATA_DIR="${HOME}/.local/share/haex-vault"
 if [ -d "$VAULT_DATA_DIR" ]; then
     echo "Removing existing vault data at $VAULT_DATA_DIR"
     rm -rf "$VAULT_DATA_DIR"
