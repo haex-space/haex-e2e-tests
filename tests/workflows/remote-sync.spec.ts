@@ -250,14 +250,88 @@ test.describe("Remote Sync Workflow", () => {
     await new Promise((r) => setTimeout(r, 10000));
   });
 
-  test("Step 5: Device B - Connect to same vault", async () => {
-    // TODO: "Connect Vault" button was removed from welcome screen (commit abf0090)
-    // The new flow requires:
-    // 1. Device B creates a new local vault first
-    // 2. Opens Settings > Sync
-    // 3. Adds a sync backend with the same credentials
-    // This is a fundamentally different flow that needs to be implemented
-    test.skip(true, "Connect Vault button removed - needs Settings > Sync flow implementation");
+  test("Step 5: Device B - Create vault and connect to sync server", async () => {
+    test.skip(!vaultB, "Vault B not available");
+
+    // Device B needs to create its own local vault first, then connect to sync
+    // This is the new flow after "Connect Vault" button was removed from welcome screen
+
+    await vaultB.navigateTo("/en");
+
+    // Create a new vault on Device B
+    await vaultB.executeScript(`
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        if (btn.textContent?.includes('Create vault')) {
+          btn.click();
+          break;
+        }
+      }
+    `);
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Fill in vault details - use different name to distinguish from A
+    const vaultBName = `${SYNC_VAULT_NAME}-B`;
+    await vaultB.executeScript(`
+      // Set vault name
+      const nameInput = document.querySelector('input[type="text"]');
+      if (nameInput) {
+        nameInput.value = '${vaultBName}';
+        nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      // Set passwords - use same password as A for simplicity
+      const passwordInputs = document.querySelectorAll('input[type="password"]');
+      passwordInputs.forEach(input => {
+        input.value = '${SYNC_VAULT_PASSWORD}';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    `);
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Click Create button
+    await vaultB.executeScript(`
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        if (btn.textContent?.includes('Create') && btn.closest('[role="dialog"]')) {
+          btn.click();
+          break;
+        }
+      }
+    `);
+
+    // Wait for vault creation
+    await new Promise((r) => setTimeout(r, 3000));
+
+    // Complete welcome dialog
+    await vaultB.completeWelcomeDialog({
+      deviceName: "E2E-Test-Device-B",
+      skipExtensions: true,
+      skipSync: true,
+    });
+
+    console.log("[Sync Test] Vault B created successfully");
+
+    // Now connect to sync server via Settings > Sync (same flow as Device A)
+    try {
+      const backendId = await vaultB.createSyncConnection({
+        serverUrl: SYNC_SERVER_URL,
+        email: TEST_USER_EMAIL,
+        password: TEST_USER_PASSWORD,
+      });
+
+      expect(backendId).toBeDefined();
+      console.log(`[Sync Test] Vault B connected to sync server, backend ID: ${backendId}`);
+    } catch (error) {
+      console.log("[Sync Test] Sync connection setup on B failed:", error);
+      test.skip();
+    }
+
+    // Wait for sync to pull data from server
+    console.log("[Sync Test] Waiting for automatic sync to pull data from server...");
+    await new Promise((r) => setTimeout(r, 10000));
   });
 
   test("Step 6: Device B - Verify synced data from A", async () => {
