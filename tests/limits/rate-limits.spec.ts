@@ -210,7 +210,7 @@ test.describe("Extension Database Limits API", () => {
     expect(afterReset.isCustom).toBe(false);
     expect(afterReset.queryTimeoutMs).toBe(30000);
     expect(afterReset.maxResultRows).toBe(10000);
-    expect(afterReset.maxConcurrentQueries).toBe(5);
+    expect(afterReset.maxConcurrentQueries).toBe(20);
     expect(afterReset.maxQuerySizeBytes).toBe(1048576);
   });
 

@@ -57,14 +57,6 @@ test.describe("Start Page UI", () => {
     expect(pageSource).toContain("Open Vault");
   });
 
-  test("should have connect vault button", async () => {
-    await vault.navigateTo("/en");
-
-    const pageSource = await vault.getPageSource();
-    // English label from connect.vue i18n
-    expect(pageSource).toContain("Connect Vault");
-  });
-
   test("should display sponsors section", async () => {
     await vault.navigateTo("/en");
 
@@ -153,7 +145,7 @@ test.describe("Last Vaults List", () => {
     await vault.deleteSession();
   });
 
-  test("should display last used vaults section if vaults exist", async () => {
+  test("should display last used vaults section with test vault", async () => {
     await vault.navigateTo("/en");
 
     // Wait for page to load and sync vaults
@@ -161,27 +153,15 @@ test.describe("Last Vaults List", () => {
 
     const pageSource = await vault.getPageSource();
 
-    // Since global-setup creates a test vault, it should be visible
-    const hasLastVaultsSection = pageSource.includes("Last used Vaults");
-
-    console.log(
-      `[UI Test] Last vaults section visible: ${hasLastVaultsSection}`
-    );
-    // Document expected behavior - section is hidden if no vaults exist
-  });
-
-  test("should show test vault in last vaults list", async () => {
-    await vault.navigateTo("/en");
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const pageSource = await vault.getPageSource();
+    // Since global-setup creates a test vault, "Last used Vaults" section should be visible
+    expect(pageSource).toContain("Last used Vaults");
 
     // The test vault created by global-setup should appear
+    // Check for either the vault name or the generic test-vault pattern
     const hasTestVault =
-      pageSource.includes("E2E Test Vault") ||
-      pageSource.includes("test-vault");
-
-    console.log(`[UI Test] Test vault in list: ${hasTestVault}`);
+      pageSource.includes("e2e-test-vault") ||
+      pageSource.includes("E2E Test Vault");
+    expect(hasTestVault).toBe(true);
   });
 });
 
@@ -214,11 +194,9 @@ test.describe("Vault Open Flow", () => {
 
     await new Promise((r) => setTimeout(r, 500));
 
-    // If a vault was clicked, password drawer should open
+    // Password dialog should open with password input field
     const pageSource = await vault.getPageSource();
-    const hasPasswordField = pageSource.includes("Password");
-
-    console.log(`[UI Test] Password dialog opened: ${hasPasswordField}`);
+    expect(pageSource).toContain("Password");
   });
 });
 
@@ -256,66 +234,6 @@ test.describe("Open Vault Drawer", () => {
   });
 });
 
-test.describe("Remote Connection Flow", () => {
-  let vault: VaultAutomation;
-
-  test.beforeAll(async () => {
-    vault = new VaultAutomation("A");
-    await vault.createSession();
-  });
-
-  test.afterAll(async () => {
-    await vault.deleteSession();
-  });
-
-  test("connect button should open remote connection wizard", async () => {
-    await vault.navigateTo("/en");
-
-    // Find and click the connect button
-    await vault.executeScript(`
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('Connect Vault')) {
-          btn.click();
-          break;
-        }
-      }
-    `);
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    const pageSource = await vault.getPageSource();
-
-    // Connection wizard should have server URL field
-    expect(
-      pageSource.includes("Server") || pageSource.includes("server")
-    ).toBe(true);
-  });
-
-  test("remote connection wizard should have email and password fields", async () => {
-    await vault.navigateTo("/en");
-
-    // Open the connect wizard
-    await vault.executeScript(`
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('Connect Vault')) {
-          btn.click();
-          break;
-        }
-      }
-    `);
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    const pageSource = await vault.getPageSource();
-
-    // Should have authentication fields
-    expect(pageSource).toContain("Email");
-    expect(pageSource).toContain("Password");
-  });
-});
-
 test.describe("Welcome Dialog (Post-Vault Creation)", () => {
   let vault: VaultAutomation;
 
@@ -331,55 +249,29 @@ test.describe("Welcome Dialog (Post-Vault Creation)", () => {
   // The welcome dialog appears after a vault is created/opened for the first time
   // It has 3 steps: Device Name, Extensions, Sync
 
-  test("welcome dialog should have stepper with correct steps", async () => {
+  test("welcome dialog should have complete stepper with all steps and navigation", async () => {
     // Navigate to the vault page where welcome dialog might be shown
     await vault.navigateTo("/en/vault");
     await new Promise((r) => setTimeout(r, 1000));
 
     const pageSource = await vault.getPageSource();
 
-    // Check if we're on the vault page or if welcome dialog is visible
     // The stepper shows: Device Name, Extensions, Synchronization
-    const hasDeviceStep = pageSource.includes("Device Name");
-    const hasExtensionsStep = pageSource.includes("Extensions");
-    const hasSyncStep = pageSource.includes("Synchronization");
-
-    console.log(`[UI Test] Welcome dialog steps visible:`, {
-      device: hasDeviceStep,
-      extensions: hasExtensionsStep,
-      sync: hasSyncStep,
-    });
-  });
-
-  test("device name step should have input field", async () => {
-    await vault.navigateTo("/en/vault");
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const pageSource = await vault.getPageSource();
+    expect(pageSource).toContain("Device Name");
+    expect(pageSource).toContain("Extensions");
+    expect(pageSource).toContain("Synchronization");
 
     // Device name step shows an input with placeholder examples
     const hasDeviceInput =
-      pageSource.includes("Device Name") ||
       pageSource.includes("MacBook Pro") ||
-      pageSource.includes("iPhone");
+      pageSource.includes("iPhone") ||
+      pageSource.includes("input");
+    expect(hasDeviceInput).toBe(true);
 
-    console.log(`[UI Test] Device name input visible: ${hasDeviceInput}`);
-  });
-
-  test("welcome dialog has navigation buttons", async () => {
-    await vault.navigateTo("/en/vault");
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const pageSource = await vault.getPageSource();
-
-    // Should have Next/Skip buttons
-    const hasNextButton = pageSource.includes("Next");
-    const hasSkipButton = pageSource.includes("Skip");
-
-    console.log(`[UI Test] Navigation buttons:`, {
-      next: hasNextButton,
-      skip: hasSkipButton,
-    });
+    // Should have Next/Skip buttons for navigation
+    const hasNavigation =
+      pageSource.includes("Next") || pageSource.includes("Skip");
+    expect(hasNavigation).toBe(true);
   });
 });
 
@@ -395,7 +287,7 @@ test.describe("Extension Installation (via Welcome Dialog)", () => {
     await vault.deleteSession();
   });
 
-  test("extensions step should show haex-pass as recommended", async () => {
+  test("extensions step should show haex-pass with recommended badge and permissions", async () => {
     await vault.navigateTo("/en/vault");
     await new Promise((r) => setTimeout(r, 1000));
 
@@ -415,38 +307,14 @@ test.describe("Extension Installation (via Welcome Dialog)", () => {
     const pageSource = await vault.getPageSource();
 
     // haex-pass should be visible in the extensions list
-    const hasHaexPass = pageSource.includes("haex-pass");
-    const hasRecommendedBadge = pageSource.includes("Recommended");
+    expect(pageSource).toContain("haex-pass");
 
-    console.log(`[UI Test] Extensions step:`, {
-      haexPassVisible: hasHaexPass,
-      recommendedBadge: hasRecommendedBadge,
-    });
-  });
-
-  test("extensions step should have permissions button when extension selected", async () => {
-    await vault.navigateTo("/en/vault");
-    await new Promise((r) => setTimeout(r, 1000));
-
-    // Navigate to extensions step
-    await vault.executeScript(`
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('Next')) {
-          btn.click();
-          break;
-        }
-      }
-    `);
-
-    await new Promise((r) => setTimeout(r, 2000));
-
-    const pageSource = await vault.getPageSource();
-
-    // Should have permissions button (shown when an extension is selected)
-    const hasPermissionsButton = pageSource.includes("Permissions");
-
-    console.log(`[UI Test] Permissions button visible: ${hasPermissionsButton}`);
+    // Should have recommended badge or permissions button
+    const hasExtensionUI =
+      pageSource.includes("Recommended") ||
+      pageSource.includes("Permissions") ||
+      pageSource.includes("Install");
+    expect(hasExtensionUI).toBe(true);
   });
 });
 
@@ -473,7 +341,6 @@ test.describe("Marketplace UI", () => {
     const hasMarketplaceLink =
       pageSource.includes("Marketplace") ||
       pageSource.includes("Extensions");
-
-    console.log(`[UI Test] Marketplace accessible: ${hasMarketplaceLink}`);
+    expect(hasMarketplaceLink).toBe(true);
   });
 });

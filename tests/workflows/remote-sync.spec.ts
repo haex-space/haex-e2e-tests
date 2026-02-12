@@ -251,102 +251,13 @@ test.describe("Remote Sync Workflow", () => {
   });
 
   test("Step 5: Device B - Connect to same vault", async () => {
-    test.skip(!vaultB, "Vault B not available");
-
-    await vaultB.navigateTo("/en");
-
-    // Click "Connect Vault" button
-    await vaultB.executeScript(`
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('Connect Vault')) {
-          btn.click();
-          break;
-        }
-      }
-    `);
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    // The connect wizard should open
-    // Fill in server URL, email, password
-    await vaultB.executeScript(`
-      const inputs = document.querySelectorAll('input');
-      inputs.forEach(input => {
-        const label = input.closest('div')?.querySelector('label')?.textContent?.toLowerCase() || '';
-        const placeholder = input.placeholder?.toLowerCase() || '';
-
-        if (label.includes('server') || placeholder.includes('server') || placeholder.includes('url')) {
-          input.value = '${SYNC_SERVER_URL}';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        } else if (label.includes('email') || placeholder.includes('email')) {
-          input.value = '${TEST_USER_EMAIL}';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        } else if (input.type === 'password') {
-          input.value = '${TEST_USER_PASSWORD}';
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      });
-    `);
-
-    await new Promise((r) => setTimeout(r, 500));
-
-    // Click Connect/Next
-    await vaultB.executeScript(`
-      const buttons = document.querySelectorAll('button');
-      for (const btn of buttons) {
-        if (btn.textContent?.includes('Connect') || btn.textContent?.includes('Next')) {
-          btn.click();
-          break;
-        }
-      }
-    `);
-
-    // Wait for connection and vault list
-    await new Promise((r) => setTimeout(r, 5000));
-
-    // Select our test vault from the list
-    let pageSource = await vaultB.getPageSource();
-
-    if (pageSource.includes(SYNC_VAULT_NAME)) {
-      await vaultB.executeScript(`
-        const vaultItems = document.querySelectorAll('[class*="vault"], [class*="list-item"]');
-        for (const item of vaultItems) {
-          if (item.textContent?.includes('${SYNC_VAULT_NAME}')) {
-            item.click();
-            break;
-          }
-        }
-      `);
-
-      await new Promise((r) => setTimeout(r, 1000));
-
-      // Enter vault password
-      await vaultB.executeScript(`
-        const passwordInput = document.querySelector('input[type="password"]');
-        if (passwordInput) {
-          passwordInput.value = '${SYNC_VAULT_PASSWORD}';
-          passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
-        }
-      `);
-
-      await new Promise((r) => setTimeout(r, 300));
-
-      // Click Connect/Open
-      await vaultB.executeScript(`
-        const buttons = document.querySelectorAll('button');
-        for (const btn of buttons) {
-          if (btn.textContent?.includes('Connect') || btn.textContent?.includes('Open')) {
-            btn.click();
-            break;
-          }
-        }
-      `);
-
-      await new Promise((r) => setTimeout(r, 5000));
-    }
-
-    console.log("[Sync Test] Vault B connected to sync server");
+    // TODO: "Connect Vault" button was removed from welcome screen (commit abf0090)
+    // The new flow requires:
+    // 1. Device B creates a new local vault first
+    // 2. Opens Settings > Sync
+    // 3. Adds a sync backend with the same credentials
+    // This is a fundamentally different flow that needs to be implemented
+    test.skip(true, "Connect Vault button removed - needs Settings > Sync flow implementation");
   });
 
   test("Step 6: Device B - Verify synced data from A", async () => {
@@ -412,5 +323,124 @@ test.describe("Remote Sync Workflow", () => {
     // For now, the unidirectional sync (A -> B) is tested in Step 6
 
     console.log("[Sync Test] Step 8 skipped - bidirectional sync requires dev mode");
+  });
+});
+
+test.describe("Sync Conflict Resolution", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let vaultA: VaultAutomation;
+  let client: VaultBridgeClient;
+  let testEntryId: string;
+
+  test.beforeAll(async () => {
+    vaultA = new VaultAutomation("A");
+    await vaultA.createSession();
+  });
+
+  test.afterAll(async () => {
+    client?.disconnect();
+    await vaultA?.deleteSession();
+  });
+
+  test("setup: create entry for conflict test", async () => {
+    client = new VaultBridgeClient();
+    const connected = await waitForBridgeConnection(client, 15000);
+    expect(connected).toBe(true);
+
+    const authorized = await authorizeClient(client, "haex-pass", 30000);
+    expect(authorized).toBe(true);
+
+    await waitForExtensionReady(client);
+
+    // Create initial entry
+    const response = (await sendRequestWithRetry(
+      client,
+      HAEX_PASS_METHODS.SET_ITEM,
+      {
+        title: "Conflict Test Entry",
+        url: "https://conflict-test.example.com",
+        username: "original_user",
+        password: "original_pass",
+      },
+      { maxAttempts: 3, initialDelay: 1000 }
+    )) as ApiResponse<SetLoginResponse>;
+
+    expect(response.success).toBe(true);
+    testEntryId = response.data!.entryId;
+    console.log(`[Conflict Test] Created test entry: ${testEntryId}`);
+  });
+
+  test("should handle concurrent updates with last-write-wins", async () => {
+    // Simulate concurrent updates by rapidly updating the same entry
+    // CRDT with HLC timestamps uses last-write-wins strategy
+
+    const updates = [
+      { username: "update_1", password: "pass_1" },
+      { username: "update_2", password: "pass_2" },
+      { username: "update_3", password: "pass_3" },
+    ];
+
+    // Rapid concurrent-like updates
+    for (const update of updates) {
+      await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+        entryId: testEntryId,
+        title: "Conflict Test Entry",
+        url: "https://conflict-test.example.com",
+        ...update,
+      });
+      // Small delay to ensure different HLC timestamps
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    // Wait for all updates to settle
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Verify final state - should be last update
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+      url: "https://conflict-test.example.com",
+    })) as ApiResponse<{ entries: Array<{ id: string; fields: { username?: string; password?: string } }> }>;
+
+    expect(response.success).toBe(true);
+    const entry = response.data?.entries.find((e) => e.id === testEntryId);
+    expect(entry).toBeDefined();
+
+    // Last write wins - should have the last update values
+    expect(entry?.fields.username).toBe("update_3");
+    expect(entry?.fields.password).toBe("pass_3");
+
+    console.log("[Conflict Test] Last-write-wins verified");
+  });
+
+  test("should maintain data integrity after rapid updates", async () => {
+    // Verify that repeated rapid updates don't corrupt data
+    const rapidUpdates = 10;
+
+    for (let i = 0; i < rapidUpdates; i++) {
+      await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+        entryId: testEntryId,
+        title: "Conflict Test Entry",
+        url: "https://conflict-test.example.com",
+        username: `rapid_user_${i}`,
+        password: `rapid_pass_${i}`,
+      });
+    }
+
+    // Wait for updates to settle
+    await new Promise((r) => setTimeout(r, 1000));
+
+    // Verify entry is still readable and has valid data
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+      url: "https://conflict-test.example.com",
+    })) as ApiResponse<{ entries: Array<{ id: string; title: string; fields: { username?: string } }> }>;
+
+    expect(response.success).toBe(true);
+    const entry = response.data?.entries.find((e) => e.id === testEntryId);
+    expect(entry).toBeDefined();
+    expect(entry?.title).toBe("Conflict Test Entry");
+    // Username should be from one of the updates (last one expected)
+    expect(entry?.fields.username).toMatch(/^rapid_user_\d+$/);
+
+    console.log(`[Conflict Test] Data integrity verified after ${rapidUpdates} rapid updates`);
   });
 });
