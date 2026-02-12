@@ -101,24 +101,18 @@ test.describe("get-totp", () => {
     entryWithoutTotp = resp2.data!.entryId;
   });
 
-  test("should return valid 6-digit TOTP code", async () => {
+  test("should return valid 6-digit TOTP code with countdown", async () => {
     const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {
       entryId: entryWithTotp,
     })) as ApiResponse<GetTotpResponse>;
 
     expect(response.success).toBe(true);
     expect(response.data).toBeDefined();
+
+    // Verify 6-digit code format
     expect(response.data!.code).toMatch(/^\d{6}$/);
-    expect(response.data!.validFor).toBeGreaterThan(0);
-    expect(response.data!.validFor).toBeLessThanOrEqual(30);
-  });
 
-  test("should return countdown within valid range", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_TOTP, {
-      entryId: entryWithTotp,
-    })) as ApiResponse<GetTotpResponse>;
-
-    expect(response.success).toBe(true);
+    // Verify countdown is within valid range (1-30 seconds for 30s period)
     expect(response.data!.validFor).toBeGreaterThanOrEqual(1);
     expect(response.data!.validFor).toBeLessThanOrEqual(30);
   });

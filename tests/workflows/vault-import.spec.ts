@@ -373,7 +373,7 @@ test.describe("Vault Import/Export Workflow", () => {
           url,
         })) as ApiResponse<GetLoginsResponse>;
 
-        if (resp.success && resp.data?.entries.length > 0) {
+        if (resp.success && (resp.data?.entries?.length ?? 0) > 0) {
           foundCount++;
         }
       }

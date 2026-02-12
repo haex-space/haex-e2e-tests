@@ -51,10 +51,14 @@ vault-b:
 
 ---
 
-### Konfliktauflösung
-**Problem:** Konflikt-Szenarien sind definiert (`sync-test-data.ts`) aber nicht vollständig implementiert.
+### Konfliktauflösung (GELÖST)
+**Problem:** Konflikt-Szenarien waren definiert (`sync-test-data.ts`) aber nicht vollständig implementiert.
 
-**Status:** Testdaten existieren, Tests fehlen.
+**Lösung:** Tests für CRDT-basierte Konfliktauflösung (Last-Write-Wins) hinzugefügt in `tests/workflows/remote-sync.spec.ts`:
+- `should handle concurrent updates with last-write-wins` - Verifiziert dass bei konkurrierenden Updates der letzte gewinnt
+- `should maintain data integrity after rapid updates` - Stresstest mit 10 schnellen Updates
+
+**Status:** ✅ GELÖST
 
 ---
 
@@ -505,6 +509,25 @@ Entfernung der `pkill -f tauri-driver` Zeile aus `stop-all.sh`:
 - `tests/fixtures.ts` - Debug-Logging für Request-Tracing hinzugefügt
 
 **Status:** ✅ GELÖST - Alle 68 haex-pass Tests bestehen jetzt.
+
+---
+
+### haex-pass API hat keine DELETE/UPDATE Methoden
+**Problem:** Die External API von haex-pass bietet nur lesende und erstellende Operationen, keine Lösch- oder Update-Methoden.
+
+**Verfügbare Methoden:**
+- `GET_ITEMS` - Einträge abrufen
+- `GET_TOTP` - TOTP-Code generieren
+- `SET_ITEM` - Neuen Eintrag erstellen (kein Update!)
+- `GET_PASSWORD_CONFIG` - Passwort-Generator-Konfiguration
+- `GET_PASSWORD_PRESETS` - Passwort-Generator-Presets
+- `PASSKEY_*` - WebAuthn-Methoden
+
+**Fehlend:**
+- `DELETE_ITEM` - Eintrag löschen
+- `UPDATE_ITEM` - Eintrag aktualisieren
+
+**Status:** ❌ API-Limitierung in haex-pass selbst, nicht im Test-Framework
 
 ---
 

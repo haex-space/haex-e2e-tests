@@ -122,19 +122,8 @@ test.describe("get-items", () => {
     expect(githubEntry?.fields.username).toBe("testuser");
   });
 
-  test("should filter entries by requested fields", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://accounts.google.com",
-      fields: ["otp"],
-    })) as ApiResponse<GetLoginsResponse>;
-
-    expect(response.success).toBe(true);
-    response.data?.entries.forEach((entry) => {
-      expect(entry.hasTotp).toBe(true);
-    });
-  });
-
-  test("should match entries by domain", async () => {
+  test("should match entries by domain regardless of path", async () => {
+    // Test that entries match on domain regardless of subpath
     const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
       url: "https://github.com/settings/profile",
     })) as ApiResponse<GetLoginsResponse>;
@@ -146,13 +135,26 @@ test.describe("get-items", () => {
     expect(githubEntry).toBeDefined();
   });
 
-  test("should indicate TOTP availability", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+  test("should filter by OTP field and indicate TOTP availability", async () => {
+    // Test filtering by OTP field - only returns entries with TOTP
+    const filteredResponse = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+      url: "https://accounts.google.com",
+      fields: ["otp"],
+    })) as ApiResponse<GetLoginsResponse>;
+
+    expect(filteredResponse.success).toBe(true);
+    expect(filteredResponse.data?.entries.length).toBeGreaterThan(0);
+    filteredResponse.data?.entries.forEach((entry) => {
+      expect(entry.hasTotp).toBe(true);
+    });
+
+    // Also verify hasTotp flag is correctly set on unfiltered response
+    const unfilteredResponse = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
       url: "https://accounts.google.com",
     })) as ApiResponse<GetLoginsResponse>;
 
-    expect(response.success).toBe(true);
-    const googleEntry = response.data?.entries.find(
+    expect(unfilteredResponse.success).toBe(true);
+    const googleEntry = unfilteredResponse.data?.entries.find(
       (e) => e.title === "Google Account"
     );
     expect(googleEntry).toBeDefined();

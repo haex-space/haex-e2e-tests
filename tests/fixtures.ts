@@ -1070,7 +1070,7 @@ export class VaultAutomation {
     // Use http module when Host header override is needed (Node.js fetch doesn't work)
     if (config.needsHostOverride) {
       const data = await this.httpRequest("POST", "/session", body);
-      this.sessionId = data.value?.sessionId || data.sessionId;
+      this.sessionId = ((data.value as Record<string, unknown>)?.sessionId || (data as Record<string, unknown>).sessionId) as string;
     } else {
       // Use fetch for local requests
       const response = await fetch(`${this.tauriDriverUrl}/session`, {
@@ -1085,7 +1085,7 @@ export class VaultAutomation {
       }
 
       const data = await response.json();
-      this.sessionId = data.value?.sessionId || data.sessionId;
+      this.sessionId = ((data.value as Record<string, unknown>)?.sessionId || (data as Record<string, unknown>).sessionId) as string;
     }
 
     if (!this.sessionId) {
@@ -1972,33 +1972,46 @@ export class VaultAutomation {
     await this.wait(300); // Wait for form to appear
 
     // Step 3: Handle server URL selection
-    // E2E tests always use a custom sync server (http://sync-server:3002 in Docker)
+    // E2E tests always use a custom sync server (http://sync-kong:8000 in Docker)
     // We need to:
-    // 1. Open the USelectMenu dropdown
+    // 1. Open the USelectMenu dropdown (Combobox-based)
     // 2. Select "Custom" option
     // 3. Fill in the custom server URL
 
     console.log(`[E2E] Selecting Custom server option for URL: ${credentials.serverUrl}`);
 
-    // Click to open the USelectMenu dropdown
-    // Use data-testid for reliable selection, fallback to role="combobox"
+    // Click the Combobox trigger INPUT inside the USelectMenu wrapper
+    // Important: Must target the inner [role="combobox"] input, not the wrapper div
     await this.executeScript(`
-      const selectMenu = document.querySelector('[data-testid="sync-server-select"]')
-        || document.querySelector('[data-testid="sync-server-select"] button')
-        || document.querySelector('[role="combobox"]');
-      if (selectMenu) {
-        selectMenu.click();
+      const comboboxInput = document.querySelector('[data-testid="sync-server-select"] [role="combobox"]')
+        || document.querySelector('[data-testid="sync-server-select"] input')
+        || document.querySelector('[data-testid="sync-server-select"] button');
+      if (comboboxInput) {
+        comboboxInput.click();
       } else {
-        throw new Error('Server select menu not found');
+        throw new Error('Server select combobox trigger not found');
       }
     `);
 
-    await this.wait(300); // Wait for dropdown to open
+    // Poll for dropdown options to appear (max 5s)
+    let dropdownReady = false;
+    for (let i = 0; i < 10 && !dropdownReady; i++) {
+      await this.wait(500);
+      dropdownReady = await this.executeScript<boolean>(`
+        const options = document.querySelectorAll('[role="option"]');
+        return options.length > 0;
+      `);
+    }
+
+    if (!dropdownReady) {
+      throw new Error("USelectMenu dropdown did not open - no [role='option'] found");
+    }
+
+    console.log(`[E2E] Dropdown opened, selecting Custom option`);
 
     // Click on the "Custom" option
-    await this.executeScript(`
-      // Find the dropdown options - USelectMenu creates a listbox
-      const options = document.querySelectorAll('[role="option"], [role="listbox"] li, [data-headlessui-state] li');
+    const customSelected = await this.executeScript<boolean>(`
+      const options = document.querySelectorAll('[role="option"]');
       let customOption = null;
 
       for (const opt of options) {
@@ -2012,44 +2025,53 @@ export class VaultAutomation {
 
       if (customOption) {
         customOption.click();
+        return true;
       } else {
         // Fallback: click the last option which is typically "Custom"
         const lastOption = options[options.length - 1];
         if (lastOption) {
           lastOption.click();
-        } else {
-          throw new Error('Custom server option not found in dropdown');
+          return true;
         }
+        return false;
       }
     `);
 
-    await this.wait(300); // Wait for custom input to appear
+    if (!customSelected) {
+      throw new Error("Custom server option not found in dropdown");
+    }
 
-    // Fill in the custom server URL
+    // Poll for custom URL input to appear (max 5s)
+    // Uses data-testid to avoid accidentally selecting the USelectMenu's combobox input
+    let customUrlReady = false;
+    for (let i = 0; i < 10 && !customUrlReady; i++) {
+      await this.wait(500);
+      customUrlReady = await this.executeScript<boolean>(`
+        const el = document.querySelector('[data-testid="sync-custom-url-input"] input')
+          || document.querySelector('[data-testid="sync-custom-url-input"]');
+        return !!el;
+      `);
+    }
+
+    if (!customUrlReady) {
+      throw new Error("Custom URL input did not appear after selecting Custom option");
+    }
+
+    console.log(`[E2E] Custom URL input visible, filling form fields`);
+
+    // Fill in the custom server URL using data-testid (avoids combobox input confusion)
     await this.executeScript(`
       const serverUrl = ${JSON.stringify(credentials.serverUrl)};
-
-      // The custom URL input appears after selecting "Custom"
-      // Find inputs that are not email/password type
-      const inputs = document.querySelectorAll('input');
-      let customInput = null;
-
-      for (const input of inputs) {
-        // Skip email and password inputs
-        if (input.type === 'email' || input.type === 'password') continue;
-        // Skip hidden inputs
-        if (input.type === 'hidden' || input.offsetParent === null) continue;
-        // This should be the custom URL input
-        customInput = input;
-        break;
-      }
+      const customInput = document.querySelector('[data-testid="sync-custom-url-input"] input')
+        || document.querySelector('[data-testid="sync-custom-url-input"]');
 
       if (customInput) {
+        customInput.focus();
         customInput.value = serverUrl;
         customInput.dispatchEvent(new Event('input', { bubbles: true }));
         customInput.dispatchEvent(new Event('change', { bubbles: true }));
       } else {
-        throw new Error('Custom server URL input not found');
+        throw new Error('Custom server URL input not found via data-testid');
       }
     `);
 
@@ -2063,6 +2085,7 @@ export class VaultAutomation {
       // Find and fill email input
       const emailInput = document.querySelector('input[type="email"]');
       if (emailInput) {
+        emailInput.focus();
         emailInput.value = email;
         emailInput.dispatchEvent(new Event('input', { bubbles: true }));
         emailInput.dispatchEvent(new Event('change', { bubbles: true }));
@@ -2073,6 +2096,7 @@ export class VaultAutomation {
       // Find and fill password input
       const passwordInput = document.querySelector('input[type="password"]');
       if (passwordInput) {
+        passwordInput.focus();
         passwordInput.value = password;
         passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
         passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
@@ -2082,6 +2106,19 @@ export class VaultAutomation {
     `);
 
     await this.wait(200);
+
+    // Debug: Log form state before submit
+    const formState = await this.executeScript<{ url: string; email: string; hasPassword: boolean }>(`
+      const urlInput = document.querySelector('[data-testid="sync-custom-url-input"] input');
+      const emailInput = document.querySelector('input[type="email"]');
+      const passwordInput = document.querySelector('input[type="password"]');
+      return {
+        url: urlInput?.value || '(not found)',
+        email: emailInput?.value || '(not found)',
+        hasPassword: !!(passwordInput?.value),
+      };
+    `);
+    console.log(`[E2E] Form state before submit: url=${formState?.url}, email=${formState?.email}, hasPassword=${formState?.hasPassword}`);
 
     // Step 5: Click the submit button using data-testid
     await this.executeScript(`

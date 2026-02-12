@@ -38,23 +38,17 @@ test.describe("authorization-flow", () => {
     }
   });
 
-  test("should be in pending_approval state for new client", async () => {
+  test("should be in pending_approval or paired state after connection", async () => {
     const client = new VaultBridgeClient();
 
     try {
       await waitForBridgeConnection(client);
 
-      // New clients should be pending approval
+      // Client should be in a valid authorization state
+      // - pending_approval: new client needs manual approval
+      // - paired: client was previously authorized (persistent across tests)
       const state = client.getState();
-
-      // Could be either pending_approval (new client) or paired (previously authorized)
-      if (state.state === "pending_approval") {
-        console.log("Client is pending approval as expected for new client");
-        expect(state.state).toBe("pending_approval");
-      } else if (state.state === "paired") {
-        console.log("Client was previously authorized");
-        expect(state.state).toBe("paired");
-      }
+      expect(["pending_approval", "paired"]).toContain(state.state);
     } finally {
       client.disconnect();
     }

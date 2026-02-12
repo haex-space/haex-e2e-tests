@@ -217,64 +217,37 @@ test.describe("Database Operations via Tauri", () => {
       expect(result.map((r) => r[1])).not.toContain("Alice");
     });
 
-    test("should filter with WHERE >", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+    test("should filter with comparison operators (>, >=, <, <=)", async () => {
+      // Test all comparison operators in one test to reduce redundancy
+      // Data: Alice=10, Bob=20, Charlie=30, Diana=40, Eve=50
+
+      // > operator
+      const gtResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT id, name, counter FROM ${TEST_TABLE} WHERE counter > ?`,
-          params: [25],
-        }
+        { sql: `SELECT counter FROM ${TEST_TABLE} WHERE counter > ?`, params: [25] }
       );
+      expect(gtResult).toHaveLength(3); // 30, 40, 50
 
-      expect(result).toHaveLength(3);
-      result.forEach((row) => {
-        expect(row[2]).toBeGreaterThan(25);
-      });
-    });
-
-    test("should filter with WHERE >=", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // >= operator
+      const gteResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT id, name, counter FROM ${TEST_TABLE} WHERE counter >= ?`,
-          params: [30],
-        }
+        { sql: `SELECT counter FROM ${TEST_TABLE} WHERE counter >= ?`, params: [30] }
       );
+      expect(gteResult).toHaveLength(3); // 30, 40, 50
 
-      expect(result).toHaveLength(3);
-      result.forEach((row) => {
-        expect(row[2]).toBeGreaterThanOrEqual(30);
-      });
-    });
-
-    test("should filter with WHERE <", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // < operator
+      const ltResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT id, name, counter FROM ${TEST_TABLE} WHERE counter < ?`,
-          params: [25],
-        }
+        { sql: `SELECT counter FROM ${TEST_TABLE} WHERE counter < ?`, params: [25] }
       );
+      expect(ltResult).toHaveLength(2); // 10, 20
 
-      expect(result).toHaveLength(2);
-      result.forEach((row) => {
-        expect(row[2]).toBeLessThan(25);
-      });
-    });
-
-    test("should filter with WHERE <=", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // <= operator
+      const lteResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT id, name, counter FROM ${TEST_TABLE} WHERE counter <= ?`,
-          params: [20],
-        }
+        { sql: `SELECT counter FROM ${TEST_TABLE} WHERE counter <= ?`, params: [20] }
       );
-
-      expect(result).toHaveLength(2);
-      result.forEach((row) => {
-        expect(row[2]).toBeLessThanOrEqual(20);
-      });
+      expect(lteResult).toHaveLength(2); // 10, 20
     });
 
     test("should filter with WHERE LIKE", async () => {
@@ -397,28 +370,20 @@ test.describe("Database Operations via Tauri", () => {
       });
     });
 
-    test("should order ASC", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+    test("should order ASC and DESC", async () => {
+      // Test ASC ordering
+      const ascResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name ASC`,
-          params: [],
-        }
+        { sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name ASC`, params: [] }
       );
+      expect(ascResult.map((r) => r[0])).toEqual(["Alice", "Bob", "Charlie"]);
 
-      expect(result.map((r) => r[0])).toEqual(["Alice", "Bob", "Charlie"]);
-    });
-
-    test("should order DESC", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // Test DESC ordering
+      const descResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name DESC`,
-          params: [],
-        }
+        { sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name DESC`, params: [] }
       );
-
-      expect(result.map((r) => r[0])).toEqual(["Charlie", "Bob", "Alice"]);
+      expect(descResult.map((r) => r[0])).toEqual(["Charlie", "Bob", "Alice"]);
     });
 
     test("should order by multiple columns", async () => {
@@ -461,30 +426,22 @@ test.describe("Database Operations via Tauri", () => {
       });
     });
 
-    test("should limit results", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+    test("should support LIMIT and OFFSET for pagination", async () => {
+      // Test LIMIT only
+      const limitResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name LIMIT 3`,
-          params: [],
-        }
+        { sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name LIMIT 3`, params: [] }
       );
+      expect(limitResult).toHaveLength(3);
+      expect(limitResult.map((r) => r[0])).toEqual(["A", "B", "C"]);
 
-      expect(result).toHaveLength(3);
-      expect(result.map((r) => r[0])).toEqual(["A", "B", "C"]);
-    });
-
-    test("should offset results", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // Test LIMIT with OFFSET (pagination)
+      const offsetResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name LIMIT 3 OFFSET 2`,
-          params: [],
-        }
+        { sql: `SELECT name FROM ${TEST_TABLE} ORDER BY name LIMIT 3 OFFSET 2`, params: [] }
       );
-
-      expect(result).toHaveLength(3);
-      expect(result.map((r) => r[0])).toEqual(["C", "D", "E"]);
+      expect(offsetResult).toHaveLength(3);
+      expect(offsetResult.map((r) => r[0])).toEqual(["C", "D", "E"]);
     });
   });
 
@@ -507,64 +464,43 @@ test.describe("Database Operations via Tauri", () => {
       });
     });
 
-    test("COUNT", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+    test("should support all aggregate functions (COUNT, SUM, AVG, MIN, MAX)", async () => {
+      // Data: counter values are 10, 20, 30, 40, 50
+
+      // COUNT
+      const countResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT COUNT(*) FROM ${TEST_TABLE}`,
-          params: [],
-        }
+        { sql: `SELECT COUNT(*) FROM ${TEST_TABLE}`, params: [] }
       );
+      expect(countResult[0]?.[0]).toBe(5);
 
-      expect(result[0]?.[0]).toBe(5);
-    });
-
-    test("SUM", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // SUM (10+20+30+40+50 = 150)
+      const sumResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT SUM(counter) FROM ${TEST_TABLE}`,
-          params: [],
-        }
+        { sql: `SELECT SUM(counter) FROM ${TEST_TABLE}`, params: [] }
       );
+      expect(sumResult[0]?.[0]).toBe(150);
 
-      expect(result[0]?.[0]).toBe(150);
-    });
-
-    test("AVG", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // AVG (150/5 = 30)
+      const avgResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT AVG(counter) FROM ${TEST_TABLE}`,
-          params: [],
-        }
+        { sql: `SELECT AVG(counter) FROM ${TEST_TABLE}`, params: [] }
       );
+      expect(avgResult[0]?.[0]).toBe(30);
 
-      expect(result[0]?.[0]).toBe(30);
-    });
-
-    test("MIN", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // MIN
+      const minResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT MIN(counter) FROM ${TEST_TABLE}`,
-          params: [],
-        }
+        { sql: `SELECT MIN(counter) FROM ${TEST_TABLE}`, params: [] }
       );
+      expect(minResult[0]?.[0]).toBe(10);
 
-      expect(result[0]?.[0]).toBe(10);
-    });
-
-    test("MAX", async () => {
-      const result = await vault.invokeTauriCommand<unknown[][]>(
+      // MAX
+      const maxResult = await vault.invokeTauriCommand<unknown[][]>(
         "sql_with_crdt",
-        {
-          sql: `SELECT MAX(counter) FROM ${TEST_TABLE}`,
-          params: [],
-        }
+        { sql: `SELECT MAX(counter) FROM ${TEST_TABLE}`, params: [] }
       );
-
-      expect(result[0]?.[0]).toBe(50);
+      expect(maxResult[0]?.[0]).toBe(50);
     });
   });
 
