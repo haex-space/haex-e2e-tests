@@ -1510,6 +1510,86 @@ export class VaultAutomation {
   }
 
   /**
+   * Click a button by its visible text content using native WebDriver click.
+   * This properly triggers Reka UI components (which use pointerdown, not onclick).
+   * Uses executeScript to find & tag the element, then WebDriver native click.
+   */
+  async clickButtonByText(text: string, options?: { timeout?: number }): Promise<boolean> {
+    const timeout = options?.timeout ?? 5000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      // Tag the matching button with a temporary attribute
+      const found = await this.executeScript<boolean>(`
+        const buttons = document.querySelectorAll('button, [role="button"]');
+        for (const btn of buttons) {
+          if (btn.textContent?.trim().includes('${text.replace(/'/g, "\\'")}')) {
+            btn.setAttribute('data-e2e-click-target', 'true');
+            return true;
+          }
+        }
+        return false;
+      `);
+
+      if (found) {
+        const element = await this.findElement('[data-e2e-click-target="true"]');
+        // Clean up the temporary attribute
+        await this.executeScript(`
+          document.querySelector('[data-e2e-click-target]')?.removeAttribute('data-e2e-click-target');
+        `);
+
+        if (element) {
+          await this.clickElement(element);
+          return true;
+        }
+      }
+
+      await this.wait(300);
+    }
+
+    console.log(`[E2E] clickButtonByText: Button with text "${text}" not found within ${timeout}ms`);
+    return false;
+  }
+
+  /**
+   * Click an element by CSS selector using native WebDriver click.
+   * Polls until the element is found or timeout is reached.
+   */
+  async clickBySelector(selector: string, options?: { timeout?: number }): Promise<boolean> {
+    const timeout = options?.timeout ?? 5000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      const element = await this.findElement(selector);
+      if (element) {
+        await this.clickElement(element);
+        return true;
+      }
+      await this.wait(300);
+    }
+
+    console.log(`[E2E] clickBySelector: Element "${selector}" not found within ${timeout}ms`);
+    return false;
+  }
+
+  /**
+   * Wait for an element matching the CSS selector to appear in the DOM.
+   * Returns true if found, false if timeout reached.
+   */
+  async waitForElement(selector: string, options?: { timeout?: number }): Promise<boolean> {
+    const timeout = options?.timeout ?? 5000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      const element = await this.findElement(selector);
+      if (element) return true;
+      await this.wait(300);
+    }
+
+    return false;
+  }
+
+  /**
    * Actually delete the WebDriver session (for cleanup)
    */
   async terminateSession(): Promise<void> {
