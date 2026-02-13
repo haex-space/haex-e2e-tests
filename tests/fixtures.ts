@@ -2060,12 +2060,11 @@ export class VaultAutomation {
 
     console.log(`[E2E] Selecting Custom server option for URL: ${credentials.serverUrl}`);
 
-    // Click the Combobox trigger INPUT inside the USelectMenu wrapper
-    // Important: Must target the inner [role="combobox"] input, not the wrapper div
+    // Click the Combobox trigger using ARIA role selector
+    // Nuxt UI's USelectMenu renders a [role="combobox"] element as its trigger
+    // Note: We use [role="combobox"] directly since there's only one in the add-backend form
     await this.executeScript(`
-      const comboboxInput = document.querySelector('[data-testid="sync-server-select"] [role="combobox"]')
-        || document.querySelector('[data-testid="sync-server-select"] input')
-        || document.querySelector('[data-testid="sync-server-select"] button');
+      const comboboxInput = document.querySelector('[role="combobox"]');
       if (comboboxInput) {
         comboboxInput.click();
       } else {
