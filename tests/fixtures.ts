@@ -1510,6 +1510,45 @@ export class VaultAutomation {
   }
 
   /**
+   * Clear an input element's value via WebDriver protocol.
+   * This properly triggers Vue's v-model update.
+   */
+  async clearElement(elementId: string): Promise<void> {
+    if (!this.sessionId) {
+      throw new Error("No WebDriver session");
+    }
+
+    await fetch(
+      `${this.tauriDriverUrl}/session/${this.sessionId}/element/${elementId}/clear`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({}),
+      }
+    );
+  }
+
+  /**
+   * Send keyboard input to an element via WebDriver protocol.
+   * This produces real keyboard events (keydown/input/keyup) that Vue v-model handles properly.
+   * Unlike setting input.value + dispatching Event, this reliably updates Vue's reactive state.
+   */
+  async sendKeys(elementId: string, text: string): Promise<void> {
+    if (!this.sessionId) {
+      throw new Error("No WebDriver session");
+    }
+
+    await fetch(
+      `${this.tauriDriverUrl}/session/${this.sessionId}/element/${elementId}/value`,
+      {
+        method: "POST",
+        headers: this.buildHeaders(),
+        body: JSON.stringify({ text }),
+      }
+    );
+  }
+
+  /**
    * Click a button by its visible text content using native WebDriver click.
    * This properly triggers Reka UI components (which use pointerdown, not onclick).
    * Uses executeScript to find & tag the element, then WebDriver native click.
@@ -2133,57 +2172,37 @@ export class VaultAutomation {
       throw new Error("Custom URL input did not appear after selecting Custom option");
     }
 
-    console.log(`[E2E] Custom URL input visible, filling form fields`);
+    console.log(`[E2E] Custom URL input visible, filling form fields via WebDriver sendKeys`);
 
-    // Fill in the custom server URL using data-testid (avoids combobox input confusion)
-    await this.executeScript(`
-      const serverUrl = ${JSON.stringify(credentials.serverUrl)};
-      const customInput = document.querySelector('[data-testid="sync-custom-url-input"] input')
-        || document.querySelector('[data-testid="sync-custom-url-input"]');
-
-      if (customInput) {
-        customInput.focus();
-        customInput.value = serverUrl;
-        customInput.dispatchEvent(new Event('input', { bubbles: true }));
-        customInput.dispatchEvent(new Event('change', { bubbles: true }));
-      } else {
-        throw new Error('Custom server URL input not found via data-testid');
-      }
-    `);
+    // Fill in the custom server URL using WebDriver sendKeys (properly triggers Vue v-model)
+    // Note: executeScript with input.value + dispatchEvent does NOT reliably update Vue's reactive state
+    const customUrlInput = await this.findElement('[data-testid="sync-custom-url-input"] input');
+    if (!customUrlInput) {
+      throw new Error('Custom server URL input not found via data-testid');
+    }
+    await this.clearElement(customUrlInput);
+    await this.sendKeys(customUrlInput, credentials.serverUrl);
 
     await this.wait(200);
 
-    // Step 4: Fill in email and password
-    await this.executeScript(`
-      const email = ${JSON.stringify(credentials.email)};
-      const password = ${JSON.stringify(credentials.password)};
+    // Step 4: Fill in email and password using WebDriver sendKeys
+    const emailInput = await this.findElement('input[type="email"]');
+    if (!emailInput) {
+      throw new Error('Email input not found');
+    }
+    await this.clearElement(emailInput);
+    await this.sendKeys(emailInput, credentials.email);
 
-      // Find and fill email input
-      const emailInput = document.querySelector('input[type="email"]');
-      if (emailInput) {
-        emailInput.focus();
-        emailInput.value = email;
-        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
-      } else {
-        throw new Error('Email input not found');
-      }
-
-      // Find and fill password input
-      const passwordInput = document.querySelector('input[type="password"]');
-      if (passwordInput) {
-        passwordInput.focus();
-        passwordInput.value = password;
-        passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
-        passwordInput.dispatchEvent(new Event('change', { bubbles: true }));
-      } else {
-        throw new Error('Password input not found');
-      }
-    `);
+    const passwordInput = await this.findElement('input[type="password"]');
+    if (!passwordInput) {
+      throw new Error('Password input not found');
+    }
+    await this.clearElement(passwordInput);
+    await this.sendKeys(passwordInput, credentials.password);
 
     await this.wait(200);
 
-    // Debug: Log form state before submit
+    // Debug: Log form state before submit (DOM values + Vue reactive state check)
     const formState = await this.executeScript<{ url: string; email: string; hasPassword: boolean }>(`
       const urlInput = document.querySelector('[data-testid="sync-custom-url-input"] input');
       const emailInput = document.querySelector('input[type="email"]');
@@ -2197,31 +2216,43 @@ export class VaultAutomation {
     console.log(`[E2E] Form state before submit: url=${formState?.url}, email=${formState?.email}, hasPassword=${formState?.hasPassword}`);
 
     // Step 5: Click the submit button using data-testid
-    await this.executeScript(`
-      const submitBtn = document.querySelector('[data-testid="sync-submit-button"]');
-      if (submitBtn) {
-        submitBtn.click();
-      } else {
-        throw new Error('Submit button not found');
-      }
-    `);
+    const submitBtn = await this.findElement('[data-testid="sync-submit-button"]');
+    if (!submitBtn) {
+      throw new Error('Submit button not found');
+    }
+    await this.clickElement(submitBtn);
+    console.log(`[E2E] Submit button clicked`);
 
     // Step 6: Wait for the connection to be established (max 30 seconds)
     const maxWaitTime = 30000;
     const startTime = Date.now();
+    let lastStatus = '';
 
     while (Date.now() - startTime < maxWaitTime) {
-      await this.wait(500);
+      await this.wait(1000);
 
-      // Check if loading overlay is gone and form is closed
-      const isStillLoading = await this.executeScript<boolean>(`
-        const loader = document.querySelector('.loading-spinner, [class*="loading"][class*="spinner"]');
+      // Check form state: loading overlay, form visibility, toast messages
+      const status = await this.executeScript<{ hasLoader: boolean; hasForm: boolean; toasts: string[] }>(`
+        const loader = document.querySelector('.loading-spinner, [class*="loading"][class*="spinner"], [class*="backdrop-blur"]');
         const emailInput = document.querySelector('input[type="email"]');
-        // Form should close on success
-        return !!(loader || emailInput);
+        // Check for toast notifications (success/error messages)
+        const toastEls = document.querySelectorAll('[class*="toast"], [role="status"], [class*="notification"]');
+        const toasts = [...toastEls].map(el => el.textContent?.trim() || '').filter(Boolean);
+        return {
+          hasLoader: !!loader,
+          hasForm: !!emailInput,
+          toasts,
+        };
       `);
 
-      if (!isStillLoading) {
+      const statusStr = JSON.stringify(status);
+      if (statusStr !== lastStatus) {
+        console.log(`[E2E] Sync connection status (${Math.round((Date.now() - startTime) / 1000)}s): ${statusStr}`);
+        lastStatus = statusStr;
+      }
+
+      // Form should close on success (no email input = form closed)
+      if (!status?.hasForm && !status?.hasLoader) {
         break;
       }
     }
@@ -2242,7 +2273,13 @@ export class VaultAutomation {
     // Check if form is still visible (error case)
     const formVisible = await this.findElement('input[type="email"]');
     if (formVisible) {
-      console.error(`[E2E] Sync connection setup failed - form still visible`);
+      // Capture any error messages visible on the page
+      const errorInfo = await this.executeScript<string>(`
+        const toasts = [...document.querySelectorAll('[class*="toast"], [role="status"]')].map(el => el.textContent?.trim()).filter(Boolean);
+        const alerts = [...document.querySelectorAll('[role="alert"]')].map(el => el.textContent?.trim()).filter(Boolean);
+        return JSON.stringify({ toasts, alerts });
+      `);
+      console.error(`[E2E] Sync connection setup failed - form still visible. Errors: ${errorInfo}`);
       throw new Error("Sync connection failed - form still visible after timeout");
     }
 

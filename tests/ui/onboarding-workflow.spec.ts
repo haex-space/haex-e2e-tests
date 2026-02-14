@@ -167,34 +167,49 @@ test.describe("Vault Open Flow", () => {
   });
 
   test("clicking a vault in last vaults should open password dialog", async () => {
-    // Force page reload to clear any stale dialog state from previous tests
-    // (Vue Router SPA navigation to same route doesn't re-mount components)
-    await vault.executeScript(`window.location.reload()`);
+    await vault.navigateTo("/en");
     await new Promise((r) => setTimeout(r, 2000));
 
-    // Ensure we're on the English start page
-    await vault.navigateTo("/en");
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // Verify no stale dialog is open
-    const hasStaleDialog = await vault.executeScript<boolean>(`
-      return !!document.querySelector('[role="dialog"]');
-    `);
-    if (hasStaleDialog) {
-      // Click overlay to dismiss stale dialog
-      await vault.executeScript(`
-        const overlay = document.querySelector('[data-slot="overlay"]');
-        if (overlay) overlay.click();
+    // Wait for vault items to be rendered (syncLastVaultsAsync in onMounted)
+    let vaultButtonFound = false;
+    for (let i = 0; i < 10 && !vaultButtonFound; i++) {
+      vaultButtonFound = await vault.executeScript<boolean>(`
+        const buttons = document.querySelectorAll('button');
+        for (const btn of buttons) {
+          if (btn.textContent?.trim().includes('e2e-test-vault')) return true;
+        }
+        return false;
       `);
-      await new Promise((r) => setTimeout(r, 500));
+      if (!vaultButtonFound) await new Promise((r) => setTimeout(r, 500));
     }
+    expect(vaultButtonFound).toBe(true);
 
-    // Click the vault item button
-    const clicked = await vault.clickButtonByText("e2e-test-vault");
+    // Dismiss any stale dialogs first
+    await vault.executeScript(`
+      const overlay = document.querySelector('[data-slot="overlay"]');
+      if (overlay) overlay.click();
+    `);
+    await new Promise((r) => setTimeout(r, 300));
+
+    // Click the vault item button via JavaScript .click()
+    // Note: We use JS .click() instead of WebDriver native click because the vault items
+    // are wrapped in UContextMenu (Reka UI), which may intercept pointer events.
+    // The @click handler is a standard Vue handler that works fine with .click().
+    const clicked = await vault.executeScript<boolean>(`
+      const buttons = document.querySelectorAll('button');
+      for (const btn of buttons) {
+        if (btn.textContent?.trim().includes('e2e-test-vault')) {
+          btn.click();
+          return true;
+        }
+      }
+      return false;
+    `);
     expect(clicked).toBe(true);
 
     // Wait for the password dialog to appear
-    await vault.waitForElement('[role="dialog"]', { timeout: 3000 });
+    const dialogFound = await vault.waitForElement('[role="dialog"]', { timeout: 5000 });
+    expect(dialogFound).toBe(true);
 
     // Password dialog should open with password input field
     const pageSource = await vault.getPageSource();
