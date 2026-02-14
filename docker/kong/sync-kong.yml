@@ -38,6 +38,20 @@ services:
           - /auth/v1/verify
     plugins:
       - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - Accept
+            - apikey
 
   - name: auth-v1-all
     url: http://sync-gotrue:9999
@@ -48,6 +62,20 @@ services:
           - /auth/v1/
     plugins:
       - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - Accept
+            - apikey
 
   ## ==========================================================================
   ## SYNC SERVER API
@@ -63,6 +91,19 @@ services:
           - /auth/signup
     plugins:
       - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - Accept
 
   - name: sync-server-api
     url: http://sync-server:3002
@@ -75,6 +116,19 @@ services:
           - /vaults
     plugins:
       - name: cors
+        config:
+          origins:
+            - "*"
+          methods:
+            - GET
+            - POST
+            - PUT
+            - DELETE
+            - OPTIONS
+          headers:
+            - Content-Type
+            - Authorization
+            - Accept
 
   ## ==========================================================================
   ## Health check

@@ -211,9 +211,9 @@ test.describe("Vault Open Flow", () => {
     const dialogFound = await vault.waitForElement('[role="dialog"]', { timeout: 5000 });
     expect(dialogFound).toBe(true);
 
-    // Password dialog should open with password input field
+    // Password dialog should open with unlock title
     const pageSource = await vault.getPageSource();
-    expect(pageSource).toContain("Password");
+    expect(pageSource).toContain("Unlock HaexVault");
   });
 });
 
