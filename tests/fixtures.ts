@@ -2054,23 +2054,20 @@ export class VaultAutomation {
     // Step 3: Handle server URL selection
     // E2E tests always use a custom sync server (http://sync-kong:8000 in Docker)
     // We need to:
-    // 1. Open the USelectMenu dropdown (Combobox-based)
+    // 1. Open the USelectMenu dropdown via its trigger button
     // 2. Select "Custom" option
     // 3. Fill in the custom server URL
 
     console.log(`[E2E] Selecting Custom server option for URL: ${credentials.serverUrl}`);
 
-    // Click the Combobox trigger using ARIA role selector
-    // Nuxt UI's USelectMenu renders a [role="combobox"] element as its trigger
-    // Note: We use [role="combobox"] directly since there's only one in the add-backend form
-    await this.executeScript(`
-      const comboboxInput = document.querySelector('[role="combobox"]');
-      if (comboboxInput) {
-        comboboxInput.click();
-      } else {
-        throw new Error('Server select combobox trigger not found');
-      }
-    `);
+    // Click the USelectMenu trigger button
+    // Nuxt UI's USelectMenu renders a <button aria-haspopup="listbox"> as its trigger
+    // Note: [role="combobox"] is only on the search input INSIDE the dropdown, not on the trigger
+    // We use WebDriver native click because Reka UI uses onPointerDown, not onClick
+    const triggerClicked = await this.clickBySelector('button[aria-haspopup="listbox"]');
+    if (!triggerClicked) {
+      throw new Error('Server select trigger button not found (button[aria-haspopup="listbox"])');
+    }
 
     // Poll for dropdown options to appear (max 5s)
     let dropdownReady = false;

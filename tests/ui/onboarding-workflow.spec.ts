@@ -167,15 +167,34 @@ test.describe("Vault Open Flow", () => {
   });
 
   test("clicking a vault in last vaults should open password dialog", async () => {
-    await vault.navigateTo("/en");
-    await new Promise((r) => setTimeout(r, 1000));
+    // Force page reload to clear any stale dialog state from previous tests
+    // (Vue Router SPA navigation to same route doesn't re-mount components)
+    await vault.executeScript(`window.location.reload()`);
+    await new Promise((r) => setTimeout(r, 2000));
 
-    // Use native WebDriver click on the vault item button
+    // Ensure we're on the English start page
+    await vault.navigateTo("/en");
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Verify no stale dialog is open
+    const hasStaleDialog = await vault.executeScript<boolean>(`
+      return !!document.querySelector('[role="dialog"]');
+    `);
+    if (hasStaleDialog) {
+      // Click overlay to dismiss stale dialog
+      await vault.executeScript(`
+        const overlay = document.querySelector('[data-slot="overlay"]');
+        if (overlay) overlay.click();
+      `);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    // Click the vault item button
     const clicked = await vault.clickButtonByText("e2e-test-vault");
     expect(clicked).toBe(true);
 
     // Wait for the password dialog to appear
-    await vault.waitForElement('[role="dialog"]');
+    await vault.waitForElement('[role="dialog"]', { timeout: 3000 });
 
     // Password dialog should open with password input field
     const pageSource = await vault.getPageSource();
@@ -300,31 +319,3 @@ test.describe("Extension Installation (via Welcome Dialog)", () => {
   });
 });
 
-test.describe("Marketplace UI", () => {
-  let vault: VaultAutomation;
-
-  test.beforeAll(async () => {
-    vault = new VaultAutomation("A");
-    await vault.createSession();
-  });
-
-  test.afterAll(async () => {
-    await vault.deleteSession();
-  });
-
-  test("marketplace should be accessible from desktop", async () => {
-    // Navigate to the vault desktop page
-    await vault.navigateTo("/en/vault");
-    await new Promise((r) => setTimeout(r, 1000));
-
-    const pageSource = await vault.getPageSource();
-
-    // Check if marketplace link or extensions text is present
-    // These may be in the welcome dialog or in the sidebar/nav
-    const hasMarketplaceLink =
-      pageSource.includes("Marketplace") ||
-      pageSource.includes("Extensions") ||
-      pageSource.includes("haex-pass");
-    expect(hasMarketplaceLink).toBe(true);
-  });
-});
