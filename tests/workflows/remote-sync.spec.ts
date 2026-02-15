@@ -445,8 +445,7 @@ test.describe("Sync Conflict Resolution", () => {
     console.log(`[Conflict Test] Created test entry: ${testEntryId}`);
   });
 
-  test.skip("should handle concurrent updates with last-write-wins", async () => {
-    // TODO: SET_ITEM via bridge doesn't update existing entries by entryId - investigate
+  test("should handle concurrent updates with last-write-wins", async () => {
     // Simulate concurrent updates by rapidly updating the same entry
     // CRDT with HLC timestamps uses last-write-wins strategy
 
@@ -459,7 +458,7 @@ test.describe("Sync Conflict Resolution", () => {
     // Rapid concurrent-like updates
     for (const update of updates) {
       await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
-        entryId: testEntryId,
+        id: testEntryId,
         title: "Conflict Test Entry",
         url: "https://conflict-test.example.com",
         ...update,
@@ -493,7 +492,7 @@ test.describe("Sync Conflict Resolution", () => {
 
     for (let i = 0; i < rapidUpdates; i++) {
       await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
-        entryId: testEntryId,
+        id: testEntryId,
         title: "Conflict Test Entry",
         url: "https://conflict-test.example.com",
         username: `rapid_user_${i}`,
