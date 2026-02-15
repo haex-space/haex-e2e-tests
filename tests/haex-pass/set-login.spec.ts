@@ -8,7 +8,7 @@ import {
 } from "../fixtures";
 
 /**
- * E2E Tests for haex-pass set-item API
+ * E2E Tests for haex-pass create-item API
  *
  * Tests creating new password entries via the browser bridge
  */
@@ -23,7 +23,7 @@ interface ApiResponse<T = unknown> {
   requestId?: string;
 }
 
-interface SetLoginResponse {
+interface CreateLoginResponse {
   entryId: string;
   title: string;
 }
@@ -43,7 +43,7 @@ interface GetLoginsResponse {
   entries: LoginEntry[];
 }
 
-test.describe("set-item", () => {
+test.describe("create-item", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
@@ -66,12 +66,12 @@ test.describe("set-item", () => {
   });
 
   test("should create entry with URL and credentials", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       url: "https://test-create.example.com",
       title: "Test Create Entry",
       username: "testcreate",
       password: "testcreatepass",
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     expect(response.data).toBeDefined();
@@ -92,22 +92,22 @@ test.describe("set-item", () => {
   });
 
   test("should auto-generate title from URL domain", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       url: "https://auto-title-test.example.com/login",
       username: "autotitle",
       password: "autotitlepass",
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     expect(response.data!.title).toBe("auto-title-test.example.com");
   });
 
   test("should create entry with title only", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       title: "Title Only Entry",
       username: "titleonly",
       password: "titleonlypass",
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     expect(response.data!.entryId).toBeDefined();
@@ -115,7 +115,7 @@ test.describe("set-item", () => {
   });
 
   test("should fail without URL or title", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       username: "nourl",
       password: "nourlpass",
     })) as ApiResponse;
@@ -125,25 +125,25 @@ test.describe("set-item", () => {
   });
 
   test("should create entry in root when groupId is null", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       url: "https://root-entry.example.com",
       title: "Root Entry",
       username: "rootuser",
       password: "rootpass",
       groupId: null,
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     expect(response.data!.entryId).toBeDefined();
   });
 
   test("should return valid UUID as entry ID", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       url: "https://uuid-test.example.com",
       title: "UUID Test",
       username: "uuidtest",
       password: "uuidtestpass",
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
 
@@ -154,12 +154,12 @@ test.describe("set-item", () => {
   });
 
   test("should handle special characters in credentials", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+    const response = (await client.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, {
       url: "https://special-chars.example.com",
       title: "Special <>&\"' Characters",
       username: "user@example.com",
       password: "p@$$w0rd!#%&*(){}[]",
-    })) as ApiResponse<SetLoginResponse>;
+    })) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
 

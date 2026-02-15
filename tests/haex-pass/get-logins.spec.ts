@@ -16,7 +16,7 @@ import { TEST_ENTRIES } from "../../fixtures/test-data";
  * Tests the complete flow:
  * 1. Connect to bridge
  * 2. Authorize client
- * 3. Create test data via set-item
+ * 3. Create test data via create-item
  * 4. Verify get-items returns correct data
  */
 
@@ -73,12 +73,12 @@ test.describe("get-items", () => {
     client?.disconnect();
   });
 
-  test("setup: create test entries via set-item", async () => {
+  test("setup: create test entries via create-item", async () => {
     for (const entry of TEST_ENTRIES) {
-      // Use retry logic for set-item requests
+      // Use retry logic for create-item requests
       const response = (await sendRequestWithRetry(
         client,
-        HAEX_PASS_METHODS.SET_ITEM,
+        HAEX_PASS_METHODS.CREATE_ITEM,
         {
           url: entry.url,
           title: entry.title,

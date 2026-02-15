@@ -47,7 +47,7 @@ interface ApiResponse<T = unknown> {
   error?: string;
 }
 
-interface SetLoginResponse {
+interface CreateLoginResponse {
   entryId: string;
   title: string;
 }
@@ -226,7 +226,7 @@ test.describe("Remote Sync Workflow", () => {
     // Create a password entry
     const response = (await sendRequestWithRetry(
       clientA,
-      HAEX_PASS_METHODS.SET_ITEM,
+      HAEX_PASS_METHODS.CREATE_ITEM,
       {
         title: "Sync Test Entry from A",
         url: "https://sync-test-a.example.com",
@@ -234,7 +234,7 @@ test.describe("Remote Sync Workflow", () => {
         password: "synctestpass_a!",
       },
       { maxAttempts: 3, initialDelay: 1000 }
-    )) as ApiResponse<SetLoginResponse>;
+    )) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     entryIdFromA = response.data!.entryId;
@@ -430,7 +430,7 @@ test.describe("Sync Conflict Resolution", () => {
     // Create initial entry
     const response = (await sendRequestWithRetry(
       client,
-      HAEX_PASS_METHODS.SET_ITEM,
+      HAEX_PASS_METHODS.CREATE_ITEM,
       {
         title: "Conflict Test Entry",
         url: "https://conflict-test.example.com",
@@ -438,7 +438,7 @@ test.describe("Sync Conflict Resolution", () => {
         password: "original_pass",
       },
       { maxAttempts: 3, initialDelay: 1000 }
-    )) as ApiResponse<SetLoginResponse>;
+    )) as ApiResponse<CreateLoginResponse>;
 
     expect(response.success).toBe(true);
     testEntryId = response.data!.entryId;
@@ -457,7 +457,7 @@ test.describe("Sync Conflict Resolution", () => {
 
     // Rapid concurrent-like updates
     for (const update of updates) {
-      await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+      await client.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, {
         id: testEntryId,
         title: "Conflict Test Entry",
         url: "https://conflict-test.example.com",
@@ -491,7 +491,7 @@ test.describe("Sync Conflict Resolution", () => {
     const rapidUpdates = 10;
 
     for (let i = 0; i < rapidUpdates; i++) {
-      await client.sendRequest(HAEX_PASS_METHODS.SET_ITEM, {
+      await client.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, {
         id: testEntryId,
         title: "Conflict Test Entry",
         url: "https://conflict-test.example.com",

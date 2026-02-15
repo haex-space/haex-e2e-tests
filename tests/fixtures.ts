@@ -604,10 +604,17 @@ export class VaultBridgeClient {
   }
 
   /**
-   * Save a new item entry
+   * Create a new item entry
    */
-  async setItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.SET_ITEM, entry);
+  async createItem(entry: object): Promise<unknown> {
+    return this.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, entry);
+  }
+
+  /**
+   * Update an existing item entry
+   */
+  async updateItem(entry: object): Promise<unknown> {
+    return this.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, entry);
   }
 
   /**
@@ -615,17 +622,6 @@ export class VaultBridgeClient {
    */
   async getTotp(entryId: string): Promise<unknown> {
     return this.sendRequest(HAEX_PASS_METHODS.GET_TOTP, { entryId });
-  }
-
-  // Legacy aliases for backwards compatibility
-  /** @deprecated Use getItems instead */
-  async getLogins(url: string, fields: string[]): Promise<unknown> {
-    return this.getItems(url, fields);
-  }
-
-  /** @deprecated Use setItem instead */
-  async setLogin(entry: object): Promise<unknown> {
-    return this.setItem(entry);
   }
 
   /**

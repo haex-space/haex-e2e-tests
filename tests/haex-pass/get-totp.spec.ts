@@ -24,7 +24,7 @@ interface ApiResponse<T = unknown> {
   requestId?: string;
 }
 
-interface SetLoginResponse {
+interface CreateLoginResponse {
   entryId: string;
   title: string;
 }
@@ -67,7 +67,7 @@ test.describe("get-totp", () => {
     // Entry WITH TOTP (6 digits, SHA1, 30s period)
     const resp1 = (await sendRequestWithRetry(
       client,
-      HAEX_PASS_METHODS.SET_ITEM,
+      HAEX_PASS_METHODS.CREATE_ITEM,
       {
         title: "TOTP Test Entry",
         url: "https://totp-test.example.com",
@@ -79,7 +79,7 @@ test.describe("get-totp", () => {
         otpAlgorithm: "SHA1",
       },
       { maxAttempts: 3, initialDelay: 1000 }
-    )) as ApiResponse<SetLoginResponse>;
+    )) as ApiResponse<CreateLoginResponse>;
 
     expect(resp1.success).toBe(true);
     entryWithTotp = resp1.data!.entryId;
@@ -87,7 +87,7 @@ test.describe("get-totp", () => {
     // Entry WITHOUT TOTP
     const resp2 = (await sendRequestWithRetry(
       client,
-      HAEX_PASS_METHODS.SET_ITEM,
+      HAEX_PASS_METHODS.CREATE_ITEM,
       {
         title: "No TOTP Entry",
         url: "https://no-totp.example.com",
@@ -95,7 +95,7 @@ test.describe("get-totp", () => {
         password: "notoppass",
       },
       { maxAttempts: 3, initialDelay: 1000 }
-    )) as ApiResponse<SetLoginResponse>;
+    )) as ApiResponse<CreateLoginResponse>;
 
     expect(resp2.success).toBe(true);
     entryWithoutTotp = resp2.data!.entryId;

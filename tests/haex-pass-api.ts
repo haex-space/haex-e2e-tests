@@ -13,8 +13,10 @@ export const HAEX_PASS_METHODS = {
   GET_ITEMS: "get-items",
   /** Get TOTP code for an entry */
   GET_TOTP: "get-totp",
-  /** Save new item */
-  SET_ITEM: "set-item",
+  /** Create new item */
+  CREATE_ITEM: "create-item",
+  /** Update existing item */
+  UPDATE_ITEM: "update-item",
   /** Get password generator configuration */
   GET_PASSWORD_CONFIG: "get-password-config",
   /** Get all password generator presets */

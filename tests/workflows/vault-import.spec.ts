@@ -31,7 +31,7 @@ interface ApiResponse<T = unknown> {
   error?: string;
 }
 
-interface SetLoginResponse {
+interface CreateLoginResponse {
   entryId: string;
   title: string;
 }
@@ -181,10 +181,10 @@ test.describe("Vault Import/Export Workflow", () => {
     for (const entry of entries) {
       const response = (await sendRequestWithRetry(
         client,
-        HAEX_PASS_METHODS.SET_ITEM,
+        HAEX_PASS_METHODS.CREATE_ITEM,
         entry,
         { maxAttempts: 3, initialDelay: 1000 }
-      )) as ApiResponse<SetLoginResponse>;
+      )) as ApiResponse<CreateLoginResponse>;
 
       expect(response.success).toBe(true);
 
