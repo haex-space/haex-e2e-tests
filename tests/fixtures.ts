@@ -1631,10 +1631,15 @@ export class VaultAutomation {
     if (!this.sessionId) return;
 
     try {
-      await fetch(`${this.tauriDriverUrl}/session/${this.sessionId}`, {
-        method: "DELETE",
-        headers: this.buildHeaders(),
-      });
+      const config = VAULT_CONFIG[this.instance];
+      if (config.needsHostOverride) {
+        await this.httpRequest("DELETE", `/session/${this.sessionId}`);
+      } else {
+        await fetch(`${this.tauriDriverUrl}/session/${this.sessionId}`, {
+          method: "DELETE",
+          headers: this.buildHeaders(),
+        });
+      }
       console.log(`[E2E] Terminated WebDriver session for Vault ${this.instance}`);
     } catch (error) {
       console.error(`[E2E] Failed to terminate session:`, error);
@@ -1728,17 +1733,25 @@ export class VaultAutomation {
       return "";
     }
 
-    const response = await fetch(`${this.tauriDriverUrl}/session/${this.sessionId}/screenshot`, {
-      method: "GET",
-    });
+    const config = VAULT_CONFIG[this.instance];
+    let base64Data: string;
 
-    if (!response.ok) {
-      console.error(`[E2E] Screenshot failed: ${response.status}`);
-      return "";
+    if (config.needsHostOverride) {
+      const data = await this.httpRequest("GET", `/session/${this.sessionId}/screenshot`);
+      base64Data = data.value as string;
+    } else {
+      const response = await fetch(`${this.tauriDriverUrl}/session/${this.sessionId}/screenshot`, {
+        method: "GET",
+      });
+
+      if (!response.ok) {
+        console.error(`[E2E] Screenshot failed: ${response.status}`);
+        return "";
+      }
+
+      const data = await response.json();
+      base64Data = data.value;
     }
-
-    const data = await response.json();
-    const base64Data = data.value;
 
     // Save to /tmp with timestamp
     const timestamp = Date.now();
