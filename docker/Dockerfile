@@ -114,8 +114,10 @@ RUN jq '.app.security.csp["connect-src"] += ["http://sync-kong:8000", "http://sy
 
 RUN pnpm install
 
-# Build Nuxt for production - assets will be embedded in Tauri binary
-RUN pnpm build
+# Generate static Nuxt assets (SSG) - Tauri embeds these into the binary.
+# Note: `cargo tauri build` also runs `pnpm generate` via beforeBuildCommand,
+# but we run it here first so the prebuilt-binary path has assets available too.
+RUN pnpm generate
 
 # Build Tauri binary OR use pre-built one
 # If USE_PREBUILT_VAULT=true and pre-built binary exists, skip the cargo build
