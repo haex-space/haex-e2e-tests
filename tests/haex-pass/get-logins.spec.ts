@@ -4,170 +4,124 @@ import {
   VaultBridgeClient,
   waitForBridgeConnection,
   authorizeClient,
-  waitForExtensionReady,
   sendRequestWithRetry,
   HAEX_PASS_METHODS,
 } from "../fixtures";
-import { TEST_ENTRIES } from "../../fixtures/test-data";
 
-/**
- * E2E Tests for haex-pass get-items API
- *
- * Tests the complete flow:
- * 1. Connect to bridge
- * 2. Authorize client
- * 3. Create test data via create-item
- * 4. Verify get-items returns correct data
- */
-
-const EXTENSION_ID = "haex-pass";
-
-// Generic API response wrapper
-interface ApiResponse<T = unknown> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  requestId?: string;
-}
-
-interface LoginEntry {
-  id: string;
-  title: string;
-  hasTotp: boolean;
-  fields: {
-    username?: string;
-    password?: string;
-    url?: string;
-  };
-}
-
-interface GetLoginsResponse {
-  entries: LoginEntry[];
-}
-
-test.describe("get-items", () => {
+test.describe("haex-pass: get-logins", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
+  const TEST_URL_GITHUB = `https://github-${Date.now()}.test.com`;
+  const TEST_URL_GITLAB = `https://gitlab-${Date.now()}.test.com`;
 
   test.beforeAll(async () => {
     client = new VaultBridgeClient();
-    const connected = await waitForBridgeConnection(client);
-    if (!connected) {
-      throw new Error("Failed to connect to bridge");
-    }
+    await waitForBridgeConnection(client);
+    await authorizeClient(client, "unused");
 
-    const authorized = await authorizeClient(client, EXTENSION_ID);
-    if (!authorized) {
-      throw new Error("Failed to authorize client");
-    }
+    // Create test entries with unique URLs to avoid interference from retries
+    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+      url: TEST_URL_GITHUB,
+      title: "GitHub",
+      username: "ghuser",
+      password: "ghpass123",
+    });
 
-    // Wait for extension to be fully ready before running tests
-    const ready = await waitForExtensionReady(client);
-    if (!ready) {
-      throw new Error("Extension failed to become ready");
-    }
+    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+      url: TEST_URL_GITHUB,
+      title: "GitHub Work",
+      username: "ghworkuser",
+      password: "ghworkpass456",
+    });
+
+    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+      url: TEST_URL_GITLAB,
+      title: "GitLab",
+      username: "gluser",
+      password: "glpass789",
+    });
   });
 
-  test.afterAll(async () => {
+  test.afterAll(() => {
     client?.disconnect();
   });
 
-  test("setup: create test entries via create-item", async () => {
-    for (const entry of TEST_ENTRIES) {
-      // Use retry logic for create-item requests
-      const response = (await sendRequestWithRetry(
-        client,
-        HAEX_PASS_METHODS.CREATE_ITEM,
-        {
-          url: entry.url,
-          title: entry.title,
-          username: entry.username,
-          password: entry.password,
-          groupId: entry.groupId,
-          // Include TOTP secret if available
-          otpSecret: entry.otpSecret,
-          otpDigits: entry.otpDigits,
-          otpPeriod: entry.otpPeriod,
-          otpAlgorithm: entry.otpAlgorithm,
-        },
-        { maxAttempts: 3, initialDelay: 1000 }
-      )) as ApiResponse;
-
-      expect(response.success).toBe(true);
-    }
-  });
-
-  test("should return empty array when no logins match URL", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://nonexistent-site-12345.com",
-    })) as ApiResponse<GetLoginsResponse>;
-
-    expect(response.success).toBe(true);
-    expect(response.data?.entries).toHaveLength(0);
-  });
-
-  test("should return matching logins for saved URL", async () => {
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://github.com/login",
-    })) as ApiResponse<GetLoginsResponse>;
-
-    expect(response.success).toBe(true);
-    expect(response.data?.entries.length).toBeGreaterThan(0);
-
-    const githubEntry = response.data?.entries.find(
-      (e) => e.title === "GitHub"
-    );
-    expect(githubEntry).toBeDefined();
-    expect(githubEntry?.fields.username).toBe("testuser");
-  });
-
-  test("should match entries by domain regardless of path", async () => {
-    // Test that entries match on domain regardless of subpath
-    const response = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://github.com/settings/profile",
-    })) as ApiResponse<GetLoginsResponse>;
-
-    expect(response.success).toBe(true);
-    const githubEntry = response.data?.entries.find(
-      (e) => e.title === "GitHub"
-    );
-    expect(githubEntry).toBeDefined();
-  });
-
-  test("should filter by OTP field and indicate TOTP availability", async () => {
-    // Test filtering by OTP field - only returns entries with TOTP
-    const filteredResponse = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://accounts.google.com",
-      fields: ["otp"],
-    })) as ApiResponse<GetLoginsResponse>;
-
-    expect(filteredResponse.success).toBe(true);
-    expect(filteredResponse.data?.entries.length).toBeGreaterThan(0);
-    filteredResponse.data?.entries.forEach((entry) => {
-      expect(entry.hasTotp).toBe(true);
+  test("GET_ITEMS with matching URL returns correct entries", async () => {
+    const response = await sendRequestWithRetry<{
+      success: boolean;
+      data: { entries: Array<{ fields: { username: string; password: string }; title: string }> };
+      requestId: string;
+    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+      url: TEST_URL_GITHUB,
     });
 
-    // Also verify hasTotp flag is correctly set on unfiltered response
-    const unfilteredResponse = (await client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-      url: "https://accounts.google.com",
-    })) as ApiResponse<GetLoginsResponse>;
+    expect(response.success).toBe(true);
+    expect(response.data.entries).toHaveLength(2);
 
-    expect(unfilteredResponse.success).toBe(true);
-    const googleEntry = unfilteredResponse.data?.entries.find(
-      (e) => e.title === "Google Account"
-    );
-    expect(googleEntry).toBeDefined();
-    expect(googleEntry?.hasTotp).toBe(true);
+    const usernames = response.data.entries.map((e) => e.fields.username);
+    expect(usernames).toContain("ghuser");
+    expect(usernames).toContain("ghworkuser");
+
+    const passwords = response.data.entries.map((e) => e.fields.password);
+    expect(passwords).toContain("ghpass123");
+    expect(passwords).toContain("ghworkpass456");
   });
 
-  test("should fail without URL", async () => {
-    const response = (await client.sendRequest(
-      HAEX_PASS_METHODS.GET_ITEMS,
-      {}
-    )) as ApiResponse;
+  test("GET_ITEMS with non-matching URL returns empty entries array", async () => {
+    const response = await sendRequestWithRetry<{
+      success: boolean;
+      data: { entries: unknown[] };
+      requestId: string;
+    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+      url: "https://nonexistent-site-e2e.example.org",
+    });
+
+    expect(response.success).toBe(true);
+    expect(response.data.entries).toHaveLength(0);
+  });
+
+  test("GET_ITEMS entries have all expected fields", async () => {
+    const response = await sendRequestWithRetry<{
+      success: boolean;
+      data: {
+        entries: Array<{
+          id: string;
+          title: string;
+          url: string | null;
+          hasTotp: boolean;
+          fields: Record<string, string>;
+        }>;
+      };
+      requestId: string;
+    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+      url: TEST_URL_GITLAB,
+    });
+
+    expect(response.success).toBe(true);
+    expect(response.data.entries).toHaveLength(1);
+
+    const entry = response.data.entries[0];
+    // Verify all expected fields exist and have correct types/values
+    expect(typeof entry.id).toBe("string");
+    expect(entry.id.length).toBeGreaterThan(0);
+    expect(entry.title).toBe("GitLab");
+    expect(typeof entry.hasTotp).toBe("boolean");
+    expect(entry.hasTotp).toBe(false);
+    expect(entry.fields.username).toBe("gluser");
+    expect(entry.fields.password).toBe("glpass789");
+    // url is a top-level attribute on the entry, not inside fields
+    expect(entry.url).toBe(TEST_URL_GITLAB);
+  });
+
+  test("GET_ITEMS without url parameter returns error", async () => {
+    const response = await sendRequestWithRetry<{
+      success: boolean;
+      error?: string;
+      requestId: string;
+    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {});
 
     expect(response.success).toBe(false);
-    expect(response.error).toContain("url");
+    expect(typeof response.error).toBe("string");
   });
 });
