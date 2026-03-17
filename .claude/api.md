@@ -165,6 +165,31 @@
 
 ## Tauri Commands (via WebDriver)
 
+### create_encrypted_database
+
+**Args:**
+```json
+{
+  "vaultName": "string",
+  "key": "string",
+  "vaultId": null
+}
+```
+
+**Response:** `string` - Vault file path (NOT a UUID), e.g. `/config/.local/share/space.haex.vault/vaults/my-vault.db`
+
+### open_encrypted_database
+
+**Args:**
+```json
+{
+  "vaultPath": "string",
+  "key": "string"
+}
+```
+
+**Response:** `string` - Vault file path (same format as create_encrypted_database)
+
 ### get_pending_authorizations
 
 **Response:**

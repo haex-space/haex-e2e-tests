@@ -466,6 +466,28 @@ done
 
 ---
 
+### Extension Handler nicht registriert in nativen Webviews (GELÖST)
+**Problem:** Wenn eine Extension über den windowManager geöffnet wird, registriert sie keine External-Request-Handler. Requests geben "No handler registered for action: ..." zurück.
+
+**Root Cause:**
+Der `extensionBroadcastStore.setupEventListeners()` wurde erst beim Rendern der ersten `extension-frame.vue` Komponente aufgerufen. Wenn ein External Request (z.B. von der Browser-Extension via WebSocket Bridge) eintraf bevor ein Extension-Fenster gerendert wurde, konnte er nicht an die Extension weitergeleitet werden.
+
+**Lösung (in haex-vault `src/pages/vault.vue`):**
+`setupEventListeners()` des `extensionBroadcastStore` wird jetzt in `onMounted()` direkt nach `loadExtensionsAsync()` aufgerufen — nicht erst beim Rendern eines Extension-Fensters. Damit sind die Event-Listener bereit sobald der Vault geöffnet wird.
+
+```typescript
+// vault.vue onMounted()
+await Promise.all([loadExtensionsAsync(), readNotificationsAsync()])
+setupBroadcastListeners()  // <-- Fix: Early initialization
+```
+
+**Zusätzliches Problem: `cargo build` vs `cargo tauri build`:**
+Beim manuellen Rebuild im Container muss `cargo tauri build --no-bundle` verwendet werden, nicht `cargo build --release`. Nur `cargo tauri build` führt den `beforeBuildCommand` (`pnpm generate`) aus und embedded die Frontend-Assets korrekt. Mit `cargo build --release` bleiben die Assets nicht embedded und die App zeigt nur `about:blank`.
+
+**Status:** ✅ GELÖST
+
+---
+
 ### Sync Tests - Fehlende Tauri Commands (BEKANNT)
 **Problem:** Alle Sync-Tests in `tests/sync/realtime-sync.spec.ts` schlagen fehl mit:
 ```
@@ -512,22 +534,23 @@ Entfernung der `pkill -f tauri-driver` Zeile aus `stop-all.sh`:
 
 ---
 
-### haex-pass API hat keine DELETE/UPDATE Methoden
-**Problem:** Die External API von haex-pass bietet nur lesende und erstellende Operationen, keine Lösch- oder Update-Methoden.
+### haex-pass API: SET_ITEM für Create und Update (GELÖST)
+**Problem:** Die Extension verwendet "set-item" für sowohl Create als auch Update. Die Test-Konstanten hatten fälschlicherweise separate "create-item" und "update-item" Methoden definiert.
 
 **Verfügbare Methoden:**
 - `GET_ITEMS` - Einträge abrufen
 - `GET_TOTP` - TOTP-Code generieren
-- `SET_ITEM` - Neuen Eintrag erstellen (kein Update!)
+- `SET_ITEM` - Eintrag erstellen oder aktualisieren (mit `id` Feld = Update, ohne = Create)
 - `GET_PASSWORD_CONFIG` - Passwort-Generator-Konfiguration
 - `GET_PASSWORD_PRESETS` - Passwort-Generator-Presets
 - `PASSKEY_*` - WebAuthn-Methoden
 
 **Fehlend:**
 - `DELETE_ITEM` - Eintrag löschen
-- `UPDATE_ITEM` - Eintrag aktualisieren
 
-**Status:** ❌ API-Limitierung in haex-pass selbst, nicht im Test-Framework
+**Lösung:** `CREATE_ITEM` und `UPDATE_ITEM` in `haex-pass-api.ts` als deprecated Aliase für `SET_ITEM` ("set-item") definiert.
+
+**Status:** GELÖST
 
 ---
 
