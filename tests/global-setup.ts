@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import { spawn, execSync } from "node:child_process";
+import { spawn, execSync, execFileSync } from "node:child_process";
 import { setupMarketplace } from "./marketplace-setup";
 
 // tauri-driver WebDriver URL
@@ -348,6 +348,48 @@ async function installHaexPassExtension(sessionId: string): Promise<void> {
     console.log("[Setup] haex-pass extension installed with ID:", extensionId);
     fs.writeFileSync(EXTENSION_ID_FILE, extensionId);
     console.log("[Setup] Extension ID saved to", EXTENSION_ID_FILE);
+
+    // Open the extension window via the Pinia windowManager so its SDK initializes
+    // and registers external request handlers (get-items, create-item, get-totp, etc.)
+    // Force iframe mode: native webviews don't register handlers correctly (known issue).
+    try {
+      const openScript = `
+        const cb = arguments[arguments.length - 1];
+        try {
+          const app = document.querySelector('#__nuxt')?.__vue_app__;
+          if (!app) { cb('no-app'); return; }
+          const pinia = app.config.globalProperties.$pinia;
+          if (!pinia) { cb('no-pinia'); return; }
+
+          const wm = pinia._s.get('windowManager');
+          if (!wm) { cb('no-wm'); return; }
+          await wm.openWindowAsync({
+            sourceId: '${extensionId}',
+            type: 'extension',
+            title: 'haex-pass',
+          });
+          cb('opened');
+        } catch (e) { cb('error:' + e.message); }
+      `;
+      const openRes = await fetch(
+        `${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ script: openScript, args: [] }),
+        }
+      );
+      const openData = await openRes.json();
+      console.log("[Setup] haex-pass window opened:", openData.value);
+
+      if (openData.value?.startsWith("opened")) {
+        // Wait for extension to initialize (SDK boot, DB migrations, handler registration)
+        console.log("[Setup] Waiting for haex-pass to initialize...");
+        await new Promise(resolve => setTimeout(resolve, 8000));
+      }
+    } catch (error) {
+      console.log("[Setup] Warning: Could not open haex-pass window:", (error as Error).message);
+    }
   } catch (error) {
     const errorMsg = String(error);
     console.log("[Setup] Extension installation error:", errorMsg);
@@ -634,19 +676,92 @@ async function initializeTestVault(sessionId: string): Promise<void> {
 
   const existingVault = vaults.find((v) => v.name === TEST_VAULT_NAME);
 
-  if (existingVault) {
-    console.log("[Setup] Test vault already exists, opening it...");
-    await invokeTauriCommand(sessionId, "open_encrypted_database", {
-      vaultPath: existingVault.path,
-      key: TEST_VAULT_PASSWORD,
-    });
-  } else {
+  if (!existingVault) {
+    // Create vault if it doesn't exist. create_encrypted_database creates AND opens it.
     console.log("[Setup] Creating new test vault...");
     await invokeTauriCommand(sessionId, "create_encrypted_database", {
       vaultName: TEST_VAULT_NAME,
       key: TEST_VAULT_PASSWORD,
       vaultId: null,
     });
+    // Close it again so the UI flow can open it properly (with Pinia store + extensions)
+    await invokeTauriCommand(sessionId, "close_database", {}).catch(() => {});
+    console.log("[Setup] Test vault created (will be opened via UI)");
+  } else {
+    console.log("[Setup] Test vault already exists (will be opened via UI)");
+  }
+
+  // Open the vault through the real UI flow so the full Nuxt lifecycle runs:
+  // vault picker → password dialog → vaultStore.openAsync() → router push →
+  // vault.vue mount → loadExtensionsAsync()
+  // This is essential for extensions to register their request handlers.
+  console.log("[Setup] Opening vault through UI...");
+  const clickScript = `
+    const cb = arguments[arguments.length - 1];
+    const btns = [...document.querySelectorAll('button,[role=button]')];
+    const vaultBtn = btns.find(b => b.textContent?.trim() === '${TEST_VAULT_NAME}');
+    if (vaultBtn) { vaultBtn.click(); cb('clicked'); }
+    else { cb('not-found:' + btns.map(b=>b.textContent?.trim()).filter(Boolean).join(',')); }
+  `;
+  const clickRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ script: clickScript, args: [] }),
+  });
+  const clickData = await clickRes.json();
+  console.log("[Setup] Vault button click:", clickData.value);
+
+  if (clickData.value === "clicked") {
+    // Wait for password dialog
+    await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Type password using WebDriver sendKeys (more reliable than dispatchEvent)
+    const pwInputRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/element`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ using: "css selector", value: 'input[type="password"]' }),
+    });
+    const pwInputData = await pwInputRes.json();
+    const inputId = pwInputData.value?.ELEMENT || pwInputData.value?.["element-6066-11e4-a52e-4f735466cecf"];
+
+    if (inputId) {
+      await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/element/${inputId}/value`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: TEST_VAULT_PASSWORD }),
+      });
+
+      // Click Unlock button
+      const unlockScript = `
+        const cb = arguments[arguments.length - 1];
+        const btns = [...document.querySelectorAll('button')];
+        const btn = btns.find(b => b.textContent?.trim() === 'Unlock' || b.textContent?.trim() === 'Entsperren');
+        if (btn && !btn.disabled) { btn.click(); cb('unlocked'); }
+        else { cb('not-found-or-disabled'); }
+      `;
+      const unlockRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script: unlockScript, args: [] }),
+      });
+      const unlockData = await unlockRes.json();
+      console.log("[Setup] Unlock click:", unlockData.value);
+    }
+
+    // Wait for navigation to desktop page and extensions to load
+    const maxWait = 30000;
+    const startTime = Date.now();
+    while (Date.now() - startTime < maxWait) {
+      const checkRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script: 'const cb=arguments[arguments.length-1]; cb(location.href);', args: [] }),
+      });
+      const url = (await checkRes.json()).value;
+      if (url?.includes("/vault/")) {
+        console.log("[Setup] Desktop page reached:", url);
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    // Wait for extensions to finish loading
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
   console.log("[Setup] Test vault initialized and ready");
@@ -665,6 +780,21 @@ async function globalSetup() {
     await setupMarketplace();
   } catch (error) {
     console.log("[Setup] Marketplace setup failed (may not be available):", (error as Error).message);
+  }
+
+  // Seed 'free' tier in sync-server DB if missing.
+  // The Drizzle migration creates the tiers table but doesn't insert data.
+  // Without a tier, quota checks fail (maxBytes=0 → over-quota on first push).
+  try {
+    const seedResult = execFileSync("psql", [
+      "-U", "postgres",
+      "-h", "sync-db",
+      "-d", "postgres",
+      "-c", "INSERT INTO public.tiers (name, max_storage_bytes, max_spaces, description) VALUES ('free', '104857600', 3, 'Free tier - 100MB') ON CONFLICT (name) DO NOTHING",
+    ], { encoding: "utf-8", timeout: 5000 }).trim();
+    console.log("[Setup] Tier seeding:", seedResult);
+  } catch (error) {
+    console.log("[Setup] Tier seeding skipped:", (error as Error).message?.substring(0, 100));
   }
 
   // Wait for X11 display to be ready before starting screen recording

@@ -627,9 +627,39 @@ export class SqlHelpers {
    * ```
    */
   async getTableInfo(tableName: string): Promise<SqlResultSet> {
-    return this.vault.invokeTauriCommand<SqlResultSet>("sql_select", {
-      sql: `PRAGMA table_info(${tableName})`,
-      params: [],
+    // PRAGMA table_info() may not work through sql_select on some vault versions.
+    // Fall back to parsing the CREATE TABLE statement from sqlite_master.
+    try {
+      const result = await this.vault.invokeTauriCommand<SqlResultSet>("sql_select", {
+        sql: `PRAGMA table_info(${tableName})`,
+        params: [],
+      });
+      if (result.length > 0) return result;
+    } catch {
+      // PRAGMA not supported through sql_select — fall back below
+    }
+
+    // Fallback: parse column names from sqlite_master CREATE TABLE sql
+    const masterResult = await this.vault.invokeTauriCommand<SqlResultSet>("sql_select", {
+      sql: "SELECT sql FROM sqlite_master WHERE type='table' AND name = ?",
+      params: [tableName],
+    });
+    if (masterResult.length === 0) return [];
+
+    const createSql = masterResult[0]![0] as string;
+    // Extract column definitions from CREATE TABLE statement
+    const match = createSql.match(/\((.+)\)/s);
+    if (!match) return [];
+
+    const columnDefs = match[1]!.split(",").map((s) => s.trim());
+    return columnDefs.map((def, idx) => {
+      const parts = def.split(/\s+/);
+      const name = parts[0] ?? "";
+      const type = parts[1] ?? "";
+      const notnull = def.toUpperCase().includes("NOT NULL") ? 1 : 0;
+      const pk = def.toUpperCase().includes("PRIMARY KEY") ? 1 : 0;
+      // Return format compatible with PRAGMA table_info: [cid, name, type, notnull, dflt_value, pk]
+      return [idx, name, type, notnull, null, pk];
     });
   }
 }

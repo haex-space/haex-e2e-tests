@@ -13,9 +13,9 @@ export const HAEX_PASS_METHODS = {
   GET_ITEMS: "get-items",
   /** Get TOTP code for an entry */
   GET_TOTP: "get-totp",
-  /** Create new item */
+  /** Create a new item */
   CREATE_ITEM: "create-item",
-  /** Update existing item */
+  /** Update an existing item */
   UPDATE_ITEM: "update-item",
   /** Get password generator configuration */
   GET_PASSWORD_CONFIG: "get-password-config",

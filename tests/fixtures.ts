@@ -614,7 +614,7 @@ export class VaultBridgeClient {
    * Update an existing item entry
    */
   async updateItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, entry);
+    return this.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, entry);
   }
 
   /**
@@ -1416,9 +1416,10 @@ export class VaultAutomation {
   /**
    * Block a client authorization (deny)
    */
-  async denyClient(clientId: string): Promise<void> {
+  async denyClient(clientId: string, clientName = "Unknown Client"): Promise<void> {
     await this.invokeTauriCommand(TAURI_COMMANDS.externalBridge.clientBlock, {
       clientId,
+      clientName,
       remember: false, // Only block for this session
     });
   }
