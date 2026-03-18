@@ -322,9 +322,9 @@ jobs:
       fail-fast: false
       matrix:
         shard:
-          - "workflows"    # vault-lifecycle, vault-import, remote-sync
+          - "workflows"    # vault-lifecycle, sync, spaces, storage, identity-auth, extensions
           - "haex-pass"    # get-logins, get-totp, authorization-flow, set-login
-          - "other"        # database, ui, limits
+          - "other"        # database, ui
 
     outputs:
       success: ${{ steps.test.outcome == 'success' }}
@@ -460,13 +460,13 @@ jobs:
           # Determine test directory based on shard
           case "${{ matrix.shard }}" in
             "workflows")
-              TEST_DIR="tests/workflows"
+              TEST_DIR="tests/vault-lifecycle tests/sync tests/spaces tests/storage tests/identity-auth tests/extensions"
               ;;
             "haex-pass")
               TEST_DIR="tests/haex-pass"
               ;;
             "other")
-              TEST_DIR="tests/database tests/ui tests/limits"
+              TEST_DIR="tests/database tests/ui"
               ;;
           esac
 
