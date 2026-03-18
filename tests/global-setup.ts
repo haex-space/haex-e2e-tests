@@ -696,21 +696,62 @@ async function initializeTestVault(sessionId: string): Promise<void> {
   // vault.vue mount → loadExtensionsAsync()
   // This is essential for extensions to register their request handlers.
   console.log("[Setup] Opening vault through UI...");
+  // The vault list uses UiButtonContext which wraps the actual <button> inside
+  // <div> → <span> (UContextMenu) → <span> (UiButton) → <UTooltip> → <button data-slot="base">.
+  // The vault name text lives in a <span class="block"> inside the button.
+  // We use a TreeWalker to find any text node containing the vault name,
+  // then walk up to the nearest <button> ancestor and click it.
   const clickScript = `
     const cb = arguments[arguments.length - 1];
+    const vaultName = '${TEST_VAULT_NAME}';
+    // Strategy 1: Find button with data-slot="base" whose textContent includes the vault name
+    const slotBtns = [...document.querySelectorAll('button[data-slot="base"]')];
+    const slotMatch = slotBtns.find(b => b.textContent?.trim().includes(vaultName));
+    if (slotMatch) { slotMatch.click(); cb('clicked'); return; }
+    // Strategy 2: Find any element containing the vault name text and click closest button
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let node;
+    while (node = walker.nextNode()) {
+      if (node.textContent?.trim() === vaultName) {
+        const btn = node.parentElement?.closest('button');
+        if (btn) { btn.click(); cb('clicked'); return; }
+        // No button ancestor - click the parent element directly
+        node.parentElement?.click();
+        cb('clicked-parent');
+        return;
+      }
+    }
+    // Strategy 3: Fallback - broad button search (original approach)
     const btns = [...document.querySelectorAll('button,[role=button]')];
-    const vaultBtn = btns.find(b => b.textContent?.trim() === '${TEST_VAULT_NAME}');
-    if (vaultBtn) { vaultBtn.click(); cb('clicked'); }
-    else { cb('not-found:' + btns.map(b=>b.textContent?.trim()).filter(Boolean).join(',')); }
+    const vaultBtn = btns.find(b => b.textContent?.trim() === vaultName);
+    if (vaultBtn) { vaultBtn.click(); cb('clicked'); return; }
+    cb('not-found:' + btns.map(b=>b.textContent?.trim()).filter(Boolean).join(','));
   `;
-  const clickRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ script: clickScript, args: [] }),
-  });
-  const clickData = await clickRes.json();
-  console.log("[Setup] Vault button click:", clickData.value);
 
-  if (clickData.value === "clicked") {
+  // Retry the click script a few times - the vault list may take a moment to render.
+  // Between retries, reload the page to re-trigger onMounted → syncLastVaultsAsync().
+  // This is needed because onMounted only runs once: if the vault was created via
+  // Tauri command AFTER the page loaded, the list stays empty.
+  let clickData: { value: string } = { value: "" };
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) {
+      console.log(`[Setup] Vault button not found, reloading page (${attempt + 1}/5)...`);
+      await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/refresh`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+    const clickRes = await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/execute/async`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ script: clickScript, args: [] }),
+    });
+    clickData = await clickRes.json();
+    console.log("[Setup] Vault button click:", clickData.value);
+    if (clickData.value === "clicked" || clickData.value === "clicked-parent") break;
+  }
+
+  if (clickData.value === "clicked" || clickData.value === "clicked-parent") {
     // Wait for password dialog
     await new Promise(resolve => setTimeout(resolve, 1500));
 
