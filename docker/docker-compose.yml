@@ -113,6 +113,42 @@ services:
     networks:
       - e2e-network
 
+  # Supabase Realtime (WebSocket subscriptions for sync changes)
+  sync-realtime:
+    image: supabase/realtime:v2.68.0
+    container_name: realtime.haex_e2e_sync
+    hostname: realtime.haex_e2e_sync
+    restart: unless-stopped
+    depends_on:
+      sync-db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      DB_HOST: sync-db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: postgres
+      DB_NAME: postgres
+      DB_AFTER_CONNECT_QUERY: 'SET search_path TO _realtime'
+      DB_ENC_KEY: supabaserealtime
+      API_JWT_SECRET: super-secret-jwt-token-with-at-least-32-characters-long
+      SECRET_KEY_BASE: UpNVntn3cDxHJpq99YMc1T1AQgQpc8kfYTuRgBiYa15BLrx8etQoXz3gZv1/u2oq
+      ERL_AFLAGS: -proto_dist inet_tcp
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
+      APP_NAME: realtime
+      SEED_SELF_HOST: "true"
+      SELF_HOST_TENANT_NAME: realtime
+      RLS_POLL_INTERVAL: "60"
+    healthcheck:
+      test: ["CMD", "bash", "-c", "printf \\\\0 > /dev/tcp/0.0.0.0/4000"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks:
+      - e2e-network
+
   # haex-sync-server - Built from the actual repository
   sync-server:
     build:
