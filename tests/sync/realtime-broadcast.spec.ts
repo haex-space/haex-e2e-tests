@@ -7,6 +7,7 @@ import {
   createAdminUser,
   createVaultKey,
   pushChanges,
+  pullChanges,
   makeSyncChange,
 } from "../helpers";
 
