@@ -138,7 +138,7 @@ test.describe("identity-auth: token lifecycle", () => {
         deviceId: `e2e-auth-test-${Date.now()}`,
       }),
     ]);
-    expect(pushRes.status).toBe("ok");
+    expect(pushRes.count).toBeDefined();
 
     // Push with invalid token fails
     const failRes = await fetch(`${baseUrl}/sync/push`, {

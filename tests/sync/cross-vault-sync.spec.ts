@@ -87,7 +87,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
         hlcTimestamp: `2026-03-21T10:00:00.000Z:00000001:${deviceA}`,
       }),
     ]);
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
   });
 
   test("user B cannot pull from user A's vault", async () => {
@@ -116,7 +116,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
         }),
       ]);
       // If it doesn't throw, it should fail
-      expect(res.status).not.toBe("ok");
+      expect(res.count).toBeUndefined();
     } catch (error) {
       // Expected: push should fail with 403 or similar
       expect(error).toBeDefined();
@@ -163,7 +163,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
         encryptedValue: btoa("value-from-device-a"),
       }),
     ]);
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
   });
 
   test("user A pulls from device B and sees device A's changes", async () => {
@@ -190,7 +190,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
         encryptedValue: btoa("value-from-device-b"),
       }),
     ]);
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
 
     // Pull should show device B's value (later HLC wins)
     const pulled = await pullChanges(userA.accessToken, vaultIdA);

@@ -44,7 +44,7 @@ test.describe("sync: realtime broadcast notifications", () => {
         deviceId,
       }),
     ]);
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
   });
 
   test("supabase realtime broadcast channel can be subscribed", async () => {
@@ -136,7 +136,7 @@ test.describe("sync: realtime broadcast notifications", () => {
     );
 
     const pushRes = await pushChanges(accessToken, vaultId, changes);
-    expect(pushRes.status).toBe("ok");
+    expect(pushRes.count).toBeDefined();
 
     // Pull all changes back
     const pulled = await pullChanges(accessToken, vaultId);

@@ -148,7 +148,7 @@ test.describe("storage: peer share management via sync", () => {
       deviceA,
     );
 
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
   });
 
   test("user A can pull back their own shares", async () => {
@@ -234,7 +234,7 @@ test.describe("storage: peer share management via sync", () => {
       deviceA,
       `2026-03-21T14:21:00.000Z:00000001:${deviceA}`,
     );
-    expect(delRes.status).toBe("ok");
+    expect(delRes.count).toBeDefined();
   });
 
   test("share deleted on device A is tombstoned when pulled from device B", async () => {
@@ -263,7 +263,7 @@ test.describe("storage: peer share management via sync", () => {
       deviceB,
       `2026-03-21T14:31:00.000Z:00000001:${deviceB}`,
     );
-    expect(delRes.status).toBe("ok");
+    expect(delRes.count).toBeDefined();
 
     // Pull and verify tombstone exists
     const pulled = await pullChanges(userA.accessToken, vaultIdA);
@@ -298,7 +298,7 @@ test.describe("storage: peer share management via sync", () => {
         })),
       }),
     ]);
-    expect(res.status).toBe("ok");
+    expect(res.count).toBeDefined();
 
     // Pull from device B — should see device A's registration
     const pulled = await pullChanges(userA.accessToken, vaultIdA, {
