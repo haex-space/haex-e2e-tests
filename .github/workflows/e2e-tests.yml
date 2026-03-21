@@ -434,6 +434,24 @@ jobs:
 
           docker compose -f docker/docker-compose.yml ps
 
+          # Dump container logs if any service is unhealthy
+          if [ "$SYNC_STATUS" != "healthy" ] || [ "$MARKETPLACE_STATUS" != "healthy" ]; then
+            echo "::error::Services failed to become healthy! Dumping logs..."
+            if [ "$SYNC_STATUS" != "healthy" ]; then
+              echo "=== sync-server logs ==="
+              docker logs haex_e2e_sync_server 2>&1 || true
+              echo "=== sync-db logs ==="
+              docker logs haex_e2e_sync_db 2>&1 | tail -30 || true
+              echo "=== sync-kong logs ==="
+              docker logs haex_e2e_sync_kong 2>&1 | tail -20 || true
+            fi
+            if [ "$MARKETPLACE_STATUS" != "healthy" ]; then
+              echo "=== marketplace logs ==="
+              docker logs haex_e2e_marketplace 2>&1 || true
+            fi
+            exit 1
+          fi
+
       - name: Run E2E tests (${{ matrix.shard }})
         id: test
         env:
