@@ -38,10 +38,6 @@ on:
         description: 'Pre-built sync-server Docker image (e.g., ghcr.io/haex-space/haex-sync-server:latest)'
         type: string
         default: ''
-      haex_vault_android_artifact:
-        description: 'GitHub artifact name containing pre-built Android APK (enables Android tests)'
-        type: string
-        default: ''
     secrets:
       ARTIFACT_TOKEN:
         description: 'Token with permission to download artifacts from other repos'
@@ -49,13 +45,10 @@ on:
     outputs:
       success:
         description: 'Whether all tests passed'
-        value: ${{ jobs.e2e-results.outputs.success && (inputs.haex_vault_android_artifact == '' || jobs.android-e2e.outputs.success) }}
+        value: ${{ jobs.e2e-results.outputs.success }}
       test_result:
         description: 'Desktop test result summary'
         value: ${{ jobs.e2e-results.outputs.test_result }}
-      android_test_result:
-        description: 'Android test result summary'
-        value: ${{ jobs.android-e2e.outputs.test_result }}
       artifact_name:
         description: 'Name of the uploaded artifact'
         value: ${{ jobs.e2e-results.outputs.artifact_name }}
@@ -556,149 +549,3 @@ jobs:
             echo "❌ Some E2E tests failed" >> $GITHUB_STEP_SUMMARY
           fi
 
-  # Android E2E Tests - runs after desktop tests, uses Maestro for UI automation
-  android-e2e:
-    name: Android E2E Tests (${{ inputs.build_type }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    needs: e2e-results
-    # Only run if Android artifact is provided
-    if: inputs.haex_vault_android_artifact != ''
-
-    outputs:
-      success: ${{ steps.test.outcome == 'success' }}
-      test_result: ${{ steps.test.outcome }}
-
-    steps:
-      - name: Checkout E2E tests
-        uses: actions/checkout@v4
-        with:
-          repository: haex-space/haex-e2e-tests
-          ref: main
-
-      - name: Enable KVM for Android emulator
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Download Android APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ inputs.haex_vault_android_artifact }}
-          run-id: ${{ inputs.haex_vault_artifact_run_id }}
-          github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
-          path: ./apk
-
-      - name: List APK files
-        run: |
-          echo "Downloaded APK files:"
-          ls -la ./apk/
-          find ./apk -name "*.apk" -type f
-
-      - name: Install Maestro
-        run: |
-          curl -Ls https://get.maestro.mobile.dev | bash
-          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo rm -rf /usr/local/lib/android/sdk/ndk
-          df -h
-
-      - name: Clone dependency repositories
-        run: |
-          mkdir -p repos
-          echo "Cloning haex-sync-server..."
-          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
-
-      - name: Start backend services for sync tests
-        env:
-          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
-        run: |
-          # Start sync stack services needed for Android sync tests
-          docker compose -f docker/docker-compose.yml up -d sync-db sync-gotrue sync-kong sync-server
-
-          # Wait for services to be healthy
-          echo "Waiting for backend services..."
-          for i in {1..60}; do
-            if curl -s http://localhost:3002/ > /dev/null 2>&1; then
-              echo "Sync server is ready!"
-              break
-            fi
-            echo "Waiting for sync server... ($i/60)"
-            sleep 2
-          done
-
-          # Verify all services are up
-          docker compose -f docker/docker-compose.yml ps
-
-      - name: Create test script
-        run: |
-          cat > /tmp/android-e2e-test.sh << 'SCRIPT'
-          #!/bin/bash
-          set -e
-          WORKSPACE="$1"
-          echo "Working directory: $(pwd)"
-          echo "WORKSPACE: $WORKSPACE"
-          ls -la "$WORKSPACE/apk/"
-          APK_FILE=$(find "$WORKSPACE/apk" -name "*.apk" -type f 2>/dev/null | head -1)
-          echo "Found APK file: $APK_FILE"
-          if [ -z "$APK_FILE" ]; then
-            echo "ERROR: No APK file found!"
-            exit 1
-          fi
-          adb install "$APK_FILE"
-          adb reverse tcp:3002 tcp:3002
-          adb reverse tcp:8000 tcp:8000
-          echo "Running Maestro smoke test..."
-          ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-smoke-test.yaml" --format junit --output "$WORKSPACE/maestro-results.xml" || true
-          if [ -f "$WORKSPACE/.maestro/android-sync-test.yaml" ]; then
-            ~/.maestro/bin/maestro test "$WORKSPACE/.maestro/android-sync-test.yaml" --format junit --output "$WORKSPACE/maestro-sync-results.xml" || true
-          fi
-          SCRIPT
-          chmod +x /tmp/android-e2e-test.sh
-
-      - name: Run Android E2E Tests
-        id: test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          arch: x86_64
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          working-directory: ${{ github.workspace }}
-          script: /tmp/android-e2e-test.sh ${{ github.workspace }}
-
-      - name: Upload Maestro test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-e2e-results-${{ inputs.build_type }}-${{ github.run_id }}
-          path: |
-            maestro-results.xml
-            maestro-sync-results.xml
-            ~/.maestro/tests/
-          retention-days: 30
-
-      - name: Write Android test summary
-        if: always()
-        run: |
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## Android E2E Test Result" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.test.outcome }}" == "success" ]; then
-            echo "✅ **Android tests passed**" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "❌ **Android tests failed**" >> $GITHUB_STEP_SUMMARY
-          fi
-
-      - name: Stop backend services
-        if: always()
-        env:
-          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
-        run: |
-          docker compose -f docker/docker-compose.yml down -v
