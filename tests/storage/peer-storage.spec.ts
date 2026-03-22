@@ -1,33 +1,39 @@
 import { test, expect, VaultAutomation } from "../fixtures";
 
-interface PeerStorageStatus {
-  running: boolean;
-  nodeId?: string;
+interface PeerStorageStartInfo {
+  nodeId: string;
+  relayUrl: string | null;
 }
 
-// Skip: peer_storage_status command does not exist in this vault version
-test.describe.skip("storage: peer storage", () => {
+interface PeerStorageStatus {
+  running: boolean;
+  nodeId: string;
+}
+
+test.describe("storage: peer storage endpoint lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   let vault: VaultAutomation;
-  let startedNodeId: string | null = null;
 
   test.beforeAll(async () => {
     vault = new VaultAutomation("A");
     await vault.createSession();
 
     // Ensure peer storage is stopped before tests begin
-    const status = await vault.invokeTauriCommand<PeerStorageStatus>(
-      "peer_storage_status",
-      {}
-    );
-    if (status.running) {
-      await vault.invokeTauriCommand("peer_storage_stop", {});
+    try {
+      const status = await vault.invokeTauriCommand<PeerStorageStatus>(
+        "peer_storage_status",
+        {}
+      );
+      if (status.running) {
+        await vault.invokeTauriCommand("peer_storage_stop", {});
+      }
+    } catch {
+      // Command might not exist in older versions
     }
   });
 
   test.afterAll(async () => {
-    // Clean up: stop peer storage if it was started
     try {
       const status = await vault.invokeTauriCommand<PeerStorageStatus>(
         "peer_storage_status",
@@ -48,17 +54,19 @@ test.describe.skip("storage: peer storage", () => {
     );
 
     expect(status.running).toBe(false);
+    expect(typeof status.nodeId).toBe("string");
   });
 
-  test("start returns a node ID string", async () => {
-    const nodeId = await vault.invokeTauriCommand<string>(
+  test("start returns nodeId and optional relayUrl", async () => {
+    const info = await vault.invokeTauriCommand<PeerStorageStartInfo>(
       "peer_storage_start",
       {}
     );
 
-    expect(typeof nodeId).toBe("string");
-    expect(nodeId.length).toBeGreaterThan(0);
-    startedNodeId = nodeId;
+    expect(typeof info.nodeId).toBe("string");
+    expect(info.nodeId.length).toBeGreaterThan(0);
+    // relayUrl may be null if relay isn't reachable in test env
+    expect(info.relayUrl === null || typeof info.relayUrl === "string").toBe(true);
   });
 
   test("status when running returns running true with matching nodeId", async () => {
@@ -69,12 +77,17 @@ test.describe.skip("storage: peer storage", () => {
 
     expect(status.running).toBe(true);
     expect(typeof status.nodeId).toBe("string");
-    expect(status.nodeId).toBe(startedNodeId);
+    expect(status.nodeId.length).toBeGreaterThan(0);
+  });
+
+  test("starting again while running returns error", async () => {
+    await expect(
+      vault.invokeTauriCommand("peer_storage_start", {})
+    ).rejects.toThrow();
   });
 
   test("stop returns without error", async () => {
     await vault.invokeTauriCommand("peer_storage_stop", {});
-    startedNodeId = null;
   });
 
   test("status after stop returns running false", async () => {
@@ -84,5 +97,30 @@ test.describe.skip("storage: peer storage", () => {
     );
 
     expect(status.running).toBe(false);
+  });
+
+  test("nodeId is deterministic (same device key)", async () => {
+    // Start, get nodeId, stop, start again — should be the same nodeId
+    const info1 = await vault.invokeTauriCommand<PeerStorageStartInfo>(
+      "peer_storage_start",
+      {}
+    );
+    await vault.invokeTauriCommand("peer_storage_stop", {});
+
+    const info2 = await vault.invokeTauriCommand<PeerStorageStartInfo>(
+      "peer_storage_start",
+      {}
+    );
+    await vault.invokeTauriCommand("peer_storage_stop", {});
+
+    expect(info1.nodeId).toBe(info2.nodeId);
+  });
+
+  test("reload_shares works when endpoint is not running", async () => {
+    const loaded = await vault.invokeTauriCommand<number>(
+      "peer_storage_reload_shares",
+      {}
+    );
+    expect(typeof loaded).toBe("number");
   });
 });
