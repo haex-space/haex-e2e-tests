@@ -427,7 +427,7 @@ test.describe("storage: peer share management via sync", () => {
     );
 
     expect(nameChange).toBeDefined();
-    expect(nameChange.encryptedValue).toBe(btoa("RenamedByB"));
-    expect(nameChange.deviceId).toBe(deviceB);
+    expect(nameChange!.encryptedValue).toBe(btoa("RenamedByB"));
+    expect(nameChange!.deviceId).toBe(deviceB);
   });
 });

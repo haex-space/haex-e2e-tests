@@ -290,7 +290,7 @@ test.describe("sync: evil scenarios", () => {
         c.rowPks === JSON.stringify({ id: "time-travel" }) && c.columnName === "value",
     );
     expect(change).toBeDefined();
-    expect(change.encryptedValue).toBe(btoa("future-value"));
+    expect(change!.encryptedValue).toBe(btoa("future-value"));
   });
 
   // =====================================================================
@@ -390,8 +390,8 @@ test.describe("sync: evil scenarios", () => {
     );
 
     expect(conflict).toBeDefined();
-    expect(conflict.encryptedValue).toBe(btoa("from-c"));
-    expect(conflict.deviceId).toBe("device-c");
+    expect(conflict!.encryptedValue).toBe(btoa("from-c"));
+    expect(conflict!.deviceId).toBe("device-c");
   });
 
   // =====================================================================
@@ -449,6 +449,6 @@ test.describe("sync: evil scenarios", () => {
     );
 
     expect(tombstone).toBeDefined();
-    expect(tombstone.encryptedValue).toBe(btoa("0"));
+    expect(tombstone!.encryptedValue).toBe(btoa("0"));
   });
 });

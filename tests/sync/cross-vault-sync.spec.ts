@@ -176,7 +176,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
       (c: { rowPks: string }) => c.rowPks === JSON.stringify({ id: "multi-device-1" }),
     );
     expect(change).toBeDefined();
-    expect(change.deviceId).toBe(deviceA);
+    expect(change!.deviceId).toBe(deviceA);
   });
 
   test("user A pushes from device B with later timestamp overwrites device A", async () => {
@@ -199,7 +199,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
         c.rowPks === JSON.stringify({ id: "multi-device-1" }) && c.columnName === "value",
     );
     expect(change).toBeDefined();
-    expect(change.deviceId).toBe(deviceB);
-    expect(change.encryptedValue).toBe(btoa("value-from-device-b"));
+    expect(change!.deviceId).toBe(deviceB);
+    expect(change!.encryptedValue).toBe(btoa("value-from-device-b"));
   });
 });
