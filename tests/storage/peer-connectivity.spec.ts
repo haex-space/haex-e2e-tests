@@ -47,6 +47,25 @@ test.describe("storage: P2P connectivity between vaults", () => {
     await vaultA.createSession();
     await vaultB.createSession();
 
+    // Ensure Vault B has an open vault (Vault A is opened by global-setup,
+    // but Vault B starts fresh and needs its own vault)
+    try {
+      await vaultB.invokeTauriCommand("create_encrypted_database", {
+        vaultName: "P2P Test Vault B",
+        key: "test-password-b",
+        vaultId: null,
+      });
+    } catch {
+      // Vault may already exist, try opening it
+      const vaults = await vaultB.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {});
+      if (vaults.length > 0) {
+        await vaultB.invokeTauriCommand("open_encrypted_database", {
+          vaultName: vaults[0].name,
+          key: "test-password-b",
+        });
+      }
+    }
+
     // Stop any running P2P endpoints
     for (const vault of [vaultA, vaultB]) {
       try {
