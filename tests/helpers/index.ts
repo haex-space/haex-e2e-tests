@@ -5,3 +5,4 @@
 export * from "./sql-helpers";
 export * from "./tauri-sql-types";
 export * from "./sync-server-helpers";
+export * from "./realtime-helpers";
