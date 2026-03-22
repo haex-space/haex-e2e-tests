@@ -394,8 +394,8 @@ jobs:
             sleep 2
           done
 
-          echo "Starting sync-gotrue, sync-kong, sync-server..."
-          docker compose -f docker/docker-compose.yml up -d sync-gotrue sync-kong sync-server
+          echo "Starting sync-gotrue, sync-realtime, sync-kong, sync-server..."
+          docker compose -f docker/docker-compose.yml up -d sync-gotrue sync-realtime sync-kong sync-server
 
           # Start marketplace stack - database first, then dependent services
           echo "Starting marketplace-db..."
@@ -416,27 +416,30 @@ jobs:
           echo "Waiting for all services to be ready..."
           for i in {1..60}; do
             SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
+            REALTIME_STATUS=$(docker inspect --format='{{.State.Health.Status}}' realtime.haex_e2e_sync 2>/dev/null || echo "starting")
             MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
-            if [ "$SYNC_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
+            if [ "$SYNC_STATUS" == "healthy" ] && [ "$REALTIME_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
               echo "All services ready after ~$((i*5))s"
               break
             fi
-            echo "Waiting for services... ($i/60) - sync-server: $SYNC_STATUS, marketplace: $MARKETPLACE_STATUS"
+            echo "Waiting for services... ($i/60) - sync-server: $SYNC_STATUS, realtime: $REALTIME_STATUS, marketplace: $MARKETPLACE_STATUS"
             sleep 5
           done
 
           docker compose -f docker/docker-compose.yml ps
 
           # Dump container logs if any service is unhealthy
-          if [ "$SYNC_STATUS" != "healthy" ] || [ "$MARKETPLACE_STATUS" != "healthy" ]; then
+          if [ "$SYNC_STATUS" != "healthy" ] || [ "$REALTIME_STATUS" != "healthy" ] || [ "$MARKETPLACE_STATUS" != "healthy" ]; then
             echo "::error::Services failed to become healthy! Dumping logs..."
-            if [ "$SYNC_STATUS" != "healthy" ]; then
+            if [ "$SYNC_STATUS" != "healthy" ] || [ "$REALTIME_STATUS" != "healthy" ]; then
               echo "=== sync-server logs ==="
               docker logs haex_e2e_sync_server 2>&1 || true
               echo "=== sync-db logs ==="
               docker logs haex_e2e_sync_db 2>&1 | tail -30 || true
               echo "=== sync-kong logs ==="
               docker logs haex_e2e_sync_kong 2>&1 | tail -20 || true
+              echo "=== sync-realtime logs ==="
+              docker logs realtime.haex_e2e_sync 2>&1 | tail -30 || true
             fi
             if [ "$MARKETPLACE_STATUS" != "healthy" ]; then
               echo "=== marketplace logs ==="
