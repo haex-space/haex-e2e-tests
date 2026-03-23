@@ -13,8 +13,8 @@ importers:
         version: 2.99.3
     devDependencies:
       '@haex-space/vault-sdk':
-        specifier: ^2.5.106
-        version: 2.5.106
+        specifier: ^2.7.0
+        version: 2.7.0
       '@playwright/test':
         specifier: ^1.49.0
         version: 1.57.0
@@ -33,8 +33,8 @@ importers:
 
 packages:
 
-  '@haex-space/vault-sdk@2.5.106':
-    resolution: {integrity: sha512-R4yqtHywVBxnzRpeEighYNJ2WdvCJfcUT65nkDu96xFJDOGprGnYjodPGwR5YXBtnZOFlj02GuKjmjZj66BM3w==}
+  '@haex-space/vault-sdk@2.7.0':
+    resolution: {integrity: sha512-Ohf9b0P9NmbpGljBEzgzheJLUpMz6qEak0yHwK2LfqTUzQCahr/3NiekezDiKyiP1Rkp8CpqOt+NcUf9oSY+FA==}
     hasBin: true
     peerDependencies:
       '@nuxt/kit': ^3.0.0 || ^4.0.0
@@ -526,7 +526,7 @@ packages:
 
 snapshots:
 
-  '@haex-space/vault-sdk@2.5.106':
+  '@haex-space/vault-sdk@2.7.0':
     dependencies:
       archiver: 7.0.1
       commander: 14.0.3
