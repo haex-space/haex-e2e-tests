@@ -30,7 +30,7 @@ test.describe("sync: realtime broadcast delivery", () => {
   test.describe.configure({ mode: "serial" });
 
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceIdA = `e2e-device-a-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -39,12 +39,12 @@ test.describe("sync: realtime broadcast delivery", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test("subscription must reach SUBSCRIBED status", async () => {
     const client = createRealtimeClient(accessToken);
-    const { status, channel } = await subscribeAndWait(client, `sync:${vaultId}`);
+    const { status, channel } = await subscribeAndWait(client, `sync:${spaceId}`);
 
     expect(status).toBe("SUBSCRIBED");
 
@@ -54,9 +54,9 @@ test.describe("sync: realtime broadcast delivery", () => {
 
   test("push from device A triggers broadcast received by device B", async () => {
     const clientB = createRealtimeClient(accessToken);
-    const collector = await subscribeToBroadcast(clientB, `sync:${vaultId}`);
+    const collector = await subscribeToBroadcast(clientB, `sync:${spaceId}`);
 
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "broadcast-cross-device" }),
@@ -76,7 +76,7 @@ test.describe("sync: realtime broadcast delivery", () => {
 
   test("multiple rapid pushes result in broadcast messages", async () => {
     const clientB = createRealtimeClient(accessToken);
-    const collector = await subscribeToBroadcast(clientB, `sync:${vaultId}`);
+    const collector = await subscribeToBroadcast(clientB, `sync:${spaceId}`);
 
     const changes = Array.from({ length: 5 }, (_, i) =>
       makeSyncChange({
@@ -87,7 +87,7 @@ test.describe("sync: realtime broadcast delivery", () => {
         encryptedValue: btoa(`rapid-value-${i}`),
       }),
     );
-    await pushChanges(accessToken, vaultId, changes);
+    await pushChanges(accessToken, spaceId, changes);
 
     const messages = await waitForMessages(collector, 1, 5000);
 
@@ -98,14 +98,14 @@ test.describe("sync: realtime broadcast delivery", () => {
   });
 
   test("different vaults do not receive each other's broadcasts", async () => {
-    const otherVaultId = crypto.randomUUID();
-    await createVaultKey(accessToken, otherVaultId);
+    const otherSpaceId = crypto.randomUUID();
+    await createVaultKey(accessToken, otherSpaceId);
 
     const clientB = createRealtimeClient(accessToken);
-    const collector = await subscribeToBroadcast(clientB, `sync:${otherVaultId}`);
+    const collector = await subscribeToBroadcast(clientB, `sync:${otherSpaceId}`);
 
     // Push to the FIRST vault — should NOT appear on otherVault's channel
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "isolation-test" }),
@@ -124,9 +124,9 @@ test.describe("sync: realtime broadcast delivery", () => {
 
   test("broadcast payload contains only operation type, no record data", async () => {
     const client = createRealtimeClient(accessToken);
-    const collector = await subscribeToBroadcast(client, `sync:${vaultId}`);
+    const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "secret_table",
         rowPks: JSON.stringify({ id: "payload-check" }),
@@ -162,7 +162,7 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
 
   let ownerToken: string;
   let strangerToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-auth-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -176,14 +176,14 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
     ownerToken = owner.accessToken;
     strangerToken = stranger.accessToken;
 
-    await createVaultKey(ownerToken, vaultId);
+    await createVaultKey(ownerToken, spaceId);
   });
 
   test("vault owner can subscribe and receive broadcasts", async () => {
     const client = createRealtimeClient(ownerToken);
-    const collector = await subscribeToBroadcast(client, `sync:${vaultId}`);
+    const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
-    await pushChanges(ownerToken, vaultId, [
+    await pushChanges(ownerToken, spaceId, [
       makeSyncChange({
         tableName: "test",
         rowPks: JSON.stringify({ id: "owner-auth" }),
@@ -202,7 +202,7 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
 
   test("stranger cannot subscribe to another user's vault channel", async () => {
     const client = createRealtimeClient(strangerToken);
-    const { status } = await subscribeAndWait(client, `sync:${vaultId}`);
+    const { status } = await subscribeAndWait(client, `sync:${spaceId}`);
 
     await cleanupClient(client);
 
@@ -211,11 +211,11 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
 
   test("user with a different vault cannot subscribe to this vault", async () => {
     // Stranger has their own vault, but that doesn't grant access to owner's vault
-    const strangerVaultId = crypto.randomUUID();
-    await createVaultKey(strangerToken, strangerVaultId);
+    const strangerSpaceId = crypto.randomUUID();
+    await createVaultKey(strangerToken, strangerSpaceId);
 
     const client = createRealtimeClient(strangerToken);
-    const { status } = await subscribeAndWait(client, `sync:${vaultId}`);
+    const { status } = await subscribeAndWait(client, `sync:${spaceId}`);
 
     await cleanupClient(client);
 
@@ -234,7 +234,7 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
     });
 
     const channel = client
-      .channel(`sync:${vaultId}`, { config: { private: true } })
+      .channel(`sync:${spaceId}`, { config: { private: true } })
       .on("broadcast", { event: "INSERT" }, () => {});
 
     const status = await new Promise<string>((resolve) => {
@@ -255,21 +255,21 @@ test.describe("sync: broadcast authorization for personal vaults", () => {
 
   test("deleted vault channel rejects subscription", async () => {
     // Create a temporary vault, then delete it
-    const tempVaultId = crypto.randomUUID();
-    await createVaultKey(ownerToken, tempVaultId);
+    const tempSpaceId = crypto.randomUUID();
+    await createVaultKey(ownerToken, tempSpaceId);
 
     // Verify subscription works before deletion
     const client1 = createRealtimeClient(ownerToken);
-    const { status: before } = await subscribeAndWait(client1, `sync:${tempVaultId}`);
+    const { status: before } = await subscribeAndWait(client1, `sync:${tempSpaceId}`);
     await cleanupClient(client1);
     expect(before).toBe("SUBSCRIBED");
 
     // Delete the vault
-    await deleteVault(ownerToken, tempVaultId);
+    await deleteVault(ownerToken, tempSpaceId);
 
     // Subscription should now be rejected
     const client2 = createRealtimeClient(ownerToken);
-    const { status: after } = await subscribeAndWait(client2, `sync:${tempVaultId}`);
+    const { status: after } = await subscribeAndWait(client2, `sync:${tempSpaceId}`);
     await cleanupClient(client2);
 
     expect(after).not.toBe("SUBSCRIBED");
@@ -389,8 +389,8 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
 
   test("vault-key holder for different vault cannot subscribe to space", async () => {
     // Outsider creates their own personal vault — that should NOT grant space access
-    const outsiderVaultId = crypto.randomUUID();
-    await createVaultKey(outsiderToken, outsiderVaultId);
+    const outsiderSpaceId = crypto.randomUUID();
+    await createVaultKey(outsiderToken, outsiderSpaceId);
 
     const client = createRealtimeClient(outsiderToken);
     const { status } = await subscribeAndWait(client, `sync:${spaceId}`);

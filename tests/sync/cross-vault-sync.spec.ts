@@ -43,8 +43,8 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // Two completely separate users with their own vaults
   let userA: { accessToken: string; userId: string };
   let userB: { accessToken: string; userId: string };
-  const vaultIdA = crypto.randomUUID(); // User A's personal vault
-  const vaultIdB = crypto.randomUUID(); // User B's personal vault
+  const spaceIdA = crypto.randomUUID(); // User A's personal vault
+  const spaceIdB = crypto.randomUUID(); // User B's personal vault
   const sharedSpaceId = crypto.randomUUID(); // Shared space partition
   const deviceA = `device-a-${Date.now()}`;
   const deviceB = `device-b-${Date.now()}`;
@@ -58,8 +58,8 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
     userB = await createAdminUser();
 
     // Each user creates their own vault key
-    await createVaultKey(userA.accessToken, vaultIdA);
-    await createVaultKey(userB.accessToken, vaultIdB);
+    await createVaultKey(userA.accessToken, spaceIdA);
+    await createVaultKey(userB.accessToken, spaceIdB);
   });
 
   test.afterAll(async () => {
@@ -78,7 +78,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // =====================================================================
 
   test("user A can push to their own vault", async () => {
-    const res = await pushChanges(userA.accessToken, vaultIdA, [
+    const res = await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "setting-a-1" }),
@@ -92,7 +92,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
 
   test("user B cannot pull from user A's vault", async () => {
     const res = await fetch(
-      `${SYNC_SERVER_URL}/sync/pull?vaultId=${vaultIdA}&limit=10`,
+      `${SYNC_SERVER_URL}/sync/pull?spaceId=${spaceIdA}&limit=10`,
       { headers: { Authorization: `Bearer ${userB.accessToken}` } },
     );
 
@@ -107,7 +107,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
 
   test("user B cannot push to user A's vault", async () => {
     try {
-      const res = await pushChanges(userB.accessToken, vaultIdA, [
+      const res = await pushChanges(userB.accessToken, spaceIdA, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: "evil-inject" }),
@@ -153,7 +153,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // =====================================================================
 
   test("user A pushes from device A", async () => {
-    const res = await pushChanges(userA.accessToken, vaultIdA, [
+    const res = await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-device-1" }),
@@ -167,7 +167,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   });
 
   test("user A pulls from device B and sees device A's changes", async () => {
-    const pulled = await pullChanges(userA.accessToken, vaultIdA, {
+    const pulled = await pullChanges(userA.accessToken, spaceIdA, {
       excludeDeviceId: deviceB,
     });
 
@@ -180,7 +180,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   });
 
   test("user A pushes from device B with later timestamp overwrites device A", async () => {
-    const res = await pushChanges(userA.accessToken, vaultIdA, [
+    const res = await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-device-1" }),
@@ -193,7 +193,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
     expect(res.count).toBeDefined();
 
     // Pull should show device B's value (later HLC wins)
-    const pulled = await pullChanges(userA.accessToken, vaultIdA);
+    const pulled = await pullChanges(userA.accessToken, spaceIdA);
     const change = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === JSON.stringify({ id: "multi-device-1" }) && c.columnName === "value",

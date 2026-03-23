@@ -32,7 +32,7 @@ test.describe("sync: realtime auth lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-auth-lifecycle-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -41,12 +41,12 @@ test.describe("sync: realtime auth lifecycle", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test("subscription succeeds with valid auth token", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     const { status, channel } = await subscribeAndWait(client, channelName);
     expect(status).toBe("SUBSCRIBED");
@@ -64,7 +64,7 @@ test.describe("sync: realtime auth lifecycle", () => {
       realtime: { timeout: 5000 },
     });
 
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     const { status, channel } = await subscribeAndWait(client, channelName, undefined, 5000);
 
@@ -86,7 +86,7 @@ test.describe("sync: realtime auth lifecycle", () => {
     // Token set AFTER client creation (matches DID re-auth flow)
     client.realtime.setAuth(accessToken);
 
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
     const { status, channel } = await subscribeAndWait(client, channelName);
 
     expect(status).toBe("SUBSCRIBED");
@@ -131,12 +131,12 @@ test.describe("sync: realtime auth lifecycle", () => {
 
     // Get a fresh token via challenge-login
     const tokens = await challengeLogin(identity);
-    const freshVaultId = crypto.randomUUID();
-    await createVaultKey(tokens.access_token, freshVaultId);
+    const freshSpaceId = crypto.randomUUID();
+    await createVaultKey(tokens.access_token, freshSpaceId);
 
     // Subscribe with the fresh token
     const client = createRealtimeClient(tokens.access_token);
-    const { status, channel } = await subscribeAndWait(client, `sync:${freshVaultId}`);
+    const { status, channel } = await subscribeAndWait(client, `sync:${freshSpaceId}`);
 
     expect(status).toBe("SUBSCRIBED");
 
@@ -146,7 +146,7 @@ test.describe("sync: realtime auth lifecycle", () => {
 
   test("active subscription survives token update via setAuth", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // Subscribe
     const collector = await subscribeToBroadcast(client, channelName);
@@ -156,7 +156,7 @@ test.describe("sync: realtime auth lifecycle", () => {
     client.realtime.setAuth(accessToken);
 
     // Push a change — subscription should still receive it
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "token-refresh-test" }),

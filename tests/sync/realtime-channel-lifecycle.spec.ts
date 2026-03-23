@@ -24,7 +24,7 @@ test.describe("sync: realtime channel lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-lifecycle-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -33,12 +33,12 @@ test.describe("sync: realtime channel lifecycle", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test("unsubscribe removes channel from client", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     const { channel } = await subscribeAndWait(client, channelName);
     expect(client.realtime.channels.length).toBe(1);
@@ -51,7 +51,7 @@ test.describe("sync: realtime channel lifecycle", () => {
 
   test("re-subscribe after unsubscribe works", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // Subscribe
     const { status: s1, channel: ch1 } = await subscribeAndWait(client, channelName);
@@ -73,7 +73,7 @@ test.describe("sync: realtime channel lifecycle", () => {
 
   test("messages only arrive on active subscription", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // Subscribe and collect
     const collector = await subscribeToBroadcast(client, channelName);
@@ -82,7 +82,7 @@ test.describe("sync: realtime channel lifecycle", () => {
     await client.removeChannel(collector.channel);
 
     // Push while unsubscribed — should NOT be received
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "while-unsubscribed" }),
@@ -100,7 +100,7 @@ test.describe("sync: realtime channel lifecycle", () => {
     const collector2 = await subscribeToBroadcast(client, channelName);
 
     // Push while subscribed — SHOULD be received
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "while-subscribed" }),
@@ -120,18 +120,18 @@ test.describe("sync: realtime channel lifecycle", () => {
 
   test("multiple channels on same client work independently", async () => {
     // Create two vaults with separate channels
-    const vaultId2 = crypto.randomUUID();
-    await createVaultKey(accessToken, vaultId2);
+    const spaceId2 = crypto.randomUUID();
+    await createVaultKey(accessToken, spaceId2);
 
     const client = createRealtimeClient(accessToken);
 
-    const collector1 = await subscribeToBroadcast(client, `sync:${vaultId}`);
-    const collector2 = await subscribeToBroadcast(client, `sync:${vaultId2}`);
+    const collector1 = await subscribeToBroadcast(client, `sync:${spaceId}`);
+    const collector2 = await subscribeToBroadcast(client, `sync:${spaceId2}`);
 
     expect(client.realtime.channels.length).toBe(2);
 
     // Push to vault1 only
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-channel-v1" }),
@@ -141,7 +141,7 @@ test.describe("sync: realtime channel lifecycle", () => {
     ]);
 
     // Push to vault2 only
-    await pushChanges(accessToken, vaultId2, [
+    await pushChanges(accessToken, spaceId2, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-channel-v2" }),
@@ -166,10 +166,10 @@ test.describe("sync: realtime channel lifecycle", () => {
     const client = createRealtimeClient(accessToken);
 
     // Create multiple channels
-    const { channel: ch1 } = await subscribeAndWait(client, `sync:${vaultId}`);
-    const vaultId2 = crypto.randomUUID();
-    await createVaultKey(accessToken, vaultId2);
-    const { channel: ch2 } = await subscribeAndWait(client, `sync:${vaultId2}`);
+    const { channel: ch1 } = await subscribeAndWait(client, `sync:${spaceId}`);
+    const spaceId2 = crypto.randomUUID();
+    await createVaultKey(accessToken, spaceId2);
+    const { channel: ch2 } = await subscribeAndWait(client, `sync:${spaceId2}`);
 
     expect(client.realtime.channels.length).toBe(2);
 
@@ -181,7 +181,7 @@ test.describe("sync: realtime channel lifecycle", () => {
     await new Promise((r) => setTimeout(r, 500));
 
     // Should still be able to subscribe after removeAllChannels
-    const { status, channel } = await subscribeAndWait(client, `sync:${vaultId}`);
+    const { status, channel } = await subscribeAndWait(client, `sync:${spaceId}`);
     expect(status).toBe("SUBSCRIBED");
 
     await client.removeChannel(channel);

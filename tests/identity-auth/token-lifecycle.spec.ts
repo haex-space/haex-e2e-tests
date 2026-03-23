@@ -124,13 +124,13 @@ test.describe("identity-auth: token lifecycle", () => {
 
   test("push and pull require valid authentication", async () => {
     const { accessToken } = await createAdminUser();
-    const vaultId = crypto.randomUUID();
+    const spaceId = crypto.randomUUID();
 
     // Create vault key first
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
 
     // Push with valid token succeeds
-    const pushRes = await pushChanges(accessToken, vaultId, [
+    const pushRes = await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: crypto.randomUUID() }),
@@ -148,18 +148,18 @@ test.describe("identity-auth: token lifecycle", () => {
         Authorization: "Bearer invalid-token",
       },
       body: JSON.stringify({
-        vaultId,
+        spaceId,
         changes: [makeSyncChange({ tableName: "test", rowPks: "{}", columnName: "c", deviceId: "d" })],
       }),
     });
     expect(failRes.status).toBe(401);
 
     // Pull with valid token succeeds
-    const pullRes = await pullChanges(accessToken, vaultId);
+    const pullRes = await pullChanges(accessToken, spaceId);
     expect(pullRes.changes).toBeDefined();
 
     // Pull with invalid token fails
-    const failPull = await fetch(`${baseUrl}/sync/pull?vaultId=${vaultId}&limit=10`, {
+    const failPull = await fetch(`${baseUrl}/sync/pull?spaceId=${spaceId}&limit=10`, {
       headers: { Authorization: "Bearer invalid-token" },
     });
     expect(failPull.status).toBe(401);

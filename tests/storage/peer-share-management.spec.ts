@@ -46,7 +46,7 @@ function makeShareChange(opts: {
  */
 async function pushPeerShare(
   token: string,
-  vaultId: string,
+  spaceId: string,
   share: {
     id: string;
     spaceId: string;
@@ -76,7 +76,7 @@ async function pushPeerShare(
     }),
   );
 
-  return pushChanges(token, vaultId, changes);
+  return pushChanges(token, spaceId, changes);
 }
 
 /**
@@ -84,7 +84,7 @@ async function pushPeerShare(
  */
 async function deletePeerShare(
   token: string,
-  vaultId: string,
+  spaceId: string,
   shareId: string,
   deviceId: string,
   timestamp?: string,
@@ -92,7 +92,7 @@ async function deletePeerShare(
   const ts = timestamp || `2026-03-21T15:00:00.000Z:00000001:${deviceId}`;
 
   // Push a tombstone change (haex_tombstone = 1)
-  return pushChanges(token, vaultId, [
+  return pushChanges(token, spaceId, [
     makeSyncChange({
       tableName: "haex_peer_shares",
       rowPks: JSON.stringify({ id: shareId }),
@@ -110,8 +110,8 @@ test.describe("storage: peer share management via sync", () => {
   // Two users with separate vaults
   let userA: { accessToken: string; userId: string };
   let userB: { accessToken: string; userId: string };
-  const vaultIdA = crypto.randomUUID();
-  const vaultIdB = crypto.randomUUID();
+  const spaceIdA = crypto.randomUUID();
+  const spaceIdB = crypto.randomUUID();
   const deviceA = `device-a-${Date.now()}`;
   const deviceB = `device-b-${Date.now()}`;
   const endpointA = crypto.randomBytes(32).toString("hex");
@@ -124,8 +124,8 @@ test.describe("storage: peer share management via sync", () => {
     userA = await createAdminUser();
     userB = await createAdminUser();
 
-    await createVaultKey(userA.accessToken, vaultIdA);
-    await createVaultKey(userB.accessToken, vaultIdB);
+    await createVaultKey(userA.accessToken, spaceIdA);
+    await createVaultKey(userB.accessToken, spaceIdB);
   });
 
   // =====================================================================
@@ -137,7 +137,7 @@ test.describe("storage: peer share management via sync", () => {
 
     const res = await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareId,
         spaceId: "personal",
@@ -152,7 +152,7 @@ test.describe("storage: peer share management via sync", () => {
   });
 
   test("user A can pull back their own shares", async () => {
-    const pulled = await pullChanges(userA.accessToken, vaultIdA);
+    const pulled = await pullChanges(userA.accessToken, spaceIdA);
     expect(pulled.changes.length).toBeGreaterThan(0);
 
     const shareChanges = pulled.changes.filter(
@@ -163,7 +163,7 @@ test.describe("storage: peer share management via sync", () => {
 
   test("user B cannot see user A's shares", async () => {
     // User B pulls from their own vault — should not contain A's data
-    const pulled = await pullChanges(userB.accessToken, vaultIdB);
+    const pulled = await pullChanges(userB.accessToken, spaceIdB);
     const shareChanges = pulled.changes.filter(
       (c: { tableName: string }) => c.tableName === "haex_peer_shares",
     );
@@ -180,7 +180,7 @@ test.describe("storage: peer share management via sync", () => {
     // Push from device A
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareId,
         spaceId: "personal",
@@ -193,7 +193,7 @@ test.describe("storage: peer share management via sync", () => {
     );
 
     // Pull from "device B" (same user, different excludeDeviceId)
-    const pulled = await pullChanges(userA.accessToken, vaultIdA, {
+    const pulled = await pullChanges(userA.accessToken, spaceIdA, {
       excludeDeviceId: deviceB,
     });
 
@@ -214,7 +214,7 @@ test.describe("storage: peer share management via sync", () => {
     // Create share
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareId,
         spaceId: "personal",
@@ -229,7 +229,7 @@ test.describe("storage: peer share management via sync", () => {
     // Delete share (push tombstone)
     const delRes = await deletePeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       shareId,
       deviceA,
       `2026-03-21T14:21:00.000Z:00000001:${deviceA}`,
@@ -243,7 +243,7 @@ test.describe("storage: peer share management via sync", () => {
     // Create on device A
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareId,
         spaceId: "personal",
@@ -258,7 +258,7 @@ test.describe("storage: peer share management via sync", () => {
     // Delete from device B (same user, different device)
     const delRes = await deletePeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       shareId,
       deviceB,
       `2026-03-21T14:31:00.000Z:00000001:${deviceB}`,
@@ -266,7 +266,7 @@ test.describe("storage: peer share management via sync", () => {
     expect(delRes.count).toBeDefined();
 
     // Pull and verify tombstone exists
-    const pulled = await pullChanges(userA.accessToken, vaultIdA);
+    const pulled = await pullChanges(userA.accessToken, spaceIdA);
     const tombstoneChanges = pulled.changes.filter(
       (c: { tableName: string; rowPks: string; columnName: string }) =>
         c.tableName === "haex_peer_shares" &&
@@ -284,7 +284,7 @@ test.describe("storage: peer share management via sync", () => {
     const deviceRegId = crypto.randomUUID();
 
     // Push device registration data (haex_space_devices-like data in vault settings)
-    const res = await pushChanges(userA.accessToken, vaultIdA, [
+    const res = await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: deviceRegId }),
@@ -301,7 +301,7 @@ test.describe("storage: peer share management via sync", () => {
     expect(res.count).toBeDefined();
 
     // Pull from device B — should see device A's registration
-    const pulled = await pullChanges(userA.accessToken, vaultIdA, {
+    const pulled = await pullChanges(userA.accessToken, spaceIdA, {
       excludeDeviceId: deviceB,
     });
 
@@ -324,7 +324,7 @@ test.describe("storage: peer share management via sync", () => {
     // Create share in personal space
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: sharePersonal,
         spaceId: spacePersonal,
@@ -339,7 +339,7 @@ test.describe("storage: peer share management via sync", () => {
     // Create share in work space
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareWork,
         spaceId: spaceWork,
@@ -352,7 +352,7 @@ test.describe("storage: peer share management via sync", () => {
     );
 
     // Pull all — both should be there with different space_ids
-    const pulled = await pullChanges(userA.accessToken, vaultIdA);
+    const pulled = await pullChanges(userA.accessToken, spaceIdA);
 
     const personalShares = pulled.changes.filter(
       (c: { tableName: string; rowPks: string; columnName: string }) =>
@@ -381,7 +381,7 @@ test.describe("storage: peer share management via sync", () => {
     // Device A creates share
     await pushPeerShare(
       userA.accessToken,
-      vaultIdA,
+      spaceIdA,
       {
         id: shareId,
         spaceId: "personal",
@@ -394,7 +394,7 @@ test.describe("storage: peer share management via sync", () => {
     );
 
     // Device A renames share (later timestamp)
-    await pushChanges(userA.accessToken, vaultIdA, [
+    await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_peer_shares",
         rowPks: JSON.stringify({ id: shareId }),
@@ -406,7 +406,7 @@ test.describe("storage: peer share management via sync", () => {
     ]);
 
     // Device B also renames (even later timestamp — this wins)
-    await pushChanges(userA.accessToken, vaultIdA, [
+    await pushChanges(userA.accessToken, spaceIdA, [
       makeSyncChange({
         tableName: "haex_peer_shares",
         rowPks: JSON.stringify({ id: shareId }),
@@ -418,7 +418,7 @@ test.describe("storage: peer share management via sync", () => {
     ]);
 
     // Pull — device B's name should win (later HLC)
-    const pulled = await pullChanges(userA.accessToken, vaultIdA);
+    const pulled = await pullChanges(userA.accessToken, spaceIdA);
     const nameChange = pulled.changes.find(
       (c: { tableName: string; rowPks: string; columnName: string }) =>
         c.tableName === "haex_peer_shares" &&

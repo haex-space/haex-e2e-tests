@@ -378,7 +378,7 @@ test.describe("spaces: RBAC permissions", () => {
         Authorization: `Bearer ${readerToken}`,
       },
       body: JSON.stringify({
-        vaultId: spaceId,
+        spaceId: spaceId,
         changes: [{
           tableName: "test_data",
           rowPks: JSON.stringify({ id: "reader-push-attempt" }),

@@ -582,7 +582,7 @@ export async function insertBroadcastMessage(
  */
 export async function createVaultKey(
   accessToken: string,
-  vaultId: string,
+  spaceId: string,
 ): Promise<void> {
   const res = await fetch(`${SYNC_SERVER_URL}/sync/vault-key`, {
     method: "POST",
@@ -591,7 +591,7 @@ export async function createVaultKey(
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({
-      vaultId,
+      spaceId,
       encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
       encryptedVaultName: Buffer.from("E2E Test Vault").toString("base64"),
       vaultKeySalt: crypto.randomBytes(16).toString("base64"),
@@ -612,9 +612,9 @@ export async function createVaultKey(
  */
 export async function deleteVault(
   accessToken: string,
-  vaultId: string,
+  spaceId: string,
 ): Promise<void> {
-  const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${vaultId}`, {
+  const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${spaceId}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -681,7 +681,7 @@ export async function signAndPushSpaceChanges(
  */
 export async function pushChanges(
   accessToken: string,
-  vaultId: string,
+  spaceId: string,
   changes: SyncChange[],
 ): Promise<{ count: number; serverTimestamp: string }> {
   const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
@@ -690,7 +690,7 @@ export async function pushChanges(
       "Content-Type": "application/json",
       Authorization: `Bearer ${accessToken}`,
     },
-    body: JSON.stringify({ vaultId, changes }),
+    body: JSON.stringify({ spaceId, changes }),
   });
 
   if (!res.ok) {
@@ -706,14 +706,14 @@ export async function pushChanges(
  */
 export async function pullChanges(
   accessToken: string,
-  vaultId: string,
+  spaceId: string,
   options: {
     excludeDeviceId?: string;
     afterUpdatedAt?: string;
     limit?: number;
   } = {},
 ): Promise<{ changes: SyncChange[]; hasMore: boolean; serverTimestamp: string }> {
-  const params = new URLSearchParams({ vaultId });
+  const params = new URLSearchParams({ spaceId });
   if (options.excludeDeviceId) params.set("excludeDeviceId", options.excludeDeviceId);
   if (options.afterUpdatedAt) params.set("afterUpdatedAt", options.afterUpdatedAt);
   if (options.limit) params.set("limit", options.limit.toString());

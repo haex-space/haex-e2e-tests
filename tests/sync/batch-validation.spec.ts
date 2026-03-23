@@ -15,7 +15,7 @@ test.describe("sync: batch-validation", () => {
 
   const baseUrl = getSyncServerUrl();
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-batch-device-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -24,12 +24,12 @@ test.describe("sync: batch-validation", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, vaultId);
+      await deleteVault(accessToken, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -73,7 +73,7 @@ test.describe("sync: batch-validation", () => {
       }),
     ];
 
-    const result = await pushChanges(accessToken, vaultId, changes);
+    const result = await pushChanges(accessToken, spaceId, changes);
 
     expect(result.count).toBe(3);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -114,7 +114,7 @@ test.describe("sync: batch-validation", () => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ vaultId, changes }),
+      body: JSON.stringify({ spaceId, changes }),
     });
 
     expect(res.status).toBe(400);
@@ -172,7 +172,7 @@ test.describe("sync: batch-validation", () => {
         "Content-Type": "application/json",
         Authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ vaultId, changes }),
+      body: JSON.stringify({ spaceId, changes }),
     });
 
     expect(res.status).toBe(400);

@@ -14,7 +14,7 @@ test.describe("sync: conflict-resolution", () => {
   test.describe.configure({ mode: "serial" });
 
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceA = `e2e-device-a-${Date.now()}`;
   const deviceB = `e2e-device-b-${Date.now()}`;
 
@@ -24,12 +24,12 @@ test.describe("sync: conflict-resolution", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, vaultId);
+      await deleteVault(accessToken, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -43,7 +43,7 @@ test.describe("sync: conflict-resolution", () => {
     const lateValue = crypto.randomBytes(16).toString("base64");
 
     // Device A pushes with early timestamp
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks,
@@ -55,7 +55,7 @@ test.describe("sync: conflict-resolution", () => {
     ]);
 
     // Device B pushes same cell with later timestamp
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks,
@@ -66,7 +66,7 @@ test.describe("sync: conflict-resolution", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
 
     const matches = pulled.changes.filter(
       (c) => c.rowPks === rowPks && c.columnName === "title",
@@ -85,7 +85,7 @@ test.describe("sync: conflict-resolution", () => {
     const usernameValue = crypto.randomBytes(16).toString("base64");
     const passwordValue = crypto.randomBytes(16).toString("base64");
 
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks,
@@ -112,7 +112,7 @@ test.describe("sync: conflict-resolution", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
 
     const rowChanges = pulled.changes.filter((c) => c.rowPks === rowPks);
     const columns = rowChanges.map((c) => c.columnName).sort();
@@ -136,7 +136,7 @@ test.describe("sync: conflict-resolution", () => {
     const secondValue = crypto.randomBytes(16).toString("base64");
 
     // First push
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks,
@@ -148,7 +148,7 @@ test.describe("sync: conflict-resolution", () => {
     ]);
 
     // Second push with later HLC
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks,
@@ -159,7 +159,7 @@ test.describe("sync: conflict-resolution", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
 
     const matches = pulled.changes.filter(
       (c) => c.rowPks === rowPks && c.columnName === "title",
@@ -172,7 +172,7 @@ test.describe("sync: conflict-resolution", () => {
   test("pull with afterUpdatedAt returns only newer changes", async () => {
     // Push a change and record the server timestamp
     const entryIdOld = crypto.randomUUID();
-    const oldResult = await pushChanges(accessToken, vaultId, [
+    const oldResult = await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks: JSON.stringify({ id: entryIdOld }),
@@ -186,7 +186,7 @@ test.describe("sync: conflict-resolution", () => {
 
     // Push a newer change after the cutoff
     const entryIdNew = crypto.randomUUID();
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks: JSON.stringify({ id: entryIdNew }),
@@ -197,7 +197,7 @@ test.describe("sync: conflict-resolution", () => {
     ]);
 
     // Pull only changes after cutoff
-    const pulled = await pullChanges(accessToken, vaultId, {
+    const pulled = await pullChanges(accessToken, spaceId, {
       afterUpdatedAt: cutoff,
     });
 

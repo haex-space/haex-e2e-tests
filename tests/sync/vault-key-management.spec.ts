@@ -13,7 +13,7 @@ test.describe("sync: vault-key-management", () => {
 
   const baseUrl = getSyncServerUrl();
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -25,15 +25,15 @@ test.describe("sync: vault-key-management", () => {
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, vaultId);
+      await deleteVault(accessToken, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
-  test("store vault key returns 201 with matching vaultId", async () => {
+  test("store vault key returns 201 with matching spaceId", async () => {
     const body = {
-      vaultId,
+      spaceId,
       encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
       encryptedVaultName: Buffer.from("E2E Vault Key Test").toString("base64"),
       vaultKeySalt: crypto.randomBytes(16).toString("base64"),
@@ -54,20 +54,20 @@ test.describe("sync: vault-key-management", () => {
     expect(res.status).toBe(201);
 
     const data = await res.json();
-    expect(data.vaultKey.vaultId).toBe(vaultId);
+    expect(data.vaultKey.spaceId).toBe(spaceId);
     expect(typeof data.vaultKey.id).toBe("string");
     expect(typeof data.vaultKey.createdAt).toBe("string");
   });
 
-  test("retrieve vault key returns all fields with matching vaultId", async () => {
-    const res = await fetch(`${baseUrl}/sync/vault-key/${vaultId}`, {
+  test("retrieve vault key returns all fields with matching spaceId", async () => {
+    const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
     expect(res.status).toBe(200);
 
     const data = await res.json();
-    expect(data.vaultKey.vaultId).toBe(vaultId);
+    expect(data.vaultKey.spaceId).toBe(spaceId);
     expect(typeof data.vaultKey.encryptedVaultKey).toBe("string");
     expect(typeof data.vaultKey.encryptedVaultName).toBe("string");
     expect(typeof data.vaultKey.vaultKeySalt).toBe("string");
@@ -87,17 +87,17 @@ test.describe("sync: vault-key-management", () => {
     expect(Array.isArray(data.vaults)).toBe(true);
 
     const found = data.vaults.find(
-      (v: { vaultId: string }) => v.vaultId === vaultId,
+      (v: { spaceId: string }) => v.spaceId === spaceId,
     );
     expect(found).not.toBeNull();
-    expect(found.vaultId).toBe(vaultId);
+    expect(found.spaceId).toBe(spaceId);
   });
 
   test("update vault name returns 200", async () => {
     const newEncryptedName = Buffer.from("E2E Vault Renamed").toString("base64");
     const newNonce = crypto.randomBytes(12).toString("base64");
 
-    const res = await fetch(`${baseUrl}/sync/vault-key/${vaultId}`, {
+    const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
@@ -113,12 +113,12 @@ test.describe("sync: vault-key-management", () => {
     expect(res.status).toBe(200);
 
     const data = await res.json();
-    expect(data.vaultId).toBe(vaultId);
+    expect(data.spaceId).toBe(spaceId);
     expect(typeof data.message).toBe("string");
   });
 
   test("delete vault returns 200", async () => {
-    const res = await fetch(`${baseUrl}/sync/vault/${vaultId}`, {
+    const res = await fetch(`${baseUrl}/sync/vault/${spaceId}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -126,7 +126,7 @@ test.describe("sync: vault-key-management", () => {
     expect(res.status).toBe(200);
 
     const data = await res.json();
-    expect(data.vaultId).toBe(vaultId);
+    expect(data.spaceId).toBe(spaceId);
     expect(typeof data.message).toBe("string");
   });
 
@@ -139,7 +139,7 @@ test.describe("sync: vault-key-management", () => {
 
     const data = await res.json();
     const found = data.vaults.find(
-      (v: { vaultId: string }) => v.vaultId === vaultId,
+      (v: { spaceId: string }) => v.spaceId === spaceId,
     );
     expect(found).toBeUndefined();
   });

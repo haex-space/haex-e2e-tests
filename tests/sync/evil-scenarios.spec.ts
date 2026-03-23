@@ -24,8 +24,8 @@ test.describe("sync: evil scenarios", () => {
 
   let victimUser: { accessToken: string; userId: string };
   let attackerUser: { accessToken: string; userId: string };
-  const victimVaultId = crypto.randomUUID();
-  const attackerVaultId = crypto.randomUUID();
+  const victimSpaceId = crypto.randomUUID();
+  const attackerSpaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -34,11 +34,11 @@ test.describe("sync: evil scenarios", () => {
     victimUser = await createAdminUser();
     attackerUser = await createAdminUser();
 
-    await createVaultKey(victimUser.accessToken, victimVaultId);
-    await createVaultKey(attackerUser.accessToken, attackerVaultId);
+    await createVaultKey(victimUser.accessToken, victimSpaceId);
+    await createVaultKey(attackerUser.accessToken, attackerSpaceId);
 
     // Victim pushes sensitive data
-    await pushChanges(victimUser.accessToken, victimVaultId, [
+    await pushChanges(victimUser.accessToken, victimSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "secret-setting" }),
@@ -55,7 +55,7 @@ test.describe("sync: evil scenarios", () => {
 
   test("attacker cannot pull from victim's vault", async () => {
     const res = await fetch(
-      `${SYNC_SERVER_URL}/sync/pull?vaultId=${victimVaultId}&limit=100`,
+      `${SYNC_SERVER_URL}/sync/pull?spaceId=${victimSpaceId}&limit=100`,
       { headers: { Authorization: `Bearer ${attackerUser.accessToken}` } },
     );
 
@@ -77,7 +77,7 @@ test.describe("sync: evil scenarios", () => {
         Authorization: `Bearer ${attackerUser.accessToken}`,
       },
       body: JSON.stringify({
-        vaultId: victimVaultId,
+        spaceId: victimSpaceId,
         changes: [
           makeSyncChange({
             tableName: "haex_vault_settings",
@@ -96,7 +96,7 @@ test.describe("sync: evil scenarios", () => {
   });
 
   test("attacker cannot delete victim's vault", async () => {
-    const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${victimVaultId}`, {
+    const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${victimSpaceId}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${attackerUser.accessToken}` },
     });
@@ -105,7 +105,7 @@ test.describe("sync: evil scenarios", () => {
     expect(res.status).toBeLessThan(500);
 
     // Verify victim's vault still exists
-    const pullRes = await pullChanges(victimUser.accessToken, victimVaultId);
+    const pullRes = await pullChanges(victimUser.accessToken, victimSpaceId);
     expect(pullRes.changes.length).toBeGreaterThan(0);
   });
 
@@ -119,7 +119,7 @@ test.describe("sync: evil scenarios", () => {
 
     // Attacker should only see their own vaults
     const victimVault = data.vaults.find(
-      (v: { vaultId: string }) => v.vaultId === victimVaultId,
+      (v: { spaceId: string }) => v.spaceId === victimSpaceId,
     );
     expect(victimVault).toBeUndefined();
   });
@@ -172,7 +172,7 @@ test.describe("sync: evil scenarios", () => {
         Authorization: `Bearer ${attackerUser.accessToken}`,
       },
       body: JSON.stringify({
-        vaultId: attackerVaultId,
+        spaceId: attackerSpaceId,
         changes: [
           makeSyncChange({
             tableName: "haex_vault_settings'; DROP TABLE sync_changes; --",
@@ -189,7 +189,7 @@ test.describe("sync: evil scenarios", () => {
     expect(res.status).not.toBe(500);
 
     // Verify sync_changes still exists by pulling
-    const pullRes = await pullChanges(victimUser.accessToken, victimVaultId);
+    const pullRes = await pullChanges(victimUser.accessToken, victimSpaceId);
     expect(pullRes.changes.length).toBeGreaterThan(0);
   });
 
@@ -203,7 +203,7 @@ test.describe("sync: evil scenarios", () => {
         Authorization: `Bearer ${attackerUser.accessToken}`,
       },
       body: JSON.stringify({
-        vaultId: attackerVaultId,
+        spaceId: attackerSpaceId,
         changes: [
           makeSyncChange({
             tableName: "haex_vault_settings",
@@ -231,7 +231,7 @@ test.describe("sync: evil scenarios", () => {
         Authorization: `Bearer ${attackerUser.accessToken}`,
       },
       body: JSON.stringify({
-        vaultId: attackerVaultId,
+        spaceId: attackerSpaceId,
         changes: [
           {
             ...makeSyncChange({
@@ -260,7 +260,7 @@ test.describe("sync: evil scenarios", () => {
     // Push with a timestamp far in the future
     const futureTimestamp = "2099-12-31T23:59:59.999Z:99999999:evil-device";
 
-    await pushChanges(attackerUser.accessToken, attackerVaultId, [
+    await pushChanges(attackerUser.accessToken, attackerSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "time-travel" }),
@@ -272,7 +272,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Now push with a normal timestamp — should NOT win (future timestamp wins LWW)
-    await pushChanges(attackerUser.accessToken, attackerVaultId, [
+    await pushChanges(attackerUser.accessToken, attackerSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "time-travel" }),
@@ -284,7 +284,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — future timestamp should have won
-    const pulled = await pullChanges(attackerUser.accessToken, attackerVaultId);
+    const pulled = await pullChanges(attackerUser.accessToken, attackerSpaceId);
     const change = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === JSON.stringify({ id: "time-travel" }) && c.columnName === "value",
@@ -298,13 +298,13 @@ test.describe("sync: evil scenarios", () => {
   // =====================================================================
 
   test("concurrent pushes to same vault from same user do not corrupt data", async () => {
-    const vaultId = crypto.randomUUID();
+    const spaceId = crypto.randomUUID();
     const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
 
     // Push 10 changes concurrently
     const pushPromises = Array.from({ length: 10 }, (_, i) =>
-      pushChanges(accessToken, vaultId, [
+      pushChanges(accessToken, spaceId, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: `concurrent-${i}` }),
@@ -323,7 +323,7 @@ test.describe("sync: evil scenarios", () => {
     expect(successes.length).toBe(10);
 
     // Pull should return all 10 distinct rows
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
     const concurrentChanges = pulled.changes.filter(
       (c: { tableName: string; rowPks: string }) =>
         c.tableName === "haex_vault_settings" &&
@@ -340,14 +340,14 @@ test.describe("sync: evil scenarios", () => {
   // =====================================================================
 
   test("3 devices modify same cell — latest HLC wins", async () => {
-    const vaultId = crypto.randomUUID();
+    const spaceId = crypto.randomUUID();
     const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
 
     const rowPks = JSON.stringify({ id: "3way-conflict" });
 
     // Device A: earliest
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -359,7 +359,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Device C: latest (should win)
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -371,7 +371,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Device B: middle (pushed last but earlier HLC — should NOT win)
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -383,7 +383,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — device C should win (latest HLC, not latest push)
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
     const conflict = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === rowPks && c.columnName === "value",
@@ -399,14 +399,14 @@ test.describe("sync: evil scenarios", () => {
   // =====================================================================
 
   test("deleted record can be resurrected with later timestamp", async () => {
-    const vaultId = crypto.randomUUID();
+    const spaceId = crypto.randomUUID();
     const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
 
     const rowPks = JSON.stringify({ id: "phoenix" });
 
     // Create
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -418,7 +418,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Delete (tombstone)
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -430,7 +430,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Resurrect with later timestamp (set tombstone back to 0)
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -442,7 +442,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — tombstone should be 0 (resurrected)
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
     const tombstone = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === rowPks && c.columnName === "haex_tombstone",

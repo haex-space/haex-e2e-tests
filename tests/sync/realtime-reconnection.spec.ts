@@ -27,7 +27,7 @@ test.describe("sync: realtime reconnection", () => {
   test.describe.configure({ mode: "serial" });
 
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-reconnect-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -36,12 +36,12 @@ test.describe("sync: realtime reconnection", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test("can re-subscribe after explicit disconnect", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // First subscription — must succeed
     const { status: status1, channel: channel1 } = await subscribeAndWait(client, channelName);
@@ -72,7 +72,7 @@ test.describe("sync: realtime reconnection", () => {
 
   test("receives messages after reconnection", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // Subscribe, then disconnect
     const { channel: channel1 } = await subscribeAndWait(client, channelName);
@@ -87,7 +87,7 @@ test.describe("sync: realtime reconnection", () => {
     const collector = await subscribeToBroadcast(client, channelName);
 
     // Push a change — should arrive via the reconnected subscription
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "after-reconnect" }),
@@ -108,7 +108,7 @@ test.describe("sync: realtime reconnection", () => {
   test("can re-subscribe after removeAllChannels + disconnect", async () => {
     // This simulates the cleanup pattern used in haex-vault's cleanupSupabaseClient()
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     // Subscribe
     const collector = await subscribeToBroadcast(client, channelName);
@@ -134,7 +134,7 @@ test.describe("sync: realtime reconnection", () => {
 
   test("multiple disconnect/reconnect cycles work reliably", async () => {
     const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     for (let cycle = 0; cycle < 3; cycle++) {
       // Subscribe
@@ -159,7 +159,7 @@ test.describe("sync: realtime reconnection", () => {
   test("new client works after previous client was cleaned up", async () => {
     // Simulates the haex-vault flow: old client cleaned up, new client created
     const client1 = createRealtimeClient(accessToken);
-    const channelName = `sync:${vaultId}`;
+    const channelName = `sync:${spaceId}`;
 
     const { channel: ch1 } = await subscribeAndWait(client1, channelName);
     expect(client1.realtime.connectionState()).toBe("open");
@@ -173,7 +173,7 @@ test.describe("sync: realtime reconnection", () => {
     const collector = await subscribeToBroadcast(client2, channelName);
 
     // Push and verify broadcast arrives on new client
-    await pushChanges(accessToken, vaultId, [
+    await pushChanges(accessToken, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "new-client-test" }),

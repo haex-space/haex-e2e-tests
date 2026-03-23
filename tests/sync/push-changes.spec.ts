@@ -16,7 +16,7 @@ test.describe("sync: push-changes", () => {
 
   const baseUrl = getSyncServerUrl();
   let accessToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
   const deviceId = `e2e-push-device-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -25,12 +25,12 @@ test.describe("sync: push-changes", () => {
 
     const admin = await createAdminUser();
     accessToken = admin.accessToken;
-    await createVaultKey(accessToken, vaultId);
+    await createVaultKey(accessToken, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, vaultId);
+      await deleteVault(accessToken, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -45,7 +45,7 @@ test.describe("sync: push-changes", () => {
       hlcTimestamp: `${new Date().toISOString()}:00000001:${deviceId}`,
     });
 
-    const result = await pushChanges(accessToken, vaultId, [change]);
+    const result = await pushChanges(accessToken, spaceId, [change]);
 
     expect(result.count).toBe(1);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -79,7 +79,7 @@ test.describe("sync: push-changes", () => {
       }),
     ];
 
-    const result = await pushChanges(accessToken, vaultId, changes);
+    const result = await pushChanges(accessToken, spaceId, changes);
 
     expect(result.count).toBe(3);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -100,10 +100,10 @@ test.describe("sync: push-changes", () => {
       nonce,
     });
 
-    await pushChanges(accessToken, vaultId, [change]);
+    await pushChanges(accessToken, spaceId, [change]);
 
     // Pull without excluding own device to see our changes
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
 
     const found = pulled.changes.find(
       (c) =>
@@ -129,10 +129,10 @@ test.describe("sync: push-changes", () => {
       hlcTimestamp: `${new Date().toISOString()}:00000020:${deviceId}`,
     });
 
-    await pushChanges(accessToken, vaultId, [change]);
+    await pushChanges(accessToken, spaceId, [change]);
 
     // Pull excluding own device
-    const pulled = await pullChanges(accessToken, vaultId, {
+    const pulled = await pullChanges(accessToken, spaceId, {
       excludeDeviceId: deviceId,
     });
 
@@ -164,7 +164,7 @@ test.describe("sync: push-changes", () => {
       encryptedValue: earlyValue,
     });
 
-    await pushChanges(accessToken, vaultId, [earlyChange]);
+    await pushChanges(accessToken, spaceId, [earlyChange]);
 
     // Push late version from another device
     const lateChange = makeSyncChange({
@@ -176,10 +176,10 @@ test.describe("sync: push-changes", () => {
       encryptedValue: lateValue,
     });
 
-    await pushChanges(accessToken, vaultId, [lateChange]);
+    await pushChanges(accessToken, spaceId, [lateChange]);
 
     // Pull all changes for this cell
-    const pulled = await pullChanges(accessToken, vaultId);
+    const pulled = await pullChanges(accessToken, spaceId);
 
     const matches = pulled.changes.filter(
       (c) => c.rowPks === rowPks && c.columnName === "title",

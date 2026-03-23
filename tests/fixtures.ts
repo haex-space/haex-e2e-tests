@@ -775,7 +775,7 @@ export class SyncServerClient {
    * Store encrypted vault key on the server
    */
   async storeVaultKey(params: {
-    vaultId: string;
+    spaceId: string;
     encryptedVaultKey: string;
     salt: string;
     nonce: string;
@@ -803,7 +803,7 @@ export class SyncServerClient {
   /**
    * Get encrypted vault key from the server
    */
-  async getVaultKey(vaultId: string): Promise<{
+  async getVaultKey(spaceId: string): Promise<{
     encryptedVaultKey: string;
     salt: string;
     nonce: string;
@@ -812,7 +812,7 @@ export class SyncServerClient {
       throw new Error("No auth token set");
     }
 
-    const response = await fetch(`${this.baseUrl}/sync/vault-key/${vaultId}`, {
+    const response = await fetch(`${this.baseUrl}/sync/vault-key/${spaceId}`, {
       headers: {
         Authorization: `Bearer ${this.authToken}`,
       },
@@ -830,7 +830,7 @@ export class SyncServerClient {
    * Push changes to the sync server
    */
   async pushChanges(
-    vaultId: string,
+    spaceId: string,
     changes: Array<{
       tableName: string;
       rowPks: string;
@@ -851,7 +851,7 @@ export class SyncServerClient {
         "Content-Type": "application/json",
         Authorization: `Bearer ${this.authToken}`,
       },
-      body: JSON.stringify({ vaultId, changes }),
+      body: JSON.stringify({ spaceId, changes }),
     });
 
     if (!response.ok) {
@@ -866,7 +866,7 @@ export class SyncServerClient {
    * Pull changes from the sync server
    */
   async pullChanges(
-    vaultId: string,
+    spaceId: string,
     options?: {
       excludeDeviceId?: string;
       afterUpdatedAt?: string;
@@ -877,7 +877,7 @@ export class SyncServerClient {
       throw new Error("No auth token set");
     }
 
-    const params = new URLSearchParams({ vaultId });
+    const params = new URLSearchParams({ spaceId });
     if (options?.excludeDeviceId) params.set("excludeDeviceId", options.excludeDeviceId);
     if (options?.afterUpdatedAt) params.set("afterUpdatedAt", options.afterUpdatedAt);
     if (options?.limit) params.set("limit", options.limit.toString());
@@ -901,7 +901,7 @@ export class SyncServerClient {
    */
   async getVaults(): Promise<{
     vaults: Array<{
-      vaultId: string;
+      spaceId: string;
       encryptedVaultName: string;
       createdAt: string;
     }>;
@@ -927,12 +927,12 @@ export class SyncServerClient {
   /**
    * Delete a vault and all its data
    */
-  async deleteVault(vaultId: string): Promise<void> {
+  async deleteVault(spaceId: string): Promise<void> {
     if (!this.authToken) {
       throw new Error("No auth token set");
     }
 
-    const response = await fetch(`${this.baseUrl}/sync/vault/${vaultId}`, {
+    const response = await fetch(`${this.baseUrl}/sync/vault/${spaceId}`, {
       method: "DELETE",
       headers: {
         Authorization: `Bearer ${this.authToken}`,

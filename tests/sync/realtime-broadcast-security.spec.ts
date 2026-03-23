@@ -77,7 +77,7 @@ test.describe("security: token manipulation attacks", () => {
   test.describe.configure({ mode: "serial" });
 
   let validToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -85,7 +85,7 @@ test.describe("security: token manipulation attacks", () => {
 
     const admin = await createAdminUser();
     validToken = admin.accessToken;
-    await createVaultKey(validToken, vaultId);
+    await createVaultKey(validToken, spaceId);
   });
 
   test("expired JWT token is rejected", async () => {
@@ -104,7 +104,7 @@ test.describe("security: token manipulation attacks", () => {
     const expiredToken = `${header}.${payload}.${fakeSignature}`;
 
     const client = createRawClient(expiredToken);
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -121,7 +121,7 @@ test.describe("security: token manipulation attacks", () => {
     const tamperedToken = `${parts[0]}.${tamperedB64}.${parts[2]}`;
 
     const client = createRawClient(tamperedToken);
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -131,7 +131,7 @@ test.describe("security: token manipulation attacks", () => {
     const fakeToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYWNrZXIiLCJyb2xlIjoiYXV0aGVudGljYXRlZCJ9.fake-signature";
 
     const client = createRawClient(fakeToken);
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -140,7 +140,7 @@ test.describe("security: token manipulation attacks", () => {
   test("service_role key does not grant broadcast access to user vaults", async () => {
     // Service role should NOT be able to subscribe to a user's private channel
     const client = createRawClient(SERVICE_ROLE_KEY);
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -148,7 +148,7 @@ test.describe("security: token manipulation attacks", () => {
 
   test("anon key without auth token is rejected", async () => {
     const client = createRawClient(); // No token set
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -156,7 +156,7 @@ test.describe("security: token manipulation attacks", () => {
 
   test("empty string as auth token is rejected", async () => {
     const client = createRawClient("");
-    const status = await trySubscribe(client, `sync:${vaultId}`);
+    const status = await trySubscribe(client, `sync:${spaceId}`);
     client.realtime.disconnect();
 
     expect(status).not.toBe("SUBSCRIBED");
@@ -171,7 +171,7 @@ test.describe("security: channel name injection attacks", () => {
   test.describe.configure({ mode: "serial" });
 
   let validToken: string;
-  const vaultId = crypto.randomUUID();
+  const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -179,7 +179,7 @@ test.describe("security: channel name injection attacks", () => {
 
     const admin = await createAdminUser();
     validToken = admin.accessToken;
-    await createVaultKey(validToken, vaultId);
+    await createVaultKey(validToken, spaceId);
   });
 
   test("SQL injection in channel name does not cause errors", async () => {
@@ -187,7 +187,7 @@ test.describe("security: channel name injection attacks", () => {
     const maliciousNames = [
       "sync:'; DROP TABLE vault_keys; --",
       "sync:\" OR 1=1 --",
-      "sync:${vaultId}' UNION SELECT * FROM vault_keys --",
+      "sync:${spaceId}' UNION SELECT * FROM vault_keys --",
       "sync:'); DELETE FROM realtime.messages; --",
     ];
 
@@ -356,7 +356,7 @@ test.describe("security: privilege escalation", () => {
   let ownerToken: string;
   let outsiderToken: string;
   const spaceId = crypto.randomUUID();
-  const vaultId = crypto.randomUUID();
+  const personalSpaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -370,7 +370,7 @@ test.describe("security: privilege escalation", () => {
     ownerToken = owner.accessToken;
     outsiderToken = outsider.accessToken;
 
-    await createVaultKey(ownerToken, vaultId);
+    await createVaultKey(ownerToken, personalSpaceId);
     const createRes = await createSpace(ownerToken, spaceId, "Privesc Test Space");
     expect(createRes.status).toBe(201);
   });
@@ -380,7 +380,7 @@ test.describe("security: privilege escalation", () => {
     const client = createRawClient(outsiderToken);
     const messages: unknown[] = [];
     const channel = client
-      .channel(`sync:${vaultId}`) // No private:true — trying to bypass
+      .channel(`sync:${personalSpaceId}`) // No private:true — trying to bypass
       .on("broadcast", { event: "INSERT" }, (p) => messages.push(p))
       .on("broadcast", { event: "UPDATE" }, (p) => messages.push(p));
 
@@ -392,7 +392,7 @@ test.describe("security: privilege escalation", () => {
     });
 
     // Owner pushes changes (these generate private:true messages in DB)
-    await pushChanges(ownerToken, vaultId, [
+    await pushChanges(ownerToken, personalSpaceId, [
       makeSyncChange({
         tableName: "test",
         rowPks: JSON.stringify({ id: "privesc-public-bypass" }),
@@ -435,8 +435,8 @@ test.describe("security: privilege escalation", () => {
 
   test("using another user's vault_id as space channel does not grant access", async () => {
     // Outsider has their own vault — try to use its vault_id to subscribe to owner's space
-    const outsiderVaultId = crypto.randomUUID();
-    await createVaultKey(outsiderToken, outsiderVaultId);
+    const outsiderSpaceId = crypto.randomUUID();
+    await createVaultKey(outsiderToken, outsiderSpaceId);
 
     const client = createRawClient(outsiderToken);
     const status = await trySubscribe(client, `sync:${spaceId}`);
@@ -454,7 +454,7 @@ test.describe("security: enumeration resistance", () => {
   test.describe.configure({ mode: "serial" });
 
   let validToken: string;
-  const realVaultId = crypto.randomUUID();
+  const realSpaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -462,7 +462,7 @@ test.describe("security: enumeration resistance", () => {
 
     const admin = await createAdminUser();
     validToken = admin.accessToken;
-    await createVaultKey(validToken, realVaultId);
+    await createVaultKey(validToken, realSpaceId);
   });
 
   test("non-existent vault_id and unauthorized vault_id produce same result", async () => {
@@ -472,7 +472,7 @@ test.describe("security: enumeration resistance", () => {
 
     // Try subscribing to the real vault (unauthorized)
     const client1 = createRawClient(outsider.accessToken);
-    const statusReal = await trySubscribe(client1, `sync:${realVaultId}`, 5000);
+    const statusReal = await trySubscribe(client1, `sync:${realSpaceId}`, 5000);
     client1.realtime.disconnect();
 
     // Try subscribing to a non-existent vault
