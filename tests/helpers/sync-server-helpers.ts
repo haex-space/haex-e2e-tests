@@ -391,6 +391,131 @@ export async function createAdminUser(): Promise<{
   };
 }
 
+/**
+ * Like createAdminUser but also returns the identity's public key.
+ * Needed for space membership tests where the public key is used as identifier.
+ */
+export async function createAdminUserWithIdentity(): Promise<{
+  accessToken: string;
+  userId: string;
+  email: string;
+  publicKey: string;
+}> {
+  const identity = await createTestIdentity();
+  const regResult = await registerIdentity(identity);
+
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_KEY ||
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
+  const anonKey =
+    process.env.SUPABASE_ANON_KEY ||
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+
+  const listRes = await fetch(
+    `${SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=50`,
+    {
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        apikey: anonKey,
+      },
+    },
+  );
+
+  if (listRes.ok) {
+    const listData = await listRes.json();
+    const users = listData.users || listData;
+    const user = (users as { id: string; email: string }[]).find(
+      (u) => u.email === identity.email,
+    );
+    if (user) {
+      await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${user.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${serviceKey}`,
+          apikey: anonKey,
+        },
+        body: JSON.stringify({ email_confirm: true }),
+      });
+    }
+  }
+
+  const tokens = await challengeLogin(identity);
+
+  return {
+    accessToken: tokens.access_token,
+    userId: regResult.identityId,
+    email: identity.email,
+    publicKey: identity.publicKeyBase64,
+  };
+}
+
+// =============================================================================
+// Space Helpers
+// =============================================================================
+
+function randomBase64(bytes: number): string {
+  return crypto.randomBytes(bytes).toString("base64");
+}
+
+/**
+ * Create a shared space owned by the given user.
+ */
+export async function createSpace(
+  accessToken: string,
+  spaceId: string,
+  label: string,
+): Promise<Response> {
+  return fetch(`${SYNC_SERVER_URL}/spaces`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      id: spaceId,
+      encryptedName: randomBase64(32),
+      nameNonce: randomBase64(12),
+      label,
+      keyGrant: {
+        encryptedSpaceKey: randomBase64(32),
+        keyNonce: randomBase64(12),
+        ephemeralPublicKey: randomBase64(65),
+      },
+    }),
+  });
+}
+
+/**
+ * Add a member to a space.
+ */
+export async function addSpaceMember(
+  adminToken: string,
+  spaceId: string,
+  memberPublicKey: string,
+  label: string,
+  role: "owner" | "member" | "reader",
+): Promise<Response> {
+  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${adminToken}`,
+    },
+    body: JSON.stringify({
+      publicKey: memberPublicKey,
+      label,
+      role,
+      keyGrant: {
+        encryptedSpaceKey: randomBase64(32),
+        keyNonce: randomBase64(12),
+        ephemeralPublicKey: randomBase64(65),
+        generation: 1,
+      },
+    }),
+  });
+}
+
 // =============================================================================
 // Vault Key Helpers
 // =============================================================================

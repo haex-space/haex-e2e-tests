@@ -3,7 +3,10 @@ import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
   createAdminUser,
+  createAdminUserWithIdentity,
   createVaultKey,
+  createSpace,
+  addSpaceMember,
   pushChanges,
   makeSyncChange,
   createRealtimeClient,
@@ -160,6 +163,90 @@ test.describe("sync: realtime broadcast", () => {
 
     await ownerClient.removeChannel(collector.channel);
     await cleanupClient(ownerClient);
+
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+test.describe("sync: realtime broadcast authorization for shared spaces", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let ownerToken: string;
+  let memberToken: string;
+  let memberPublicKey: string;
+  let outsiderToken: string;
+  const spaceId = crypto.randomUUID();
+
+  test.beforeAll(async () => {
+    const healthy = await checkSyncServerHealth();
+    expect(healthy).toBe(true);
+
+    // Create three users: space owner, space member, and an outsider
+    const [owner, member, outsider] = await Promise.all([
+      createAdminUserWithIdentity(),
+      createAdminUserWithIdentity(),
+      createAdminUserWithIdentity(),
+    ]);
+
+    ownerToken = owner.accessToken;
+    memberToken = member.accessToken;
+    memberPublicKey = member.publicKey;
+    outsiderToken = outsider.accessToken;
+
+    // Owner creates a space
+    const createRes = await createSpace(ownerToken, spaceId, "Broadcast Auth Test Space");
+    expect(createRes.status).toBe(201);
+
+    // Owner invites member
+    const inviteRes = await addSpaceMember(ownerToken, spaceId, memberPublicKey, "Test Member", "member");
+    expect(inviteRes.status).toBe(201);
+  });
+
+  test("space member can subscribe to space broadcast channel", async () => {
+    const client = createRealtimeClient(memberToken);
+    const { status } = await subscribeAndWait(client, `sync:${spaceId}`);
+
+    await cleanupClient(client);
+
+    expect(status).toBe("SUBSCRIBED");
+  });
+
+  test("space owner can subscribe to space broadcast channel", async () => {
+    const client = createRealtimeClient(ownerToken);
+    const { status } = await subscribeAndWait(client, `sync:${spaceId}`);
+
+    await cleanupClient(client);
+
+    expect(status).toBe("SUBSCRIBED");
+  });
+
+  test("outsider cannot subscribe to space broadcast channel", async () => {
+    const client = createRealtimeClient(outsiderToken);
+    const { status } = await subscribeAndWait(client, `sync:${spaceId}`);
+
+    await cleanupClient(client);
+
+    // Private channel should reject unauthorized users
+    expect(status).not.toBe("SUBSCRIBED");
+  });
+
+  test("space member receives broadcast when changes are pushed", async () => {
+    const client = createRealtimeClient(memberToken);
+    const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
+
+    await pushChanges(ownerToken, spaceId, [
+      makeSyncChange({
+        tableName: "shared_notes",
+        rowPks: JSON.stringify({ id: "space-broadcast-test" }),
+        columnName: "content",
+        deviceId: `e2e-owner-${Date.now()}`,
+      }),
+    ]);
+
+    const messages = await waitForMessages(collector, 1, 5000);
+
+    await client.removeChannel(collector.channel);
+    await cleanupClient(client);
 
     expect(messages.length).toBeGreaterThanOrEqual(1);
   });
