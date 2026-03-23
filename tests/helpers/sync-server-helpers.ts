@@ -400,6 +400,7 @@ export async function createAdminUserWithIdentity(): Promise<{
   userId: string;
   email: string;
   publicKey: string;
+  privateKeyBase64: string;
 }> {
   const identity = await createTestIdentity();
   const regResult = await registerIdentity(identity);
@@ -442,11 +443,18 @@ export async function createAdminUserWithIdentity(): Promise<{
 
   const tokens = await challengeLogin(identity);
 
+  // Export private key as Base64 PKCS8 for signRecordAsync
+  const pkcs8Bytes = new Uint8Array(
+    await subtle.exportKey("pkcs8", identity.cryptoKeyPair.privateKey),
+  );
+  const privateKeyBase64 = btoa(String.fromCharCode(...pkcs8Bytes));
+
   return {
     accessToken: tokens.access_token,
     userId: regResult.identityId,
     email: identity.email,
     publicKey: identity.publicKeyBase64,
+    privateKeyBase64,
   };
 }
 
@@ -635,6 +643,37 @@ export interface SyncChange {
   signature?: string;
   signedBy?: string;
   collaborative?: boolean;
+}
+
+/**
+ * Sign and push changes to a space. Uses vault-sdk's signRecordAsync.
+ */
+export async function signAndPushSpaceChanges(
+  accessToken: string,
+  spaceId: string,
+  changes: SyncChange[],
+  privateKeyBase64: string,
+  publicKey: string,
+): Promise<{ count: number; serverTimestamp: string }> {
+  const { signRecordAsync } = await import("@haex-space/vault-sdk");
+
+  const signedChanges = await Promise.all(
+    changes.map(async (change) => {
+      const signature = await signRecordAsync(
+        {
+          tableName: change.tableName,
+          rowPks: change.rowPks,
+          columnName: change.columnName,
+          encryptedValue: change.encryptedValue,
+          hlcTimestamp: change.hlcTimestamp,
+        },
+        privateKeyBase64,
+      );
+      return { ...change, signature, signedBy: publicKey };
+    }),
+  );
+
+  return pushChanges(accessToken, spaceId, signedChanges);
 }
 
 /**

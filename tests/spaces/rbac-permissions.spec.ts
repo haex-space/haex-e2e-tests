@@ -3,7 +3,11 @@ import { test, expect } from "@playwright/test";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
-  createAdminUser,
+  createAdminUserWithIdentity,
+  createSpace,
+  addSpaceMember,
+  makeSyncChange,
+  signAndPushSpaceChanges,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -12,61 +16,14 @@ function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
 }
 
-async function createSpace(token: string, spaceId: string, label: string) {
-  return fetch(`${SYNC_SERVER_URL}/spaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
-  });
-}
-
-async function addMember(
-  adminToken: string,
-  spaceId: string,
-  publicKey: string,
-  label: string,
-  role: "owner" | "member" | "reader",
-) {
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${adminToken}`,
-    },
-    body: JSON.stringify({
-      publicKey,
-      label,
-      role,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-        generation: 1,
-      },
-    }),
-  });
-}
-
 test.describe("spaces: RBAC permissions", () => {
   test.describe.configure({ mode: "serial" });
 
   let ownerToken: string;
   let memberToken: string;
-  let readerToken: string;
   let memberPublicKey: string;
+  let memberPrivateKey: string;
+  let readerToken: string;
   let readerPublicKey: string;
   const spaceId = crypto.randomUUID();
 
@@ -74,28 +31,29 @@ test.describe("spaces: RBAC permissions", () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    // Create owner
-    const owner = await createAdminUser();
+    // Create users with real ECDSA identities (needed for signed push)
+    const [owner, member, reader] = await Promise.all([
+      createAdminUserWithIdentity(),
+      createAdminUserWithIdentity(),
+      createAdminUserWithIdentity(),
+    ]);
+
     ownerToken = owner.accessToken;
+    memberToken = member.accessToken;
+    memberPublicKey = member.publicKey;
+    memberPrivateKey = member.privateKeyBase64;
+    readerToken = reader.accessToken;
+    readerPublicKey = reader.publicKey;
 
     // Create space as owner
     const createRes = await createSpace(ownerToken, spaceId, "RBAC Test Space");
     expect(createRes.status).toBe(201);
 
-    // Create other users
-    const member = await createAdminUser();
-    memberToken = member.accessToken;
-    memberPublicKey = randomBase64(65);
-
-    const reader = await createAdminUser();
-    readerToken = reader.accessToken;
-    readerPublicKey = randomBase64(65);
-
-    // Add members with different roles (server roles: owner, member, reader)
-    const addMemberRes = await addMember(ownerToken, spaceId, memberPublicKey, "Member User", "member");
+    // Add members with different roles
+    const addMemberRes = await addSpaceMember(ownerToken, spaceId, memberPublicKey, "Member User", "member");
     expect(addMemberRes.status).toBe(201);
 
-    const addReaderRes = await addMember(ownerToken, spaceId, readerPublicKey, "Reader User", "reader");
+    const addReaderRes = await addSpaceMember(ownerToken, spaceId, readerPublicKey, "Reader User", "reader");
     expect(addReaderRes.status).toBe(201);
   });
 
@@ -131,7 +89,7 @@ test.describe("spaces: RBAC permissions", () => {
 
   test("owner can invite new members", async () => {
     const newMemberKey = randomBase64(65);
-    const res = await addMember(ownerToken, spaceId, newMemberKey, "Another Invite", "member");
+    const res = await addSpaceMember(ownerToken, spaceId, newMemberKey, "Another Invite", "member");
     expect(res.status).toBe(201);
 
     // Cleanup
@@ -210,7 +168,7 @@ test.describe("spaces: RBAC permissions", () => {
   // =====================================================================
 
   test("non-member cannot access space details", async () => {
-    const outsider = await createAdminUser();
+    const outsider = await createAdminUserWithIdentity();
 
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       headers: { Authorization: `Bearer ${outsider.accessToken}` },
@@ -235,7 +193,7 @@ test.describe("spaces: RBAC permissions", () => {
 
   test("owner can remove a member", async () => {
     const tempKey = randomBase64(65);
-    const addRes = await addMember(ownerToken, spaceId, tempKey, "Temp Member", "member");
+    const addRes = await addSpaceMember(ownerToken, spaceId, tempKey, "Temp Member", "member");
     expect(addRes.status).toBe(201);
 
     const removeRes = await fetch(
@@ -437,5 +395,23 @@ test.describe("spaces: RBAC permissions", () => {
     // Should be rejected — reader has no write access
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
+  });
+
+  test("member can push signed changes to space", async () => {
+    const result = await signAndPushSpaceChanges(
+      memberToken,
+      spaceId,
+      [
+        makeSyncChange({
+          tableName: "shared_notes",
+          rowPks: JSON.stringify({ id: "member-push-test" }),
+          columnName: "content",
+          deviceId: `e2e-member-${Date.now()}`,
+        }),
+      ],
+      memberPrivateKey,
+      memberPublicKey,
+    );
+    expect(result.count).toBe(1);
   });
 });
