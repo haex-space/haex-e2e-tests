@@ -428,42 +428,6 @@ jobs:
 
           docker compose -f docker/docker-compose.yml ps
 
-          # Ensure broadcast trigger exists (race condition: Realtime creates
-          # broadcast_changes() after port opens, but sync-server migrations
-          # may have already run and skipped the trigger creation)
-          echo "Ensuring broadcast trigger exists on sync_changes..."
-          docker exec haex_e2e_sync_db psql -U postgres -d postgres -c "
-            DO \$\$
-            BEGIN
-              IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'broadcast_changes'
-                         AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'realtime'))
-                 AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'broadcast_sync_changes_trigger')
-              THEN
-                EXECUTE '
-                  CREATE OR REPLACE FUNCTION public.broadcast_sync_changes()
-                  RETURNS trigger
-                  SECURITY DEFINER SET search_path = ''''
-                  AS \$fn\$
-                  BEGIN
-                    PERFORM realtime.broadcast_changes(
-                      ''sync:'' || COALESCE(NEW.vault_id, OLD.vault_id)::text,
-                      TG_OP, TG_OP, TG_TABLE_NAME, TG_TABLE_SCHEMA, NEW, OLD
-                    );
-                    RETURN NULL;
-                  END;
-                  \$fn\$ LANGUAGE plpgsql';
-                CREATE TRIGGER broadcast_sync_changes_trigger
-                  AFTER INSERT OR UPDATE OR DELETE ON public.sync_changes
-                  FOR EACH ROW EXECUTE FUNCTION public.broadcast_sync_changes();
-                RAISE NOTICE 'Broadcast trigger created successfully';
-              ELSIF EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'broadcast_sync_changes_trigger') THEN
-                RAISE NOTICE 'Broadcast trigger already exists';
-              ELSE
-                RAISE WARNING 'realtime.broadcast_changes() not found - broadcast will not work';
-              END IF;
-            END \$\$;
-          " 2>&1 || echo "WARNING: Failed to create broadcast trigger"
-
           # Dump container logs if any service is unhealthy
           if [ "$SYNC_STATUS" != "healthy" ] || [ "$REALTIME_STATUS" != "healthy" ] || [ "$MARKETPLACE_STATUS" != "healthy" ]; then
             echo "::error::Services failed to become healthy! Dumping logs..."
