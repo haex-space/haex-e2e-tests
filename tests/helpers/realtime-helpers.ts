@@ -64,7 +64,7 @@ export async function subscribeAndWait(
   timeoutMs = 10000,
 ): Promise<{ status: ChannelStatus; channel: RealtimeChannel }> {
   const channel = client
-    .channel(channelName)
+    .channel(channelName, { config: { private: true } })
     .on("broadcast", { event: "INSERT" }, (payload) => {
       onBroadcast?.("INSERT", payload);
     })
