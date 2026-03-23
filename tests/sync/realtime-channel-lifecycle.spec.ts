@@ -177,6 +177,9 @@ test.describe("sync: realtime channel lifecycle", () => {
     await client.realtime.removeAllChannels();
     expect(client.realtime.channels.length).toBe(0);
 
+    // Brief delay to let the server process channel leaves
+    await new Promise((r) => setTimeout(r, 500));
+
     // Should still be able to subscribe after removeAllChannels
     const { status, channel } = await subscribeAndWait(client, `sync:${vaultId}`);
     expect(status).toBe("SUBSCRIBED");

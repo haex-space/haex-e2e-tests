@@ -122,6 +122,7 @@ test.describe("sync: realtime reconnection", () => {
 
     // Explicitly reconnect before re-subscribing
     client.realtime.connect();
+    await waitForConnection(client);
 
     // Re-subscribe on the same client instance
     const { status, channel } = await subscribeAndWait(client, channelName);
@@ -148,6 +149,7 @@ test.describe("sync: realtime reconnection", () => {
       // Explicitly reconnect for next cycle
       if (cycle < 2) {
         client.realtime.connect();
+        await waitForConnection(client);
       }
     }
 
