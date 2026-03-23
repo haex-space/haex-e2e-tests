@@ -10,6 +10,7 @@ import {
   subscribeToBroadcast,
   subscribeAndWait,
   waitForMessages,
+  waitForConnection,
   cleanupClient,
 } from "../helpers";
 
@@ -57,6 +58,9 @@ test.describe("sync: realtime reconnection", () => {
     // The Supabase JS SDK does not auto-reconnect after an explicit disconnect().
     client.realtime.connect();
 
+    // Wait for the WebSocket to actually connect before subscribing
+    await waitForConnection(client);
+
     // Re-subscribe on the same client — this is the scenario that previously failed
     // because the Realtime client's internal state wasn't properly reset
     const { status: status2, channel: channel2 } = await subscribeAndWait(client, channelName);
@@ -77,6 +81,7 @@ test.describe("sync: realtime reconnection", () => {
 
     // Explicitly reconnect before re-subscribing
     client.realtime.connect();
+    await waitForConnection(client);
 
     // Reconnect and collect messages
     const collector = await subscribeToBroadcast(client, channelName);

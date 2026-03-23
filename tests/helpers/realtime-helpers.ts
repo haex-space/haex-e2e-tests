@@ -148,6 +148,25 @@ export async function cleanupClient(client: SupabaseClient): Promise<void> {
 }
 
 /**
+ * Waits for the Realtime WebSocket to reach a connected state.
+ * Use after client.realtime.connect() to ensure the socket is ready before subscribing.
+ */
+export async function waitForConnection(
+  client: SupabaseClient,
+  timeoutMs = 5000,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = client.realtime.connectionState();
+    if (state === "open") {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
+
+/**
  * Waits for a channel status change (e.g., waiting for CLOSED after disconnect).
  */
 export function waitForChannelStatus(

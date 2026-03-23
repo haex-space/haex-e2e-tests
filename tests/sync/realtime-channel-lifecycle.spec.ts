@@ -60,6 +60,9 @@ test.describe("sync: realtime channel lifecycle", () => {
     // Unsubscribe
     await client.removeChannel(ch1);
 
+    // Brief delay to let the server process the channel leave
+    await new Promise((r) => setTimeout(r, 500));
+
     // Re-subscribe on the same channel name
     const { status: s2, channel: ch2 } = await subscribeAndWait(client, channelName);
     expect(s2).toBe("SUBSCRIBED");
