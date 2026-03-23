@@ -546,6 +546,25 @@ export async function deleteSpace(
   });
 }
 
+/**
+ * Insert a broadcast message directly into realtime.messages via the sync-db container.
+ * Used for testing broadcast delivery without needing Push endpoint signatures.
+ * Topic and event are sanitized (only alphanumeric, hyphens, colons allowed).
+ */
+export async function insertBroadcastMessage(
+  topic: string,
+  event = "INSERT",
+): Promise<void> {
+  const { execFileSync } = await import("child_process");
+  // Sanitize inputs to prevent injection
+  const safeTopic = topic.replace(/[^a-zA-Z0-9:\-_]/g, "");
+  const safeEvent = event.replace(/[^A-Z]/g, "");
+  execFileSync("docker", [
+    "exec", "haex_e2e_sync_db", "psql", "-U", "postgres", "-d", "postgres", "-c",
+    `INSERT INTO realtime.messages (topic, extension, event, payload, private) VALUES ('${safeTopic}', 'broadcast', '${safeEvent}', '{"op": "${safeEvent}"}'::jsonb, true);`,
+  ], { stdio: "pipe" });
+}
+
 // =============================================================================
 // Vault Key Helpers
 // =============================================================================

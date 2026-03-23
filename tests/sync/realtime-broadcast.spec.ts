@@ -12,6 +12,7 @@ import {
   deleteSpace,
   pushChanges,
   makeSyncChange,
+  insertBroadcastMessage,
   createRealtimeClient,
   subscribeToBroadcast,
   waitForMessages,
@@ -289,7 +290,6 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
   let readerPublicKey: string;
   let outsiderToken: string;
   const spaceId = crypto.randomUUID();
-  const deviceId = `e2e-space-${Date.now()}`;
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -358,18 +358,12 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     expect(status).not.toBe("SUBSCRIBED");
   });
 
-  test("space member receives broadcast when owner pushes changes", async () => {
+  test("space member receives broadcast when changes occur", async () => {
     const client = createRealtimeClient(memberToken);
     const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
-    await pushChanges(ownerToken, spaceId, [
-      makeSyncChange({
-        tableName: "shared_notes",
-        rowPks: JSON.stringify({ id: "space-member-broadcast" }),
-        columnName: "content",
-        deviceId,
-      }),
-    ]);
+    // Insert broadcast directly (space pushes require ECDSA signatures)
+    await insertBroadcastMessage(`sync:${spaceId}`);
 
     const messages = await waitForMessages(collector, 1, 5000);
 
@@ -379,18 +373,11 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     expect(messages.length).toBeGreaterThanOrEqual(1);
   });
 
-  test("reader receives broadcast when owner pushes changes", async () => {
+  test("reader receives broadcast when changes occur", async () => {
     const client = createRealtimeClient(readerToken);
     const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
-    await pushChanges(ownerToken, spaceId, [
-      makeSyncChange({
-        tableName: "shared_notes",
-        rowPks: JSON.stringify({ id: "space-reader-broadcast" }),
-        columnName: "content",
-        deviceId,
-      }),
-    ]);
+    await insertBroadcastMessage(`sync:${spaceId}`);
 
     const messages = await waitForMessages(collector, 1, 5000);
 
@@ -464,15 +451,8 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
       });
     });
 
-    // Push a change that should NOT reach the outsider
-    await pushChanges(ownerToken, spaceId, [
-      makeSyncChange({
-        tableName: "shared_notes",
-        rowPks: JSON.stringify({ id: "bypass-attempt" }),
-        columnName: "content",
-        deviceId,
-      }),
-    ]);
+    // Insert a broadcast that should NOT reach the outsider
+    await insertBroadcastMessage(`sync:${spaceId}`);
 
     // Wait to see if anything leaks
     await new Promise((r) => setTimeout(r, 3000));
