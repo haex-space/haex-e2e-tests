@@ -34,6 +34,10 @@ on:
         description: 'Run ID to download haex-vault artifact from'
         type: string
         default: ''
+      haex_vault_android_artifact:
+        description: 'GitHub artifact name containing pre-built Android APK'
+        type: string
+        default: ''
       sync_server_image:
         description: 'Pre-built sync-server Docker image (e.g., ghcr.io/haex-space/haex-sync-server:latest)'
         type: string
