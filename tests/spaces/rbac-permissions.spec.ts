@@ -247,4 +247,195 @@ test.describe("spaces: RBAC permissions", () => {
     );
     expect(removeRes.status).toBe(200);
   });
+
+  test("member cannot remove other members", async () => {
+    const res = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(readerPublicKey)}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${memberToken}` },
+      },
+    );
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("reader cannot remove other members", async () => {
+    const res = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberPublicKey)}`,
+      {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${readerToken}` },
+      },
+    );
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  // =====================================================================
+  // Space Name Update Permissions
+  // =====================================================================
+
+  test("member cannot update space name", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${memberToken}`,
+      },
+      body: JSON.stringify({
+        encryptedName: randomBase64(32),
+        nameNonce: randomBase64(12),
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("reader cannot update space name", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${readerToken}`,
+      },
+      body: JSON.stringify({
+        encryptedName: randomBase64(32),
+        nameNonce: randomBase64(12),
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  // =====================================================================
+  // Access Token Permissions
+  // =====================================================================
+
+  test("owner can create access tokens", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${ownerToken}`,
+      },
+      body: JSON.stringify({
+        publicKey: memberPublicKey,
+        role: "member",
+        label: "Test Token",
+      }),
+    });
+    expect(res.status).toBe(201);
+  });
+
+  test("member cannot create access tokens", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${memberToken}`,
+      },
+      body: JSON.stringify({
+        publicKey: memberPublicKey,
+        role: "member",
+        label: "Unauthorized Token",
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("reader cannot create access tokens", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${readerToken}`,
+      },
+      body: JSON.stringify({
+        publicKey: readerPublicKey,
+        role: "reader",
+        label: "Unauthorized Reader Token",
+      }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("member cannot list access tokens", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
+      headers: { Authorization: `Bearer ${memberToken}` },
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("reader cannot list access tokens", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
+      headers: { Authorization: `Bearer ${readerToken}` },
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  // =====================================================================
+  // Admin Transfer Permissions
+  // =====================================================================
+
+  test("member cannot transfer admin role", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${memberToken}`,
+      },
+      body: JSON.stringify({ targetPublicKey: readerPublicKey }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("reader cannot transfer admin role", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${readerToken}`,
+      },
+      body: JSON.stringify({ targetPublicKey: memberPublicKey }),
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  // =====================================================================
+  // Sync Push Permissions
+  // =====================================================================
+
+  test("reader cannot push changes to space", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${readerToken}`,
+      },
+      body: JSON.stringify({
+        vaultId: spaceId,
+        changes: [{
+          tableName: "test_data",
+          rowPks: JSON.stringify({ id: "reader-push-attempt" }),
+          columnName: "value",
+          hlcTimestamp: new Date().toISOString(),
+          deviceId: "e2e-reader-device",
+          encryptedValue: randomBase64(16),
+          nonce: randomBase64(12),
+          signature: randomBase64(64),
+          signedBy: readerPublicKey,
+        }],
+      }),
+    });
+    // Should be rejected — reader has no write access
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
 });
