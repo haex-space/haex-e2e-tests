@@ -516,6 +516,36 @@ export async function addSpaceMember(
   });
 }
 
+/**
+ * Remove a member from a space.
+ */
+export async function removeSpaceMember(
+  adminToken: string,
+  spaceId: string,
+  memberPublicKey: string,
+): Promise<Response> {
+  return fetch(
+    `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberPublicKey)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${adminToken}` },
+    },
+  );
+}
+
+/**
+ * Delete a space.
+ */
+export async function deleteSpace(
+  adminToken: string,
+  spaceId: string,
+): Promise<Response> {
+  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${adminToken}` },
+  });
+}
+
 // =============================================================================
 // Vault Key Helpers
 // =============================================================================
