@@ -1774,7 +1774,7 @@ export class VaultAutomation {
     serverUrl: string;
     email: string;
     password: string;
-    vaultId: string;
+    spaceId: string;
     name?: string;
     enabled?: boolean;
   }): Promise<string> {
@@ -1786,7 +1786,7 @@ export class VaultAutomation {
     // Insert sync backend directly into haex_sync_backends table
     const sql = `
       INSERT INTO haex_sync_backends (
-        id, name, server_url, vault_id, email, password,
+        id, name, server_url, space_id, email, password,
         enabled, priority, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
     `;
@@ -1795,7 +1795,7 @@ export class VaultAutomation {
       backendId,
       name,
       config.serverUrl,
-      config.vaultId,
+      config.spaceId,
       config.email,
       config.password,
       enabled ? 1 : 0,
@@ -1807,7 +1807,7 @@ export class VaultAutomation {
       backendId,
       name,
       serverUrl: config.serverUrl,
-      vaultId: config.vaultId,
+      spaceId: config.spaceId,
       email: config.email,
     });
 
@@ -1827,12 +1827,12 @@ export class VaultAutomation {
     id: string;
     name: string;
     serverUrl: string;
-    vaultId: string;
+    spaceId: string;
     email: string;
     enabled: boolean;
   }>> {
     const sql = `
-      SELECT id, name, server_url, vault_id, email, enabled
+      SELECT id, name, server_url, space_id, email, enabled
       FROM haex_sync_backends
       WHERE haex_tombstone = 0
     `;
@@ -1846,7 +1846,7 @@ export class VaultAutomation {
       id: row.id as string,
       name: row.name as string,
       serverUrl: row.server_url as string,
-      vaultId: row.vault_id as string,
+      spaceId: row.space_id as string,
       email: row.email as string,
       enabled: row.enabled === 1,
     }));
