@@ -28,7 +28,7 @@ test.describe("vault-lifecycle: open-close-vault", () => {
     await vault.invokeTauriCommand("create_encrypted_database", {
       vaultName: testVaultName,
       key: testVaultPassword,
-      vaultId: null,
+      spaceId: null,
     });
 
     sql = new SqlHelpers(vault);

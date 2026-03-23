@@ -682,7 +682,7 @@ async function initializeTestVault(sessionId: string): Promise<void> {
     await invokeTauriCommand(sessionId, "create_encrypted_database", {
       vaultName: TEST_VAULT_NAME,
       key: TEST_VAULT_PASSWORD,
-      vaultId: null,
+      spaceId: null,
     });
     // Close it again so the UI flow can open it properly (with Pinia store + extensions)
     await invokeTauriCommand(sessionId, "close_database", {}).catch(() => {});

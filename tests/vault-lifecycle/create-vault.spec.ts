@@ -57,7 +57,7 @@ test.describe("vault-lifecycle: create-vault", () => {
     const vaultId = await vault.invokeTauriCommand<string>("create_encrypted_database", {
       vaultName: testVaultName,
       key: testVaultPassword,
-      vaultId: null,
+      spaceId: null,
     });
 
     expect(typeof vaultId).toBe("string");
@@ -88,7 +88,7 @@ test.describe("vault-lifecycle: create-vault", () => {
       vault.invokeTauriCommand("create_encrypted_database", {
         vaultName: testVaultName,
         key: "another-password",
-        vaultId: null,
+        spaceId: null,
       })
     ).rejects.toThrow();
   });

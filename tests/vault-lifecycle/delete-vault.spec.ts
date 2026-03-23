@@ -54,7 +54,7 @@ test.describe("vault-lifecycle: delete-vault", () => {
     const vaultId = await vault.invokeTauriCommand<string>("create_encrypted_database", {
       vaultName: testVaultName,
       key: testVaultPassword,
-      vaultId: null,
+      spaceId: null,
     });
 
     expect(typeof vaultId).toBe("string");

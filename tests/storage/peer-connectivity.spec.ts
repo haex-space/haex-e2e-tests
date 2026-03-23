@@ -53,7 +53,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       await vaultB.invokeTauriCommand("create_encrypted_database", {
         vaultName: "P2P Test Vault B",
         key: "test-password-b",
-        vaultId: null,
+        spaceId: null,
       });
     } catch {
       // Vault may already exist, try opening it

@@ -29,7 +29,7 @@ test.describe("vault-lifecycle: change-password", () => {
     await vault.invokeTauriCommand("create_encrypted_database", {
       vaultName: testVaultName,
       key: originalPassword,
-      vaultId: null,
+      spaceId: null,
     });
 
     sql = new SqlHelpers(vault);
