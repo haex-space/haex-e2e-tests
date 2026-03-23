@@ -127,4 +127,40 @@ test.describe("sync: realtime broadcast", () => {
 
     expect(collector.messages.length).toBe(0);
   });
+
+  test("unauthorized user cannot receive broadcasts on private channel", async () => {
+    // Create a separate user with NO access to the vault
+    const unauthorizedUser = await createAdminUser();
+
+    // Unauthorized user subscribes to the vault owner's channel
+    const unauthorizedClient = createRealtimeClient(unauthorizedUser.accessToken);
+    const { status } = await subscribeAndWait(unauthorizedClient, `sync:${vaultId}`);
+
+    // Private channel should reject — either CHANNEL_ERROR or TIMED_OUT
+    expect(status).not.toBe("SUBSCRIBED");
+
+    await cleanupClient(unauthorizedClient);
+  });
+
+  test("authorized user receives broadcasts on private channel", async () => {
+    // The vault owner should be able to subscribe and receive broadcasts
+    const ownerClient = createRealtimeClient(accessToken);
+    const collector = await subscribeToBroadcast(ownerClient, `sync:${vaultId}`);
+
+    await pushChanges(accessToken, vaultId, [
+      makeSyncChange({
+        tableName: "haex_vault_settings",
+        rowPks: JSON.stringify({ id: "auth-broadcast-test" }),
+        columnName: "value",
+        deviceId: deviceIdA,
+      }),
+    ]);
+
+    const messages = await waitForMessages(collector, 1, 5000);
+
+    await ownerClient.removeChannel(collector.channel);
+    await cleanupClient(ownerClient);
+
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+  });
 });
