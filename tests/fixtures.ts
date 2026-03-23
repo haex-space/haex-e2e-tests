@@ -2390,7 +2390,7 @@ export class VaultAutomation {
       const result = await this.invokeTauriCommand<Array<Record<string, unknown>>>(
         "sql_select",
         {
-          sql: "SELECT value FROM haex_crdt_configs WHERE key = 'vault_id'",
+          sql: "SELECT value FROM haex_crdt_configs WHERE key = 'space_id'",
           params: [],
         }
       );
