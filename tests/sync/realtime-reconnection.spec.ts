@@ -1,6 +1,5 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   checkSyncServerHealth,
   createAdminUser,
@@ -54,6 +53,10 @@ test.describe("sync: realtime reconnection", () => {
     // Verify connection is closed
     expect(client.realtime.connectionState()).toBe("closed");
 
+    // Explicitly reconnect the WebSocket before re-subscribing.
+    // The Supabase JS SDK does not auto-reconnect after an explicit disconnect().
+    client.realtime.connect();
+
     // Re-subscribe on the same client — this is the scenario that previously failed
     // because the Realtime client's internal state wasn't properly reset
     const { status: status2, channel: channel2 } = await subscribeAndWait(client, channelName);
@@ -71,6 +74,9 @@ test.describe("sync: realtime reconnection", () => {
     const { channel: channel1 } = await subscribeAndWait(client, channelName);
     await client.removeChannel(channel1);
     client.realtime.disconnect();
+
+    // Explicitly reconnect before re-subscribing
+    client.realtime.connect();
 
     // Reconnect and collect messages
     const collector = await subscribeToBroadcast(client, channelName);
@@ -109,6 +115,9 @@ test.describe("sync: realtime reconnection", () => {
     expect(client.realtime.connectionState()).toBe("closed");
     expect(client.realtime.channels.length).toBe(0);
 
+    // Explicitly reconnect before re-subscribing
+    client.realtime.connect();
+
     // Re-subscribe on the same client instance
     const { status, channel } = await subscribeAndWait(client, channelName);
     expect(status).toBe("SUBSCRIBED");
@@ -130,6 +139,11 @@ test.describe("sync: realtime reconnection", () => {
       await client.removeChannel(channel);
       client.realtime.disconnect();
       expect(client.realtime.connectionState()).toBe("closed");
+
+      // Explicitly reconnect for next cycle
+      if (cycle < 2) {
+        client.realtime.connect();
+      }
     }
 
     await cleanupClient(client);

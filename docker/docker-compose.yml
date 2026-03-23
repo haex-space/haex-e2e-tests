@@ -167,6 +167,8 @@ services:
         condition: service_healthy
       sync-kong:
         condition: service_healthy
+      sync-realtime:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bun", "run", "-e", "fetch('http://localhost:3002').then(r => r.ok ? process.exit(0) : process.exit(1))"]
       interval: 10s
