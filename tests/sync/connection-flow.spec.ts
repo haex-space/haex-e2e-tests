@@ -167,22 +167,17 @@ test.describe("sync: full connection flow", () => {
     const result = await pullChanges(otherUser.accessToken, spaceId);
     expect(result.changes.length).toBe(0);
 
-    // Push should fail or be silently dropped
-    const pushResult = await pushChanges(otherUser.accessToken, spaceId, [
-      makeSyncChange({
-        tableName: "haex_vault_settings",
-        rowPks: JSON.stringify({ id: "unauthorized-push" }),
-        columnName: "value",
-        deviceId: "attacker-device",
-      }),
-    ]);
-
-    // Even if push returns 200, changes should not be visible to owner
-    const ownerPull = await pullChanges(accessToken, spaceId);
-    const unauthorized = ownerPull.changes.find(
-      (c) => c.rowPks === JSON.stringify({ id: "unauthorized-push" }),
-    );
-    expect(unauthorized).toBeUndefined();
+    // Push should be rejected (403)
+    await expect(
+      pushChanges(otherUser.accessToken, spaceId, [
+        makeSyncChange({
+          tableName: "haex_vault_settings",
+          rowPks: JSON.stringify({ id: "unauthorized-push" }),
+          columnName: "value",
+          deviceId: "attacker-device",
+        }),
+      ]),
+    ).rejects.toThrow(/403/);
   });
 
   test("duplicate vault key upload returns 409", async () => {
