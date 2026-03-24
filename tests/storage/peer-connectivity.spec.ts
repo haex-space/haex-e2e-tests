@@ -259,14 +259,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
   // ===========================================================================
 
   test("Vault B can download a file from Vault A", async () => {
-    const localPath = await vaultB.invokeTauriCommand<string>(
-      "peer_storage_remote_read",
-      {
-        nodeId: nodeIdA,
-        relayUrl: relayUrlA,
-        path: "/TestShare/hello.txt",
-      }
-    );
+    const localPath = await vaultB.peerStorageDownloadFile({
+      nodeId: nodeIdA,
+      relayUrl: relayUrlA,
+      path: "/TestShare/hello.txt",
+    });
 
     expect(localPath).toBeTruthy();
     expect(localPath).toContain("hello.txt");
@@ -281,14 +278,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("Vault B can download a larger file", async () => {
-    const localPath = await vaultB.invokeTauriCommand<string>(
-      "peer_storage_remote_read",
-      {
-        nodeId: nodeIdA,
-        relayUrl: relayUrlA,
-        path: "/TestShare/large.bin",
-      }
-    );
+    const localPath = await vaultB.peerStorageDownloadFile({
+      nodeId: nodeIdA,
+      relayUrl: relayUrlA,
+      path: "/TestShare/large.bin",
+    });
 
     // Verify size
     const content = await vaultB.invokeTauriCommand<string>(
@@ -300,14 +294,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("Vault B can download from nested directories", async () => {
-    const localPath = await vaultB.invokeTauriCommand<string>(
-      "peer_storage_remote_read",
-      {
-        nodeId: nodeIdA,
-        relayUrl: relayUrlA,
-        path: "/TestShare/subfolder/nested.txt",
-      }
-    );
+    const localPath = await vaultB.peerStorageDownloadFile({
+      nodeId: nodeIdA,
+      relayUrl: relayUrlA,
+      path: "/TestShare/subfolder/nested.txt",
+    });
 
     const content = await vaultB.invokeTauriCommand<string>(
       "filesystem_read_file",
@@ -320,15 +311,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
   test("download to specific path works", async () => {
     const saveTo = `/tmp/e2e-p2p-download-${Date.now()}.txt`;
 
-    const localPath = await vaultB.invokeTauriCommand<string>(
-      "peer_storage_remote_read",
-      {
-        nodeId: nodeIdA,
-        relayUrl: relayUrlA,
-        path: "/TestShare/hello.txt",
-        saveTo,
-      }
-    );
+    const localPath = await vaultB.peerStorageDownloadFile({
+      nodeId: nodeIdA,
+      relayUrl: relayUrlA,
+      path: "/TestShare/hello.txt",
+      saveTo,
+    });
 
     expect(localPath).toBe(saveTo);
 
@@ -459,15 +447,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
     const transferId = crypto.randomUUID();
 
     // Start download and immediately cancel
-    const downloadPromise = vaultB.invokeTauriCommand<string>(
-      "peer_storage_remote_read",
-      {
-        nodeId: nodeIdA,
-        relayUrl: relayUrlA,
-        path: "/TestShare/large.bin",
-        transferId,
-      }
-    );
+    const downloadPromise = vaultB.peerStorageDownloadFile({
+      nodeId: nodeIdA,
+      relayUrl: relayUrlA,
+      path: "/TestShare/large.bin",
+      transferId,
+    });
 
     // Cancel after a short delay
     await new Promise((r) => setTimeout(r, 50));

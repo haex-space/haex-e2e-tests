@@ -1298,6 +1298,87 @@ export class VaultAutomation {
   }
 
   /**
+   * Download a file via P2P using the real peer_storage_remote_read command with Channel.
+   * Creates a Tauri Channel in the WebView, invokes the command, and waits for the
+   * Complete or Error event before resolving — exactly like the production app does.
+   */
+  async peerStorageDownloadFile(args: {
+    nodeId: string;
+    relayUrl: string | null;
+    path: string;
+    saveTo?: string;
+    transferId?: string;
+  }): Promise<string> {
+    if (!this.sessionId) {
+      throw new Error("No WebDriver session");
+    }
+
+    // This script runs in the Tauri WebView and:
+    // 1. Creates a real Tauri Channel (same as the production app)
+    // 2. Invokes peer_storage_remote_read with it
+    // 3. Waits for the Complete/Error event from the Channel before resolving
+    const script = `
+      const callback = arguments[arguments.length - 1];
+      const internals = window.__TAURI_INTERNALS__;
+
+      // Create a real Tauri Channel with an onmessage handler
+      const channelCallbackId = internals.transformCallback((rawMessage) => {
+        const msg = rawMessage.message;
+        if (!msg) return;
+        if (msg.event === 'complete' || msg.Complete) {
+          const data = msg.Complete || msg;
+          callback({ success: true, data: data.localPath || data.local_path });
+        } else if (msg.event === 'error' || msg.Error) {
+          const data = msg.Error || msg;
+          callback({ success: false, error: data.error || 'Download failed' });
+        }
+      });
+      const channelToken = '__CHANNEL__:' + channelCallbackId;
+
+      const args = ${JSON.stringify(args)};
+      args.onEvent = channelToken;
+
+      internals.invoke('peer_storage_remote_read', args)
+        .catch(error => callback({ success: false, error: error.message || String(error) }));
+    `;
+
+    const config = VAULT_CONFIG[this.instance];
+    const body = JSON.stringify({ script, args: [] });
+    let data: Record<string, unknown>;
+
+    if (config.needsHostOverride) {
+      data = await this.httpRequest("POST", `/session/${this.sessionId}/execute/async`, body);
+    } else {
+      const response = await fetch(
+        `${this.tauriDriverUrl}/session/${this.sessionId}/execute/async`,
+        {
+          method: "POST",
+          headers: this.buildHeaders(),
+          body,
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`peerStorageDownloadFile failed: ${response.status} - ${errorText}`);
+      }
+
+      data = await response.json();
+    }
+
+    const result = data.value;
+    if (result && typeof result === "object" && "success" in result) {
+      const typedResult = result as { success: boolean; data?: unknown; error?: unknown };
+      if (!typedResult.success) {
+        throw new Error(`peerStorageDownloadFile failed: ${typedResult.error}`);
+      }
+      return typedResult.data as string;
+    }
+
+    return result as string;
+  }
+
+  /**
    * Install an extension from a .haex package file.
    * Uses preview_extension to get manifest permissions, then installs with those permissions.
    *
