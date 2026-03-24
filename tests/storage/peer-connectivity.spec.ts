@@ -57,10 +57,10 @@ test.describe("storage: P2P connectivity between vaults", () => {
       });
     } catch {
       // Vault may already exist, try opening it
-      const vaults = await vaultB.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {});
+      const vaults = await vaultB.invokeTauriCommand<Array<{ name: string; path: string }>>("list_vaults", {});
       if (vaults.length > 0) {
         await vaultB.invokeTauriCommand("open_encrypted_database", {
-          vaultName: vaults[0].name,
+          vaultPath: vaults[0].path,
           key: "test-password-b",
         });
       }
