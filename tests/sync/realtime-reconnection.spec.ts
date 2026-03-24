@@ -11,6 +11,7 @@ import {
   subscribeAndWait,
   waitForMessages,
   waitForConnection,
+  waitForDisconnect,
   cleanupClient,
 } from "../helpers";
 
@@ -51,7 +52,8 @@ test.describe("sync: realtime reconnection", () => {
     await client.removeChannel(channel1);
     client.realtime.disconnect();
 
-    // Verify connection is closed
+    // Wait for the WebSocket to actually close (disconnect is async)
+    await waitForDisconnect(client);
     expect(client.realtime.connectionState()).toBe("closed");
 
     // Explicitly reconnect the WebSocket before re-subscribing.
@@ -117,6 +119,7 @@ test.describe("sync: realtime reconnection", () => {
     // Full cleanup — matches cleanupSupabaseClient() in haex-vault
     await client.realtime.removeAllChannels();
     client.realtime.disconnect();
+    await waitForDisconnect(client);
     expect(client.realtime.connectionState()).toBe("closed");
     expect(client.realtime.channels.length).toBe(0);
 
@@ -144,6 +147,7 @@ test.describe("sync: realtime reconnection", () => {
       // Disconnect
       await client.removeChannel(channel);
       client.realtime.disconnect();
+      await waitForDisconnect(client);
       expect(client.realtime.connectionState()).toBe("closed");
 
       // Explicitly reconnect for next cycle

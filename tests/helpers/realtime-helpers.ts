@@ -62,9 +62,10 @@ export async function subscribeAndWait(
   channelName: string,
   onBroadcast?: (event: string, payload: unknown) => void,
   timeoutMs = 10000,
+  isPrivate = true,
 ): Promise<{ status: ChannelStatus; channel: RealtimeChannel }> {
   const channel = client
-    .channel(channelName, { config: { private: true } })
+    .channel(channelName, { config: { private: isPrivate } })
     .on("broadcast", { event: "INSERT" }, (payload) => {
       onBroadcast?.("INSERT", payload);
     })
@@ -145,6 +146,25 @@ export async function cleanupClient(client: SupabaseClient): Promise<void> {
   } catch {
     // Ignore cleanup errors
   }
+}
+
+/**
+ * Waits for the Realtime WebSocket to reach a closed/disconnected state.
+ * Use after client.realtime.disconnect() since disconnect is asynchronous.
+ */
+export async function waitForDisconnect(
+  client: SupabaseClient,
+  timeoutMs = 5000,
+): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const state = client.realtime.connectionState();
+    if (state === "closed") {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
 }
 
 /**

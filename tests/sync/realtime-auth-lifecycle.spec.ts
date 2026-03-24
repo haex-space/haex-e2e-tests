@@ -66,7 +66,7 @@ test.describe("sync: realtime auth lifecycle", () => {
 
     const channelName = `sync:${spaceId}`;
 
-    const { status, channel } = await subscribeAndWait(client, channelName, undefined, 5000);
+    const { status, channel } = await subscribeAndWait(client, channelName, undefined, 5000, false);
 
     await client.removeChannel(channel).catch(() => {});
     await cleanupClient(client);

@@ -555,22 +555,25 @@ export async function deleteSpace(
 }
 
 /**
- * Insert a broadcast message directly into realtime.messages via the sync-db container.
+ * Insert a broadcast message directly into realtime.messages via Postgres connection.
  * Used for testing broadcast delivery without needing Push endpoint signatures.
- * Topic and event are sanitized (only alphanumeric, hyphens, colons allowed).
  */
 export async function insertBroadcastMessage(
   topic: string,
   event = "INSERT",
 ): Promise<void> {
-  const { execFileSync } = await import("child_process");
-  // Sanitize inputs to prevent injection
-  const safeTopic = topic.replace(/[^a-zA-Z0-9:\-_]/g, "");
-  const safeEvent = event.replace(/[^A-Z]/g, "");
-  execFileSync("docker", [
-    "exec", "haex_e2e_sync_db", "psql", "-U", "postgres", "-d", "postgres", "-c",
-    `INSERT INTO realtime.messages (topic, extension, event, payload, private) VALUES ('${safeTopic}', 'broadcast', '${safeEvent}', '{"op": "${safeEvent}"}'::jsonb, true);`,
-  ], { stdio: "pipe" });
+  const pg = await import("pg");
+  const databaseUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@sync-db:5432/postgres";
+  const client = new pg.default.Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    await client.query(
+      "INSERT INTO realtime.messages (topic, extension, event, payload, private) VALUES ($1, 'broadcast', $2, $3::jsonb, true)",
+      [topic, event, JSON.stringify({ op: event })],
+    );
+  } finally {
+    await client.end();
+  }
 }
 
 // =============================================================================
