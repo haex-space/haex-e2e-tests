@@ -224,6 +224,10 @@ RUN chmod +x /custom-cont-init.d/*.sh
 # Install test dependencies
 RUN pnpm install
 
+# Clear stale apt lists and configure retries to avoid transient mirror hash mismatches
+RUN apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
+
 # Install Playwright browsers AFTER pnpm install (avoids "install dependencies first" warning)
 # This ensures @playwright/test is installed before downloading browsers
 RUN pnpm exec playwright install chromium --with-deps
