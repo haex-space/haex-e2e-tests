@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
-  createAdminUser,
+  createAdminUserWithIdentity,
   toAuthContext,
   createSpace,
   addSpaceMember,
@@ -16,17 +16,13 @@ import {
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
-function randomBase64(bytes: number): string {
-  return crypto.randomBytes(bytes).toString("base64");
-}
-
 test.describe("spaces: member-management", () => {
   test.describe.configure({ mode: "serial" });
 
   let authA: AuthContext;
   let authB: AuthContext;
+  let memberBDid: string;
   const spaceId = crypto.randomUUID();
-  const memberPublicKey = randomBase64(65);
   const memberLabel = "User B Member";
 
   test.beforeAll(async () => {
@@ -34,11 +30,12 @@ test.describe("spaces: member-management", () => {
     expect(healthy).toBe(true);
 
     const [adminA, adminB] = await Promise.all([
-      createAdminUser(),
-      createAdminUser(),
+      createAdminUserWithIdentity(),
+      createAdminUserWithIdentity(),
     ]);
     authA = toAuthContext(adminA);
     authB = toAuthContext(adminB);
+    memberBDid = adminB.did;
 
     // Create space as user A
     const res = await createSpace(authA, spaceId, "Member Mgmt Test Space");
@@ -54,7 +51,7 @@ test.describe("spaces: member-management", () => {
   });
 
   test("invite user B as member returns 201", async () => {
-    const res = await addSpaceMember(authA, spaceId, memberPublicKey, memberLabel, "member");
+    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, "member");
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -77,10 +74,10 @@ test.describe("spaces: member-management", () => {
       (m: { role: string }) => m.role === "admin",
     );
     expect(admin).toBeDefined();
-    expect(typeof admin.publicKey).toBe("string");
+    expect(typeof admin.did).toBe("string");
 
     const member = space.members.find(
-      (m: { publicKey: string }) => m.publicKey === memberPublicKey,
+      (m: { did: string }) => m.did === memberBDid,
     );
     expect(member).toBeDefined();
     expect(member.role).toBe("member");
@@ -90,15 +87,9 @@ test.describe("spaces: member-management", () => {
 
   test("non-admin cannot invite members", async () => {
     const body = JSON.stringify({
-      publicKey: randomBase64(65),
+      did: "did:key:z6MkUnauthorized",
       label: "Unauthorized Invite",
       role: "member",
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-        generation: 1,
-      },
     });
     const authHeader = await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -115,7 +106,7 @@ test.describe("spaces: member-management", () => {
   });
 
   test("remove member returns 200 and member no longer in list", async () => {
-    const deleteRes = await removeSpaceMember(authA, spaceId, memberPublicKey);
+    const deleteRes = await removeSpaceMember(authA, spaceId, memberBDid);
 
     expect(deleteRes.status).toBe(200);
     const deleteBody = await deleteRes.json();
@@ -130,13 +121,13 @@ test.describe("spaces: member-management", () => {
     expect(detailRes.status).toBe(200);
     const space = await detailRes.json();
     const removedMember = space.members.find(
-      (m: { publicKey: string }) => m.publicKey === memberPublicKey,
+      (m: { did: string }) => m.did === memberBDid,
     );
     expect(removedMember).toBeUndefined();
   });
 
   test("re-invite removed member succeeds", async () => {
-    const res = await addSpaceMember(authA, spaceId, memberPublicKey, memberLabel, "member");
+    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, "member");
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -151,7 +142,7 @@ test.describe("spaces: member-management", () => {
     expect(detailRes.status).toBe(200);
     const space = await detailRes.json();
     const member = space.members.find(
-      (m: { publicKey: string }) => m.publicKey === memberPublicKey,
+      (m: { did: string }) => m.did === memberBDid,
     );
     expect(member).toBeDefined();
     expect(member.role).toBe("member");

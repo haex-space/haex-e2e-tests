@@ -27,9 +27,11 @@ test.describe("spaces: capability-based permissions", () => {
 
   let ownerAuth: AuthContext;
   let memberAuth: AuthContext;
+  let memberDid: string;
   let memberPublicKey: string;
   let memberPrivateKey: string;
   let readerAuth: AuthContext;
+  let readerDid: string;
   let readerPublicKey: string;
   const spaceId = crypto.randomUUID();
 
@@ -46,9 +48,11 @@ test.describe("spaces: capability-based permissions", () => {
 
     ownerAuth = toAuthContext(owner);
     memberAuth = toAuthContext(member);
+    memberDid = member.did;
     memberPublicKey = member.publicKey;
     memberPrivateKey = member.privateKeyBase64;
     readerAuth = toAuthContext(reader);
+    readerDid = reader.did;
     readerPublicKey = reader.publicKey;
 
     // Create space as owner
@@ -56,10 +60,10 @@ test.describe("spaces: capability-based permissions", () => {
     expect(createRes.status).toBe(201);
 
     // Add members with different roles
-    const addMemberRes = await addSpaceMember(ownerAuth, spaceId, memberPublicKey, "Member User", "member");
+    const addMemberRes = await addSpaceMember(ownerAuth, spaceId, memberDid, "Member User", "member");
     expect(addMemberRes.status).toBe(201);
 
-    const addReaderRes = await addSpaceMember(ownerAuth, spaceId, readerPublicKey, "Reader User", "reader");
+    const addReaderRes = await addSpaceMember(ownerAuth, spaceId, readerDid, "Reader User", "reader");
     expect(addReaderRes.status).toBe(201);
   });
 
@@ -93,25 +97,19 @@ test.describe("spaces: capability-based permissions", () => {
   });
 
   test("owner can invite new members", async () => {
-    const newMemberKey = randomBase64(65);
-    const res = await addSpaceMember(ownerAuth, spaceId, newMemberKey, "Another Invite", "member");
+    const tempUser = await createAdminUserWithIdentity();
+    const res = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Another Invite", "member");
     expect(res.status).toBe(201);
 
     // Cleanup
-    await removeSpaceMember(ownerAuth, spaceId, newMemberKey);
+    await removeSpaceMember(ownerAuth, spaceId, tempUser.did);
   });
 
   test("member cannot invite new members", async () => {
     const body = JSON.stringify({
-      publicKey: randomBase64(65),
+      did: "did:key:z6MkUnauthorizedMember",
       label: "Unauthorized Invite",
       role: "member",
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-        generation: 1,
-      },
     });
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -128,15 +126,9 @@ test.describe("spaces: capability-based permissions", () => {
 
   test("reader cannot invite new members", async () => {
     const body = JSON.stringify({
-      publicKey: randomBase64(65),
+      did: "did:key:z6MkUnauthorizedReader",
       label: "Unauthorized Reader Invite",
       role: "reader",
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-        generation: 1,
-      },
     });
     const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -203,18 +195,18 @@ test.describe("spaces: capability-based permissions", () => {
   // =====================================================================
 
   test("owner can remove a member", async () => {
-    const tempKey = randomBase64(65);
-    const addRes = await addSpaceMember(ownerAuth, spaceId, tempKey, "Temp Member", "member");
+    const tempUser = await createAdminUserWithIdentity();
+    const addRes = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Temp Member", "member");
     expect(addRes.status).toBe(201);
 
-    const removeRes = await removeSpaceMember(ownerAuth, spaceId, tempKey);
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, tempUser.did);
     expect(removeRes.status).toBe(200);
   });
 
   test("member cannot remove other members", async () => {
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(readerPublicKey)}`,
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(readerDid)}`,
       {
         method: "DELETE",
         headers: { Authorization: authHeader },
@@ -227,7 +219,7 @@ test.describe("spaces: capability-based permissions", () => {
   test("reader cannot remove other members", async () => {
     const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberPublicKey)}`,
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberDid)}`,
       {
         method: "DELETE",
         headers: { Authorization: authHeader },
@@ -278,89 +270,11 @@ test.describe("spaces: capability-based permissions", () => {
   });
 
   // =====================================================================
-  // Access Token Permissions
-  // =====================================================================
-
-  test("owner can create access tokens", async () => {
-    const body = JSON.stringify({
-      publicKey: memberPublicKey,
-      role: "member",
-      label: "Test Token",
-    });
-    const authHeader = await createDidAuthHeader(ownerAuth.privateKeyBase64, ownerAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body,
-    });
-    expect(res.status).toBe(201);
-  });
-
-  test("member cannot create access tokens", async () => {
-    const body = JSON.stringify({
-      publicKey: memberPublicKey,
-      role: "member",
-      label: "Unauthorized Token",
-    });
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body,
-    });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
-  test("reader cannot create access tokens", async () => {
-    const body = JSON.stringify({
-      publicKey: readerPublicKey,
-      role: "reader",
-      label: "Unauthorized Reader Token",
-    });
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body,
-    });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
-  test("member cannot list access tokens", async () => {
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.ListSpaces);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      headers: { Authorization: authHeader },
-    });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
-  test("reader cannot list access tokens", async () => {
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.ListSpaces);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      headers: { Authorization: authHeader },
-    });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
-  // =====================================================================
   // Admin Transfer Permissions
   // =====================================================================
 
   test("member cannot transfer admin role", async () => {
-    const body = JSON.stringify({ targetPublicKey: readerPublicKey });
+    const body = JSON.stringify({ targetDid: readerDid });
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
       method: "POST",
@@ -375,7 +289,7 @@ test.describe("spaces: capability-based permissions", () => {
   });
 
   test("reader cannot transfer admin role", async () => {
-    const body = JSON.stringify({ targetPublicKey: memberPublicKey });
+    const body = JSON.stringify({ targetDid: memberDid });
     const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
       method: "POST",

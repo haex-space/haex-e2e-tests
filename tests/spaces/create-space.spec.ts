@@ -64,7 +64,8 @@ test.describe("spaces: create-space", () => {
     expect(typeof found.ownerId).toBe("string");
     expect(typeof found.encryptedName).toBe("string");
     expect(typeof found.nameNonce).toBe("string");
-    expect(typeof found.currentKeyGeneration).toBe("number");
+    expect(typeof found.createdAt).toBe("string");
+    expect(typeof found.updatedAt).toBe("string");
     expect(typeof found.joinedAt).toBe("string");
   });
 
@@ -140,11 +141,6 @@ test.describe("spaces: create-space", () => {
         encryptedName: randomBase64(32),
         nameNonce: randomBase64(12),
         label: "Unauthorized Space",
-        keyGrant: {
-          encryptedSpaceKey: randomBase64(32),
-          keyNonce: randomBase64(12),
-          ephemeralPublicKey: randomBase64(65),
-        },
       }),
     });
 

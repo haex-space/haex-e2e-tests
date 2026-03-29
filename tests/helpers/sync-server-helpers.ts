@@ -478,11 +478,6 @@ export async function createSpace(
     encryptedName: randomBase64(32),
     nameNonce: randomBase64(12),
     label,
-    keyGrant: {
-      encryptedSpaceKey: randomBase64(32),
-      keyNonce: randomBase64(12),
-      ephemeralPublicKey: randomBase64(65),
-    },
   };
   const bodyStr = JSON.stringify(bodyObj);
 
@@ -502,20 +497,14 @@ export async function createSpace(
 export async function addSpaceMember(
   auth: AuthContext,
   spaceId: string,
-  memberPublicKey: string,
+  memberDid: string,
   label: string,
   role: "owner" | "member" | "reader",
 ): Promise<Response> {
   const bodyObj = {
-    publicKey: memberPublicKey,
+    did: memberDid,
     label,
     role,
-    keyGrant: {
-      encryptedSpaceKey: randomBase64(32),
-      keyNonce: randomBase64(12),
-      ephemeralPublicKey: randomBase64(65),
-      generation: 1,
-    },
   };
   const bodyStr = JSON.stringify(bodyObj);
 
@@ -535,10 +524,10 @@ export async function addSpaceMember(
 export async function removeSpaceMember(
   auth: AuthContext,
   spaceId: string,
-  memberPublicKey: string,
+  memberDid: string,
 ): Promise<Response> {
   return fetch(
-    `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberPublicKey)}`,
+    `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberDid)}`,
     {
       method: "DELETE",
       headers: {
