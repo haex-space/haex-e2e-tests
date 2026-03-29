@@ -3,16 +3,17 @@ import {
   createTestIdentity,
   getSyncServerUrl,
   checkSyncServerHealth,
-  registerIdentity,
-  challengeLogin,
   createAdminUser,
   createVaultKey,
   pushChanges,
   pullChanges,
   makeSyncChange,
+  createDidAuthHeader,
+  toAuthContext,
 } from "../helpers";
+import { DidAuthAction } from "@haex-space/ucan";
 
-test.describe("identity-auth: token lifecycle", () => {
+test.describe("identity-auth: DID-Auth lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   const baseUrl = getSyncServerUrl();
@@ -22,11 +23,17 @@ test.describe("identity-auth: token lifecycle", () => {
     expect(healthy).toBe(true);
   });
 
-  test("access token can be used for authenticated API calls", async () => {
-    const { accessToken } = await createAdminUser();
+  test("DID-Auth header grants access to authenticated endpoints", async () => {
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
 
+    const authHeader = await createDidAuthHeader(
+      auth.privateKeyBase64,
+      auth.did,
+      DidAuthAction.VaultList,
+    );
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);
@@ -34,13 +41,10 @@ test.describe("identity-auth: token lifecycle", () => {
     expect(Array.isArray(data.vaults)).toBe(true);
   });
 
-  test("expired or invalid token returns 401", async () => {
-    const fakeToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJmYWtlIiwiZXhwIjoxfQ.invalid";
-
+  test("invalid DID-Auth signature returns 401", async () => {
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${fakeToken}` },
+      headers: { Authorization: "DID invalidpayload.invalidsignature" },
     });
-
     expect(res.status).toBe(401);
   });
 
@@ -49,88 +53,50 @@ test.describe("identity-auth: token lifecycle", () => {
     expect(res.status).toBe(401);
   });
 
-  test("DID re-authentication: login again with same identity yields new valid tokens", async () => {
+  test("DID-Auth from unregistered identity returns 401", async () => {
     const identity = await createTestIdentity();
-    await registerIdentity(identity);
-
-    // Confirm email via admin API
-    const serviceKey =
-      process.env.SUPABASE_SERVICE_KEY ||
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
-    const anonKey =
-      process.env.SUPABASE_ANON_KEY ||
-      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
-    const supabaseUrl = process.env.SUPABASE_URL || process.env.SYNC_SERVER_URL || "http://sync-kong:8000";
-
-    const listRes = await fetch(`${supabaseUrl}/auth/v1/admin/users?page=1&per_page=50`, {
-      headers: { Authorization: `Bearer ${serviceKey}`, apikey: anonKey },
-    });
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      const users = listData.users || listData;
-      const user = (users as { id: string; email: string }[]).find(u => u.email === identity.email);
-      if (user) {
-        await fetch(`${supabaseUrl}/auth/v1/admin/users/${user.id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${serviceKey}`, apikey: anonKey },
-          body: JSON.stringify({ email_confirm: true }),
-        });
-      }
-    }
-
-    // First login
-    const tokens1 = await challengeLogin(identity);
-    expect(tokens1.access_token).toBeTruthy();
-    expect(tokens1.refresh_token).toBeTruthy();
-
-    // Second login (simulates re-auth after token expiry)
-    const tokens2 = await challengeLogin(identity);
-    expect(tokens2.access_token).toBeTruthy();
-    expect(tokens2.refresh_token).toBeTruthy();
-
-    // Both tokens should be different (new session each time)
-    expect(tokens2.access_token).not.toBe(tokens1.access_token);
-
-    // New token should work for API calls
+    const authHeader = await createDidAuthHeader(
+      identity.privateKeyBase64,
+      identity.did,
+      DidAuthAction.VaultList,
+    );
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${tokens2.access_token}` },
+      headers: { Authorization: authHeader },
     });
-    expect(res.status).toBe(200);
+    // Server returns 401 or 404 depending on where the DID lookup fails
+    expect([401, 404]).toContain(res.status);
   });
 
-  test("old token still works until it expires (no session invalidation on re-login)", async () => {
-    const { accessToken: token1 } = await createAdminUser();
+  test("different identities have independent access", async () => {
+    const admin1 = await createAdminUser();
+    const admin2 = await createAdminUser();
+    const auth1 = toAuthContext(admin1);
+    const auth2 = toAuthContext(admin2);
 
-    // First token works
-    const res1 = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${token1}` },
-    });
-    expect(res1.status).toBe(200);
-
-    // Create another admin user (simulates passage of time)
-    const { accessToken: token2 } = await createAdminUser();
-
-    // Both tokens should work (JWT is stateless until expiry)
-    const res2 = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${token1}` },
-    });
-    expect(res2.status).toBe(200);
-
-    const res3 = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${token2}` },
-    });
-    expect(res3.status).toBe(200);
+    // Both identities can access
+    for (const auth of [auth1, auth2]) {
+      const authHeader = await createDidAuthHeader(
+        auth.privateKeyBase64,
+        auth.did,
+        DidAuthAction.VaultList,
+      );
+      const res = await fetch(`${baseUrl}/sync/vaults`, {
+        headers: { Authorization: authHeader },
+      });
+      expect(res.status).toBe(200);
+    }
   });
 
-  test("push and pull require valid authentication", async () => {
-    const { accessToken } = await createAdminUser();
+  test("push and pull require valid DID-Auth", async () => {
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
     const spaceId = crypto.randomUUID();
 
     // Create vault key first
-    await createVaultKey(accessToken, spaceId);
+    await createVaultKey(auth, spaceId);
 
-    // Push with valid token succeeds
-    const pushRes = await pushChanges(accessToken, spaceId, [
+    // Push with valid DID-Auth succeeds
+    const pushRes = await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: crypto.randomUUID() }),
@@ -140,12 +106,12 @@ test.describe("identity-auth: token lifecycle", () => {
     ]);
     expect(pushRes.count).toBeDefined();
 
-    // Push with invalid token fails
+    // Push with invalid auth fails
     const failRes = await fetch(`${baseUrl}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: "Bearer invalid-token",
+        Authorization: "DID invalid.signature",
       },
       body: JSON.stringify({
         spaceId,
@@ -154,13 +120,13 @@ test.describe("identity-auth: token lifecycle", () => {
     });
     expect(failRes.status).toBe(401);
 
-    // Pull with valid token succeeds
-    const pullRes = await pullChanges(accessToken, spaceId);
+    // Pull with valid DID-Auth succeeds
+    const pullRes = await pullChanges(auth, spaceId);
     expect(pullRes.changes).toBeDefined();
 
-    // Pull with invalid token fails
+    // Pull with invalid auth fails
     const failPull = await fetch(`${baseUrl}/sync/pull?spaceId=${spaceId}&limit=10`, {
-      headers: { Authorization: "Bearer invalid-token" },
+      headers: { Authorization: "DID invalid.signature" },
     });
     expect(failPull.status).toBe(401);
   });
