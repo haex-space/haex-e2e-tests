@@ -4,6 +4,12 @@ import {
   getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
+  toAuthContext,
+  createSpace,
+  deleteSpace,
+  createDidAuthHeader,
+  DidAuthAction,
+  type AuthContext,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -12,32 +18,10 @@ function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
 }
 
-async function createSpace(token: string, spaceId: string, label: string) {
-  const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
-  });
-  return res;
-}
-
 test.describe("spaces: access-tokens", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const tokenPublicKey = randomBase64(65);
   const tokenLabel = "E2E Access Token";
@@ -49,53 +33,53 @@ test.describe("spaces: access-tokens", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
+    auth = toAuthContext(admin);
 
     // Create space for token tests
-    const res = await createSpace(accessToken, spaceId, "Token Test Space");
+    const res = await createSpace(auth, spaceId, "Token Test Space");
     expect(res.status).toBe(201);
   });
 
   test.afterAll(async () => {
     try {
-      await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      await deleteSpace(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
   test("create access token returns tokenId and 64-char hex token", async () => {
+    const body = JSON.stringify({
+      publicKey: tokenPublicKey,
+      role: tokenRole,
+      label: tokenLabel,
+    });
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: authHeader,
       },
-      body: JSON.stringify({
-        publicKey: tokenPublicKey,
-        role: tokenRole,
-        label: tokenLabel,
-      }),
+      body,
     });
 
     expect(res.status).toBe(201);
-    const body = await res.json();
+    const resBody = await res.json();
 
-    expect(typeof body.tokenId).toBe("string");
-    expect(body.tokenId.length).toBeGreaterThan(0);
-    expect(typeof body.token).toBe("string");
-    expect(body.token).toHaveLength(64);
-    expect(body.token).toMatch(/^[0-9a-f]{64}$/);
+    expect(typeof resBody.tokenId).toBe("string");
+    expect(resBody.tokenId.length).toBeGreaterThan(0);
+    expect(typeof resBody.token).toBe("string");
+    expect(resBody.token).toHaveLength(64);
+    expect(resBody.token).toMatch(/^[0-9a-f]{64}$/);
 
-    createdTokenId = body.tokenId;
+    createdTokenId = resBody.tokenId;
   });
 
   test("list tokens includes the created token with correct fields", async () => {
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);
@@ -113,11 +97,12 @@ test.describe("spaces: access-tokens", () => {
   });
 
   test("revoke token returns 200 with success", async () => {
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace);
     const res = await fetch(
       `${SYNC_SERVER_URL}/spaces/${spaceId}/tokens/${createdTokenId}`,
       {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: { Authorization: authHeader },
       },
     );
 
@@ -127,8 +112,9 @@ test.describe("spaces: access-tokens", () => {
   });
 
   test("revoked token shows as revoked in list", async () => {
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/tokens`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);

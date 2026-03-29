@@ -4,6 +4,11 @@ import {
   getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
+  toAuthContext,
+  createSpace,
+  deleteSpace,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -12,32 +17,10 @@ function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
 }
 
-async function createSpace(token: string, spaceId: string, label: string) {
-  const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
-  });
-  return res;
-}
-
 test.describe("spaces: create-space", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: ReturnType<typeof toAuthContext> extends infer T ? T : never;
   const spaceId = crypto.randomUUID();
   const spaceLabel = "E2E Test Space";
 
@@ -46,22 +29,19 @@ test.describe("spaces: create-space", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
+    auth = toAuthContext(admin);
   });
 
   test.afterAll(async () => {
     try {
-      await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      await deleteSpace(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
   test("create space returns 201 with success", async () => {
-    const res = await createSpace(accessToken, spaceId, spaceLabel);
+    const res = await createSpace(auth, spaceId, spaceLabel);
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -69,8 +49,9 @@ test.describe("spaces: create-space", () => {
   });
 
   test("list spaces includes the created space with admin role", async () => {
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);
@@ -88,8 +69,9 @@ test.describe("spaces: create-space", () => {
   });
 
   test("get space details returns members array with creator", async () => {
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);
@@ -111,36 +93,36 @@ test.describe("spaces: create-space", () => {
   });
 
   test("update space name returns 200 with success", async () => {
+    const body = JSON.stringify({
+      encryptedName: randomBase64(32),
+      nameNonce: randomBase64(12),
+    });
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: authHeader,
       },
-      body: JSON.stringify({
-        encryptedName: randomBase64(32),
-        nameNonce: randomBase64(12),
-      }),
+      body,
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.success).toBe(true);
+    const resBody = await res.json();
+    expect(resBody.success).toBe(true);
   });
 
   test("delete space returns 200 and space no longer in list", async () => {
-    const deleteRes = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
+    const deleteRes = await deleteSpace(auth, spaceId);
 
     expect(deleteRes.status).toBe(200);
     const deleteBody = await deleteRes.json();
     expect(deleteBody.success).toBe(true);
 
     // Verify space is no longer in list
+    const listAuthHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
     const listRes = await fetch(`${SYNC_SERVER_URL}/spaces`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: listAuthHeader },
     });
 
     expect(listRes.status).toBe(200);

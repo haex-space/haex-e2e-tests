@@ -4,6 +4,14 @@ import {
   getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
+  toAuthContext,
+  createSpace,
+  addSpaceMember,
+  removeSpaceMember,
+  deleteSpace,
+  createDidAuthHeader,
+  DidAuthAction,
+  type AuthContext,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -12,33 +20,11 @@ function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
 }
 
-async function createSpace(token: string, spaceId: string, label: string) {
-  const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
-  });
-  return res;
-}
-
 test.describe("spaces: member-management", () => {
   test.describe.configure({ mode: "serial" });
 
-  let tokenA: string;
-  let tokenB: string;
+  let authA: AuthContext;
+  let authB: AuthContext;
   const spaceId = crypto.randomUUID();
   const memberPublicKey = randomBase64(65);
   const memberLabel = "User B Member";
@@ -51,44 +37,24 @@ test.describe("spaces: member-management", () => {
       createAdminUser(),
       createAdminUser(),
     ]);
-    tokenA = adminA.accessToken;
-    tokenB = adminB.accessToken;
+    authA = toAuthContext(adminA);
+    authB = toAuthContext(adminB);
 
     // Create space as user A
-    const res = await createSpace(tokenA, spaceId, "Member Mgmt Test Space");
+    const res = await createSpace(authA, spaceId, "Member Mgmt Test Space");
     expect(res.status).toBe(201);
   });
 
   test.afterAll(async () => {
     try {
-      await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${tokenA}` },
-      });
+      await deleteSpace(authA, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
   test("invite user B as member returns 201", async () => {
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${tokenA}`,
-      },
-      body: JSON.stringify({
-        publicKey: memberPublicKey,
-        label: memberLabel,
-        role: "member",
-        keyGrant: {
-          encryptedSpaceKey: randomBase64(32),
-          keyNonce: randomBase64(12),
-          ephemeralPublicKey: randomBase64(65),
-          generation: 1,
-        },
-      }),
-    });
+    const res = await addSpaceMember(authA, spaceId, memberPublicKey, memberLabel, "member");
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -96,8 +62,9 @@ test.describe("spaces: member-management", () => {
   });
 
   test("list members shows both users with correct roles", async () => {
+    const authHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
+      headers: { Authorization: authHeader },
     });
 
     expect(res.status).toBe(200);
@@ -122,23 +89,25 @@ test.describe("spaces: member-management", () => {
   });
 
   test("non-admin cannot invite members", async () => {
+    const body = JSON.stringify({
+      publicKey: randomBase64(65),
+      label: "Unauthorized Invite",
+      role: "member",
+      keyGrant: {
+        encryptedSpaceKey: randomBase64(32),
+        keyNonce: randomBase64(12),
+        ephemeralPublicKey: randomBase64(65),
+        generation: 1,
+      },
+    });
+    const authHeader = await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${tokenB}`,
+        Authorization: authHeader,
       },
-      body: JSON.stringify({
-        publicKey: randomBase64(65),
-        label: "Unauthorized Invite",
-        role: "member",
-        keyGrant: {
-          encryptedSpaceKey: randomBase64(32),
-          keyNonce: randomBase64(12),
-          ephemeralPublicKey: randomBase64(65),
-          generation: 1,
-        },
-      }),
+      body,
     });
 
     expect(res.status).toBeGreaterThanOrEqual(400);
@@ -146,22 +115,16 @@ test.describe("spaces: member-management", () => {
   });
 
   test("remove member returns 200 and member no longer in list", async () => {
-    const encodedKey = encodeURIComponent(memberPublicKey);
-    const deleteRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodedKey}`,
-      {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${tokenA}` },
-      },
-    );
+    const deleteRes = await removeSpaceMember(authA, spaceId, memberPublicKey);
 
     expect(deleteRes.status).toBe(200);
     const deleteBody = await deleteRes.json();
     expect(deleteBody.success).toBe(true);
 
     // Verify member is no longer in list
+    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
     const detailRes = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
+      headers: { Authorization: detailAuthHeader },
     });
 
     expect(detailRes.status).toBe(200);
@@ -173,32 +136,16 @@ test.describe("spaces: member-management", () => {
   });
 
   test("re-invite removed member succeeds", async () => {
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${tokenA}`,
-      },
-      body: JSON.stringify({
-        publicKey: memberPublicKey,
-        label: memberLabel,
-        role: "member",
-        keyGrant: {
-          encryptedSpaceKey: randomBase64(32),
-          keyNonce: randomBase64(12),
-          ephemeralPublicKey: randomBase64(65),
-          generation: 1,
-        },
-      }),
-    });
+    const res = await addSpaceMember(authA, spaceId, memberPublicKey, memberLabel, "member");
 
     expect(res.status).toBe(201);
     const body = await res.json();
     expect(body.success).toBe(true);
 
     // Verify member is back in list
+    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
     const detailRes = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      headers: { Authorization: `Bearer ${tokenA}` },
+      headers: { Authorization: detailAuthHeader },
     });
 
     expect(detailRes.status).toBe(200);
