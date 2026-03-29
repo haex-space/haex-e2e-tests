@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   checkSyncServerHealth,
   createAdminUser,
@@ -7,6 +8,9 @@ import {
   pullChanges,
   makeSyncChange,
   deleteVault,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 import {
   createRealtimeClient,
@@ -34,7 +38,7 @@ import {
 test.describe("sync: full connection flow", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-connection-flow-${Date.now()}`;
   const baseUrl = process.env.SYNC_SERVER_DIRECT_URL || "http://sync-server:3002";
@@ -46,7 +50,7 @@ test.describe("sync: full connection flow", () => {
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, spaceId);
+      await deleteVault(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -54,29 +58,32 @@ test.describe("sync: full connection flow", () => {
 
   test("register identity and authenticate", async () => {
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    expect(accessToken).toBeTruthy();
+    auth = toAuthContext(admin);
+    expect(auth.did).toBeTruthy();
   });
 
   test("upload vault key creates space implicitly", async () => {
     // This mirrors what the vault client does:
     // POST /sync/vault-key with a client-generated spaceId
     // The server creates the space + vault key in a single transaction
+    const bodyObj = {
+      spaceId,
+      encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
+      encryptedVaultName: Buffer.from("E2E Connection Flow Test").toString("base64"),
+      vaultKeySalt: crypto.randomBytes(16).toString("base64"),
+      ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
+      vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
+      vaultNameNonce: crypto.randomBytes(12).toString("base64"),
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${baseUrl}/sync/vault-key`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId,
-        encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
-        encryptedVaultName: Buffer.from("E2E Connection Flow Test").toString("base64"),
-        vaultKeySalt: crypto.randomBytes(16).toString("base64"),
-        ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
-        vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
-        vaultNameNonce: crypto.randomBytes(12).toString("base64"),
-      }),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(201);
@@ -86,7 +93,9 @@ test.describe("sync: full connection flow", () => {
 
   test("vault key can be retrieved for the new space", async () => {
     const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyGet),
+      },
     });
 
     expect(res.status).toBe(200);
@@ -96,7 +105,7 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("realtime subscription works on freshly created space", async () => {
-    const client = createRealtimeClient(accessToken);
+    const client = createRealtimeClient(auth.accessToken);
     const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
     expect(collector.channel).toBeTruthy();
@@ -106,7 +115,7 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("push changes to the new space", async () => {
-    const result = await pushChanges(accessToken, spaceId, [
+    const result = await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "connection-flow-test-1" }),
@@ -126,7 +135,7 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("pull changes returns pushed data", async () => {
-    const result = await pullChanges(accessToken, spaceId);
+    const result = await pullChanges(auth, spaceId);
 
     expect(result.changes.length).toBe(2);
     expect(result.hasMore).toBe(false);
@@ -139,11 +148,11 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("push triggers realtime broadcast to subscriber", async () => {
-    const client = createRealtimeClient(accessToken);
+    const client = createRealtimeClient(auth.accessToken);
     const collector = await subscribeToBroadcast(client, `sync:${spaceId}`);
 
     // Push a new change while subscribed
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "broadcast-trigger-test" }),
@@ -161,15 +170,16 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("second user cannot access the vault space", async () => {
-    const otherUser = await createAdminUser();
+    const otherAdmin = await createAdminUser();
+    const otherAuth = toAuthContext(otherAdmin);
 
     // Pull should return empty (RLS blocks access)
-    const result = await pullChanges(otherUser.accessToken, spaceId);
+    const result = await pullChanges(otherAuth, spaceId);
     expect(result.changes.length).toBe(0);
 
     // Push should be rejected (403)
     await expect(
-      pushChanges(otherUser.accessToken, spaceId, [
+      pushChanges(otherAuth, spaceId, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: "unauthorized-push" }),
@@ -181,21 +191,24 @@ test.describe("sync: full connection flow", () => {
   });
 
   test("duplicate vault key upload returns 409", async () => {
+    const bodyObj = {
+      spaceId,
+      encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
+      encryptedVaultName: Buffer.from("Duplicate").toString("base64"),
+      vaultKeySalt: crypto.randomBytes(16).toString("base64"),
+      ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
+      vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
+      vaultNameNonce: crypto.randomBytes(12).toString("base64"),
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${baseUrl}/sync/vault-key`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId,
-        encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
-        encryptedVaultName: Buffer.from("Duplicate").toString("base64"),
-        vaultKeySalt: crypto.randomBytes(16).toString("base64"),
-        ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
-        vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
-        vaultNameNonce: crypto.randomBytes(12).toString("base64"),
-      }),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(409);

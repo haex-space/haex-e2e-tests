@@ -1,18 +1,21 @@
 import crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
-  createVaultKey,
   deleteVault,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 test.describe("sync: vault-key-management", () => {
   test.describe.configure({ mode: "serial" });
 
   const baseUrl = getSyncServerUrl();
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
@@ -20,19 +23,19 @@ test.describe("sync: vault-key-management", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
+    auth = toAuthContext(admin);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, spaceId);
+      await deleteVault(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
   test("store vault key returns 201 with matching spaceId", async () => {
-    const body = {
+    const bodyObj = {
       spaceId,
       encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
       encryptedVaultName: Buffer.from("E2E Vault Key Test").toString("base64"),
@@ -41,14 +44,15 @@ test.describe("sync: vault-key-management", () => {
       vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
       vaultNameNonce: crypto.randomBytes(12).toString("base64"),
     };
+    const bodyStr = JSON.stringify(bodyObj);
 
     const res = await fetch(`${baseUrl}/sync/vault-key`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
       },
-      body: JSON.stringify(body),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(201);
@@ -61,7 +65,9 @@ test.describe("sync: vault-key-management", () => {
 
   test("retrieve vault key returns all fields with matching spaceId", async () => {
     const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyGet),
+      },
     });
 
     expect(res.status).toBe(200);
@@ -78,7 +84,9 @@ test.describe("sync: vault-key-management", () => {
 
   test("list vaults includes the created vault", async () => {
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+      },
     });
 
     expect(res.status).toBe(200);
@@ -97,17 +105,20 @@ test.describe("sync: vault-key-management", () => {
     const newEncryptedName = Buffer.from("E2E Vault Renamed").toString("base64");
     const newNonce = crypto.randomBytes(12).toString("base64");
 
+    const bodyObj = {
+      encryptedVaultName: newEncryptedName,
+      vaultNameNonce: newNonce,
+      ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpdate, bodyStr),
       },
-      body: JSON.stringify({
-        encryptedVaultName: newEncryptedName,
-        vaultNameNonce: newNonce,
-        ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
-      }),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(200);
@@ -120,7 +131,9 @@ test.describe("sync: vault-key-management", () => {
   test("delete vault returns 200", async () => {
     const res = await fetch(`${baseUrl}/sync/vault/${spaceId}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultDelete),
+      },
     });
 
     expect(res.status).toBe(200);
@@ -132,7 +145,9 @@ test.describe("sync: vault-key-management", () => {
 
   test("deleted vault no longer appears in vault list", async () => {
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+      },
     });
 
     expect(res.status).toBe(200);

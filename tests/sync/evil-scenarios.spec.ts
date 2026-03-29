@@ -7,6 +7,7 @@
  */
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
@@ -15,6 +16,9 @@ import {
   pushChanges,
   pullChanges,
   makeSyncChange,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -22,8 +26,8 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 test.describe("sync: evil scenarios", () => {
   test.describe.configure({ mode: "serial" });
 
-  let victimUser: { accessToken: string; userId: string };
-  let attackerUser: { accessToken: string; userId: string };
+  let victimAuth: AuthContext;
+  let attackerAuth: AuthContext;
   const victimSpaceId = crypto.randomUUID();
   const attackerSpaceId = crypto.randomUUID();
 
@@ -31,14 +35,16 @@ test.describe("sync: evil scenarios", () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    victimUser = await createAdminUser();
-    attackerUser = await createAdminUser();
+    const victim = await createAdminUser();
+    const attacker = await createAdminUser();
+    victimAuth = toAuthContext(victim);
+    attackerAuth = toAuthContext(attacker);
 
-    await createVaultKey(victimUser.accessToken, victimSpaceId);
-    await createVaultKey(attackerUser.accessToken, attackerSpaceId);
+    await createVaultKey(victimAuth, victimSpaceId);
+    await createVaultKey(attackerAuth, attackerSpaceId);
 
     // Victim pushes sensitive data
-    await pushChanges(victimUser.accessToken, victimSpaceId, [
+    await pushChanges(victimAuth, victimSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "secret-setting" }),
@@ -56,7 +62,11 @@ test.describe("sync: evil scenarios", () => {
   test("attacker cannot pull from victim's vault", async () => {
     const res = await fetch(
       `${SYNC_SERVER_URL}/sync/pull?spaceId=${victimSpaceId}&limit=100`,
-      { headers: { Authorization: `Bearer ${attackerUser.accessToken}` } },
+      {
+        headers: {
+          Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPull),
+        },
+      },
     );
 
     if (res.status === 200) {
@@ -70,24 +80,27 @@ test.describe("sync: evil scenarios", () => {
   });
 
   test("attacker cannot push to victim's vault", async () => {
+    const bodyObj = {
+      spaceId: victimSpaceId,
+      changes: [
+        makeSyncChange({
+          tableName: "haex_vault_settings",
+          rowPks: JSON.stringify({ id: "injected" }),
+          columnName: "value",
+          deviceId: "attacker-device",
+          encryptedValue: btoa("pwned"),
+        }),
+      ],
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${attackerUser.accessToken}`,
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId: victimSpaceId,
-        changes: [
-          makeSyncChange({
-            tableName: "haex_vault_settings",
-            rowPks: JSON.stringify({ id: "injected" }),
-            columnName: "value",
-            deviceId: "attacker-device",
-            encryptedValue: btoa("pwned"),
-          }),
-        ],
-      }),
+      body: bodyStr,
     });
 
     // Must be rejected — attacker has no vault_key for victim's vault
@@ -98,20 +111,24 @@ test.describe("sync: evil scenarios", () => {
   test("attacker cannot delete victim's vault", async () => {
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${victimSpaceId}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${attackerUser.accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultDelete),
+      },
     });
 
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
 
     // Verify victim's vault still exists
-    const pullRes = await pullChanges(victimUser.accessToken, victimSpaceId);
+    const pullRes = await pullChanges(victimAuth, victimSpaceId);
     expect(pullRes.changes.length).toBeGreaterThan(0);
   });
 
   test("attacker cannot read victim's vault key", async () => {
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${attackerUser.accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultList),
+      },
     });
 
     expect(res.status).toBe(200);
@@ -125,36 +142,32 @@ test.describe("sync: evil scenarios", () => {
   });
 
   // =====================================================================
-  // Token Manipulation
+  // DID-Auth Manipulation
   // =====================================================================
 
-  test("tampered JWT is rejected", async () => {
-    // Take a valid token and modify the payload
-    const parts = victimUser.accessToken.split(".");
-    const payload = JSON.parse(Buffer.from(parts[1]!, "base64url").toString());
-    payload.role = "service_role"; // Try to escalate to service role
+  test("tampered DID-Auth payload is rejected", async () => {
+    // Create a valid DID-Auth header then tamper with the payload
+    const validHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultList);
+    const parts = validHeader.replace("DID ", "").split(".");
+    // Tamper with the payload (change the DID to victim's)
+    const payload = JSON.parse(Buffer.from(parts[0]!, "base64url").toString());
+    payload.did = victimAuth.did;
     const tamperedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    const tamperedToken = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
+    const tamperedHeader = `DID ${tamperedPayload}.${parts[1]}`;
 
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${tamperedToken}` },
+      headers: { Authorization: tamperedHeader },
     });
 
     expect(res.status).toBe(401);
   });
 
-  test("token from different issuer is rejected", async () => {
-    // Create a JWT signed with a different secret
-    const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
-    const payload = Buffer.from(JSON.stringify({
-      sub: victimUser.userId,
-      role: "authenticated",
-      exp: Math.floor(Date.now() / 1000) + 3600,
-    })).toString("base64url");
-    const fakeToken = `${header}.${payload}.fakesignature`;
+  test("forged DID-Auth with wrong key is rejected", async () => {
+    // Create a DID-Auth header signed by attacker but claiming to be victim
+    const forgedHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, victimAuth.did, DidAuthAction.VaultList);
 
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${fakeToken}` },
+      headers: { Authorization: forgedHeader },
     });
 
     expect(res.status).toBe(401);
@@ -165,23 +178,26 @@ test.describe("sync: evil scenarios", () => {
   // =====================================================================
 
   test("SQL injection in table name is handled safely", async () => {
+    const bodyObj = {
+      spaceId: attackerSpaceId,
+      changes: [
+        makeSyncChange({
+          tableName: "haex_vault_settings'; DROP TABLE sync_changes; --",
+          rowPks: JSON.stringify({ id: "x" }),
+          columnName: "value",
+          deviceId: "attacker",
+        }),
+      ],
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${attackerUser.accessToken}`,
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId: attackerSpaceId,
-        changes: [
-          makeSyncChange({
-            tableName: "haex_vault_settings'; DROP TABLE sync_changes; --",
-            rowPks: JSON.stringify({ id: "x" }),
-            columnName: "value",
-            deviceId: "attacker",
-          }),
-        ],
-      }),
+      body: bodyStr,
     });
 
     // Should either reject the table name or handle it safely
@@ -189,31 +205,34 @@ test.describe("sync: evil scenarios", () => {
     expect(res.status).not.toBe(500);
 
     // Verify sync_changes still exists by pulling
-    const pullRes = await pullChanges(victimUser.accessToken, victimSpaceId);
+    const pullRes = await pullChanges(victimAuth, victimSpaceId);
     expect(pullRes.changes.length).toBeGreaterThan(0);
   });
 
   test("extremely large payload is rejected", async () => {
     const hugeValue = "x".repeat(10 * 1024 * 1024); // 10 MB
 
+    const bodyObj = {
+      spaceId: attackerSpaceId,
+      changes: [
+        makeSyncChange({
+          tableName: "haex_vault_settings",
+          rowPks: JSON.stringify({ id: "huge" }),
+          columnName: "value",
+          deviceId: "attacker",
+          encryptedValue: hugeValue,
+        }),
+      ],
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${attackerUser.accessToken}`,
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId: attackerSpaceId,
-        changes: [
-          makeSyncChange({
-            tableName: "haex_vault_settings",
-            rowPks: JSON.stringify({ id: "huge" }),
-            columnName: "value",
-            deviceId: "attacker",
-            encryptedValue: hugeValue,
-          }),
-        ],
-      }),
+      body: bodyStr,
     });
 
     // Should be rejected (413 or 400) or accepted with size limits
@@ -224,28 +243,31 @@ test.describe("sync: evil scenarios", () => {
   });
 
   test("negative batchSeq is handled", async () => {
+    const bodyObj = {
+      spaceId: attackerSpaceId,
+      changes: [
+        {
+          ...makeSyncChange({
+            tableName: "haex_vault_settings",
+            rowPks: JSON.stringify({ id: "batch-evil" }),
+            columnName: "value",
+            deviceId: "attacker",
+          }),
+          batchId: crypto.randomUUID(),
+          batchSeq: -1,
+          batchTotal: 1,
+        },
+      ],
+    };
+    const bodyStr = JSON.stringify(bodyObj);
+
     const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${attackerUser.accessToken}`,
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({
-        spaceId: attackerSpaceId,
-        changes: [
-          {
-            ...makeSyncChange({
-              tableName: "haex_vault_settings",
-              rowPks: JSON.stringify({ id: "batch-evil" }),
-              columnName: "value",
-              deviceId: "attacker",
-            }),
-            batchId: crypto.randomUUID(),
-            batchSeq: -1,
-            batchTotal: 1,
-          },
-        ],
-      }),
+      body: bodyStr,
     });
 
     // Should not crash
@@ -260,7 +282,7 @@ test.describe("sync: evil scenarios", () => {
     // Push with a timestamp far in the future
     const futureTimestamp = "2099-12-31T23:59:59.999Z:99999999:evil-device";
 
-    await pushChanges(attackerUser.accessToken, attackerSpaceId, [
+    await pushChanges(attackerAuth, attackerSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "time-travel" }),
@@ -272,7 +294,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Now push with a normal timestamp — should NOT win (future timestamp wins LWW)
-    await pushChanges(attackerUser.accessToken, attackerSpaceId, [
+    await pushChanges(attackerAuth, attackerSpaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "time-travel" }),
@@ -284,7 +306,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — future timestamp should have won
-    const pulled = await pullChanges(attackerUser.accessToken, attackerSpaceId);
+    const pulled = await pullChanges(attackerAuth, attackerSpaceId);
     const change = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === JSON.stringify({ id: "time-travel" }) && c.columnName === "value",
@@ -299,12 +321,13 @@ test.describe("sync: evil scenarios", () => {
 
   test("concurrent pushes to same vault from same user do not corrupt data", async () => {
     const spaceId = crypto.randomUUID();
-    const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, spaceId);
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
 
     // Push 10 changes concurrently
     const pushPromises = Array.from({ length: 10 }, (_, i) =>
-      pushChanges(accessToken, spaceId, [
+      pushChanges(auth, spaceId, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: `concurrent-${i}` }),
@@ -323,7 +346,7 @@ test.describe("sync: evil scenarios", () => {
     expect(successes.length).toBe(10);
 
     // Pull should return all 10 distinct rows
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
     const concurrentChanges = pulled.changes.filter(
       (c: { tableName: string; rowPks: string }) =>
         c.tableName === "haex_vault_settings" &&
@@ -341,13 +364,14 @@ test.describe("sync: evil scenarios", () => {
 
   test("3 devices modify same cell — latest HLC wins", async () => {
     const spaceId = crypto.randomUUID();
-    const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, spaceId);
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
 
     const rowPks = JSON.stringify({ id: "3way-conflict" });
 
     // Device A: earliest
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -359,7 +383,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Device C: latest (should win)
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -371,7 +395,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Device B: middle (pushed last but earlier HLC — should NOT win)
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -383,7 +407,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — device C should win (latest HLC, not latest push)
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
     const conflict = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === rowPks && c.columnName === "value",
@@ -400,13 +424,14 @@ test.describe("sync: evil scenarios", () => {
 
   test("deleted record can be resurrected with later timestamp", async () => {
     const spaceId = crypto.randomUUID();
-    const { accessToken } = await createAdminUser();
-    await createVaultKey(accessToken, spaceId);
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
 
     const rowPks = JSON.stringify({ id: "phoenix" });
 
     // Create
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -418,7 +443,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Delete (tombstone)
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -430,7 +455,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Resurrect with later timestamp (set tombstone back to 0)
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks,
@@ -442,7 +467,7 @@ test.describe("sync: evil scenarios", () => {
     ]);
 
     // Pull — tombstone should be 0 (resurrected)
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
     const tombstone = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === rowPks && c.columnName === "haex_tombstone",

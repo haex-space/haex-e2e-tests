@@ -1,48 +1,29 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
   createVaultKey,
+  createSpace as createSpaceHelper,
+  deleteSpace,
   pushChanges,
   pullChanges,
   makeSyncChange,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
-
-function randomBase64(bytes: number): string {
-  return crypto.randomBytes(bytes).toString("base64");
-}
-
-async function createSpace(token: string, spaceId: string, label: string) {
-  return fetch(`${SYNC_SERVER_URL}/spaces`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
-  });
-}
 
 test.describe("sync: cross-vault sync via shared spaces", () => {
   test.describe.configure({ mode: "serial" });
 
   // Two completely separate users with their own vaults
-  let userA: { accessToken: string; userId: string };
-  let userB: { accessToken: string; userId: string };
+  let authA: AuthContext;
+  let authB: AuthContext;
   const spaceIdA = crypto.randomUUID(); // User A's personal vault
   const spaceIdB = crypto.randomUUID(); // User B's personal vault
   const sharedSpaceId = crypto.randomUUID(); // Shared space partition
@@ -54,20 +35,19 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
     expect(healthy).toBe(true);
 
     // Create two independent users
-    userA = await createAdminUser();
-    userB = await createAdminUser();
+    const adminA = await createAdminUser();
+    const adminB = await createAdminUser();
+    authA = toAuthContext(adminA);
+    authB = toAuthContext(adminB);
 
     // Each user creates their own vault key
-    await createVaultKey(userA.accessToken, spaceIdA);
-    await createVaultKey(userB.accessToken, spaceIdB);
+    await createVaultKey(authA, spaceIdA);
+    await createVaultKey(authB, spaceIdB);
   });
 
   test.afterAll(async () => {
     try {
-      await fetch(`${SYNC_SERVER_URL}/spaces/${sharedSpaceId}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${userA.accessToken}` },
-      });
+      await deleteSpace(authA, sharedSpaceId);
     } catch {
       // Best effort
     }
@@ -78,7 +58,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // =====================================================================
 
   test("user A can push to their own vault", async () => {
-    const res = await pushChanges(userA.accessToken, spaceIdA, [
+    const res = await pushChanges(authA, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "setting-a-1" }),
@@ -93,7 +73,11 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   test("user B cannot pull from user A's vault", async () => {
     const res = await fetch(
       `${SYNC_SERVER_URL}/sync/pull?spaceId=${spaceIdA}&limit=10`,
-      { headers: { Authorization: `Bearer ${userB.accessToken}` } },
+      {
+        headers: {
+          Authorization: await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.SyncPull),
+        },
+      },
     );
 
     // Should be forbidden or return empty (RLS blocks access)
@@ -107,7 +91,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
 
   test("user B cannot push to user A's vault", async () => {
     try {
-      const res = await pushChanges(userB.accessToken, spaceIdA, [
+      const res = await pushChanges(authB, spaceIdA, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: "evil-inject" }),
@@ -128,7 +112,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // =====================================================================
 
   test("user A creates a shared space", async () => {
-    const res = await createSpace(userA.accessToken, sharedSpaceId, "Cross-Vault Test Space");
+    const res = await createSpaceHelper(authA, sharedSpaceId, "Cross-Vault Test Space");
     expect(res.status).toBe(201);
   });
 
@@ -137,7 +121,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${userA.accessToken}`,
+        Authorization: await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.CreateSpace),
       },
     });
 
@@ -153,7 +137,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   // =====================================================================
 
   test("user A pushes from device A", async () => {
-    const res = await pushChanges(userA.accessToken, spaceIdA, [
+    const res = await pushChanges(authA, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-device-1" }),
@@ -167,7 +151,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   });
 
   test("user A pulls from device B and sees device A's changes", async () => {
-    const pulled = await pullChanges(userA.accessToken, spaceIdA, {
+    const pulled = await pullChanges(authA, spaceIdA, {
       excludeDeviceId: deviceB,
     });
 
@@ -180,7 +164,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
   });
 
   test("user A pushes from device B with later timestamp overwrites device A", async () => {
-    const res = await pushChanges(userA.accessToken, spaceIdA, [
+    const res = await pushChanges(authA, spaceIdA, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "multi-device-1" }),
@@ -193,7 +177,7 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
     expect(res.count).toBeDefined();
 
     // Pull should show device B's value (later HLC wins)
-    const pulled = await pullChanges(userA.accessToken, spaceIdA);
+    const pulled = await pullChanges(authA, spaceIdA);
     const change = pulled.changes.find(
       (c: { rowPks: string; columnName: string }) =>
         c.rowPks === JSON.stringify({ id: "multi-device-1" }) && c.columnName === "value",

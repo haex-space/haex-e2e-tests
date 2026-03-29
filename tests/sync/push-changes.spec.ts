@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
-  getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
   createVaultKey,
@@ -9,13 +9,13 @@ import {
   pushChanges,
   pullChanges,
   makeSyncChange,
+  toAuthContext,
 } from "../helpers";
 
 test.describe("sync: push-changes", () => {
   test.describe.configure({ mode: "serial" });
 
-  const baseUrl = getSyncServerUrl();
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-push-device-${Date.now()}`;
 
@@ -24,13 +24,13 @@ test.describe("sync: push-changes", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    await createVaultKey(accessToken, spaceId);
+    auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, spaceId);
+      await deleteVault(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -45,7 +45,7 @@ test.describe("sync: push-changes", () => {
       hlcTimestamp: `${new Date().toISOString()}:00000001:${deviceId}`,
     });
 
-    const result = await pushChanges(accessToken, spaceId, [change]);
+    const result = await pushChanges(auth, spaceId, [change]);
 
     expect(result.count).toBe(1);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -79,7 +79,7 @@ test.describe("sync: push-changes", () => {
       }),
     ];
 
-    const result = await pushChanges(accessToken, spaceId, changes);
+    const result = await pushChanges(auth, spaceId, changes);
 
     expect(result.count).toBe(3);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -100,10 +100,10 @@ test.describe("sync: push-changes", () => {
       nonce,
     });
 
-    await pushChanges(accessToken, spaceId, [change]);
+    await pushChanges(auth, spaceId, [change]);
 
     // Pull without excluding own device to see our changes
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
 
     const found = pulled.changes.find(
       (c) =>
@@ -129,10 +129,10 @@ test.describe("sync: push-changes", () => {
       hlcTimestamp: `${new Date().toISOString()}:00000020:${deviceId}`,
     });
 
-    await pushChanges(accessToken, spaceId, [change]);
+    await pushChanges(auth, spaceId, [change]);
 
     // Pull excluding own device
-    const pulled = await pullChanges(accessToken, spaceId, {
+    const pulled = await pullChanges(auth, spaceId, {
       excludeDeviceId: deviceId,
     });
 
@@ -164,7 +164,7 @@ test.describe("sync: push-changes", () => {
       encryptedValue: earlyValue,
     });
 
-    await pushChanges(accessToken, spaceId, [earlyChange]);
+    await pushChanges(auth, spaceId, [earlyChange]);
 
     // Push late version from another device
     const lateChange = makeSyncChange({
@@ -176,10 +176,10 @@ test.describe("sync: push-changes", () => {
       encryptedValue: lateValue,
     });
 
-    await pushChanges(accessToken, spaceId, [lateChange]);
+    await pushChanges(auth, spaceId, [lateChange]);
 
     // Pull all changes for this cell
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
 
     const matches = pulled.changes.filter(
       (c) => c.rowPks === rowPks && c.columnName === "title",

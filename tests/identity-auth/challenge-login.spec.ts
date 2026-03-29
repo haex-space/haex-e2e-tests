@@ -6,8 +6,10 @@ import {
   getSyncServerUrl,
   checkSyncServerHealth,
   registerIdentity,
-  challengeLogin,
   createAdminUser,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 test.describe("identity-auth: challenge-login", () => {
@@ -118,12 +120,15 @@ test.describe("identity-auth: challenge-login", () => {
     expect(verifyRes.status).toBe(401);
   });
 
-  test("use admin JWT to call authenticated endpoint GET /sync/vaults", async () => {
-    // Use createAdminUser to get a valid JWT (bypasses email verification)
-    const { accessToken } = await createAdminUser();
+  test("use DID-Auth to call authenticated endpoint GET /sync/vaults", async () => {
+    // Use createAdminUser to get identity (bypasses email verification)
+    const admin = await createAdminUser();
+    const auth = toAuthContext(admin);
 
     const res = await fetch(`${baseUrl}/sync/vaults`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+      },
     });
 
     expect(res.status).toBe(200);

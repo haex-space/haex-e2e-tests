@@ -15,6 +15,8 @@ import {
 } from "@haex-space/vault-sdk";
 import { DidAuthAction } from "@haex-space/ucan";
 
+export { DidAuthAction };
+
 const { subtle } = crypto.webcrypto as unknown as Crypto;
 
 // The sync-server is accessed directly (not through Kong) for all API calls.
@@ -73,7 +75,7 @@ function base64urlEncode(data: Uint8Array): string {
  * Create a DID-Auth Authorization header value.
  * Format: `DID <base64url-payload>.<base64url-signature>`
  */
-async function createDidAuthHeader(
+export async function createDidAuthHeader(
   privateKeyBase64: string,
   did: string,
   action: string,

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   checkSyncServerHealth,
   createAdminUser,
@@ -8,12 +9,13 @@ import {
   pushChanges,
   pullChanges,
   makeSyncChange,
+  toAuthContext,
 } from "../helpers";
 
 test.describe("sync: pull-changes", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-pull-device-${Date.now()}`;
 
@@ -22,20 +24,20 @@ test.describe("sync: pull-changes", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    await createVaultKey(accessToken, spaceId);
+    auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, spaceId);
+      await deleteVault(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
   });
 
   test("pull from empty vault returns empty changes and hasMore false", async () => {
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
 
     expect(Array.isArray(pulled.changes)).toBe(true);
     expect(pulled.changes).toHaveLength(0);
@@ -50,7 +52,7 @@ test.describe("sync: pull-changes", () => {
     const value1 = crypto.randomBytes(16).toString("base64");
     const value2 = crypto.randomBytes(16).toString("base64");
 
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks: JSON.stringify({ id: entryId1 }),
@@ -69,7 +71,7 @@ test.describe("sync: pull-changes", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(accessToken, spaceId);
+    const pulled = await pullChanges(auth, spaceId);
 
     const found1 = pulled.changes.find(
       (c) => c.rowPks === JSON.stringify({ id: entryId1 }),
@@ -90,7 +92,7 @@ test.describe("sync: pull-changes", () => {
   test("pull with limit returns limited set and hasMore true", async () => {
     // Create a fresh vault to control exact count
     const limitSpaceId = crypto.randomUUID();
-    await createVaultKey(accessToken, limitSpaceId);
+    await createVaultKey(auth, limitSpaceId);
 
     try {
       // Push 5 changes
@@ -104,22 +106,22 @@ test.describe("sync: pull-changes", () => {
         }),
       );
 
-      await pushChanges(accessToken, limitSpaceId, changes);
+      await pushChanges(auth, limitSpaceId, changes);
 
       // Pull with limit 2
-      const pulled = await pullChanges(accessToken, limitSpaceId, { limit: 2 });
+      const pulled = await pullChanges(auth, limitSpaceId, { limit: 2 });
 
       expect(pulled.changes).toHaveLength(2);
       expect(pulled.hasMore).toBe(true);
     } finally {
-      await deleteVault(accessToken, limitSpaceId);
+      await deleteVault(auth, limitSpaceId);
     }
   });
 
   test("pull with afterUpdatedAt returns only newer changes", async () => {
     // Push first batch and get server timestamp
     const entryIdBefore = crypto.randomUUID();
-    const beforeResult = await pushChanges(accessToken, spaceId, [
+    const beforeResult = await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks: JSON.stringify({ id: entryIdBefore }),
@@ -133,7 +135,7 @@ test.describe("sync: pull-changes", () => {
 
     // Push second batch after cutoff
     const entryIdAfter = crypto.randomUUID();
-    await pushChanges(accessToken, spaceId, [
+    await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "entries",
         rowPks: JSON.stringify({ id: entryIdAfter }),
@@ -143,7 +145,7 @@ test.describe("sync: pull-changes", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(accessToken, spaceId, {
+    const pulled = await pullChanges(auth, spaceId, {
       afterUpdatedAt: cutoff,
     });
 
@@ -163,7 +165,7 @@ test.describe("sync: pull-changes", () => {
   test("pull returns all columns of a row when any column is updated (row-level granularity)", async () => {
     // Create a fresh vault to avoid interference
     const rowSpaceId = crypto.randomUUID();
-    await createVaultKey(accessToken, rowSpaceId);
+    await createVaultKey(auth, rowSpaceId);
 
     try {
       const entryId = crypto.randomUUID();
@@ -173,7 +175,7 @@ test.describe("sync: pull-changes", () => {
       const usernameValue = crypto.randomBytes(16).toString("base64");
 
       // Push title column first
-      const firstResult = await pushChanges(accessToken, rowSpaceId, [
+      const firstResult = await pushChanges(auth, rowSpaceId, [
         makeSyncChange({
           tableName: "entries",
           rowPks,
@@ -187,7 +189,7 @@ test.describe("sync: pull-changes", () => {
       const cutoff = firstResult.serverTimestamp;
 
       // Push username column after cutoff (updating a different column of same row)
-      await pushChanges(accessToken, rowSpaceId, [
+      await pushChanges(auth, rowSpaceId, [
         makeSyncChange({
           tableName: "entries",
           rowPks,
@@ -200,7 +202,7 @@ test.describe("sync: pull-changes", () => {
 
       // Pull with afterUpdatedAt=cutoff: should return ALL columns of the row
       // because the row was updated (username column changed after cutoff)
-      const pulled = await pullChanges(accessToken, rowSpaceId, {
+      const pulled = await pullChanges(auth, rowSpaceId, {
         afterUpdatedAt: cutoff,
       });
 
@@ -218,7 +220,7 @@ test.describe("sync: pull-changes", () => {
       expect(titleChange!.encryptedValue).toBe(titleValue);
       expect(usernameChange!.encryptedValue).toBe(usernameValue);
     } finally {
-      await deleteVault(accessToken, rowSpaceId);
+      await deleteVault(auth, rowSpaceId);
     }
   });
 });

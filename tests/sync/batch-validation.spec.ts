@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { test, expect } from "@playwright/test";
+import type { AuthContext } from "../helpers";
 import {
   getSyncServerUrl,
   checkSyncServerHealth,
@@ -8,13 +9,16 @@ import {
   deleteVault,
   pushChanges,
   makeSyncChange,
+  toAuthContext,
+  createDidAuthHeader,
+  DidAuthAction,
 } from "../helpers";
 
 test.describe("sync: batch-validation", () => {
   test.describe.configure({ mode: "serial" });
 
   const baseUrl = getSyncServerUrl();
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-batch-device-${Date.now()}`;
 
@@ -23,13 +27,13 @@ test.describe("sync: batch-validation", () => {
     expect(healthy).toBe(true);
 
     const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    await createVaultKey(accessToken, spaceId);
+    auth = toAuthContext(admin);
+    await createVaultKey(auth, spaceId);
   });
 
   test.afterAll(async () => {
     try {
-      await deleteVault(accessToken, spaceId);
+      await deleteVault(auth, spaceId);
     } catch {
       // Best effort cleanup
     }
@@ -73,7 +77,7 @@ test.describe("sync: batch-validation", () => {
       }),
     ];
 
-    const result = await pushChanges(accessToken, spaceId, changes);
+    const result = await pushChanges(auth, spaceId, changes);
 
     expect(result.count).toBe(3);
     expect(typeof result.serverTimestamp).toBe("string");
@@ -108,13 +112,15 @@ test.describe("sync: batch-validation", () => {
       }),
     ];
 
+    const bodyStr = JSON.stringify({ spaceId, changes });
+
     const res = await fetch(`${baseUrl}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({ spaceId, changes }),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(400);
@@ -166,13 +172,15 @@ test.describe("sync: batch-validation", () => {
       }),
     ];
 
+    const bodyStr = JSON.stringify({ spaceId, changes });
+
     const res = await fetch(`${baseUrl}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPush, bodyStr),
       },
-      body: JSON.stringify({ spaceId, changes }),
+      body: bodyStr,
     });
 
     expect(res.status).toBe(400);
