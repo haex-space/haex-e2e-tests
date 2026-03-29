@@ -3,8 +3,17 @@
 // Shared helpers for sync-server API interactions in E2E tests.
 // Provides identity creation, authentication, vault key management,
 // and sync operations.
+//
+// Uses Ed25519 signing keys + DID-Auth (not P-256/Bearer JWT).
 
 import * as crypto from "crypto";
+import {
+  generateUserKeypairAsync,
+  exportUserKeypairAsync,
+  publicKeyToDidKeyAsync,
+  signRecordAsync,
+} from "@haex-space/vault-sdk";
+import { DidAuthAction } from "@haex-space/ucan";
 
 const { subtle } = crypto.webcrypto as unknown as Crypto;
 
@@ -19,105 +28,108 @@ const SUPABASE_URL =
   process.env.SUPABASE_URL || process.env.SYNC_SERVER_URL || "http://sync-kong:8000";
 
 // =============================================================================
-// Identity & Crypto Helpers (WebCrypto-based, matching vault-sdk format)
+// Identity & Crypto Helpers (Ed25519-based, matching vault-sdk format)
 // =============================================================================
 
 export interface TestIdentity {
-  /** WebCrypto key pair */
-  cryptoKeyPair: CryptoKeyPair;
-  /** SPKI-encoded public key as Base64 (what the server stores) */
+  /** Ed25519 signing key pair (WebCrypto) */
+  signingKeyPair: { publicKey: CryptoKey; privateKey: CryptoKey };
+  /** X25519 agreement key pair (WebCrypto) */
+  agreementKeyPair: { publicKey: CryptoKey; privateKey: CryptoKey };
+  /** SPKI-encoded signing public key as Base64 (what the server stores) */
   publicKeyBase64: string;
-  /** did:key:z... derived from the compressed P-256 point */
+  /** PKCS8-encoded signing private key as Base64 */
+  privateKeyBase64: string;
+  /** SPKI-encoded agreement public key as Base64 */
+  agreementPublicKeyBase64: string;
+  /** did:key:z... derived from the Ed25519 public key */
   did: string;
   /** Test email address */
   email: string;
 }
 
-// Base58-btc alphabet (no 0, O, I, l)
-const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+/**
+ * Auth context for DID-Auth API calls.
+ * Functions that previously accepted `accessToken: string` now accept this.
+ */
+export interface AuthContext {
+  /** DID identifier (did:key:z...) */
+  did: string;
+  /** PKCS8-encoded Ed25519 private key as Base64 */
+  privateKeyBase64: string;
+  /** Supabase JWT (only needed for Realtime connections, not API auth) */
+  accessToken: string;
+}
 
-function base58btcEncode(bytes: Uint8Array): string {
-  // Count leading zeros
-  let zeros = 0;
-  for (const b of bytes) {
-    if (b !== 0) break;
-    zeros++;
-  }
+// =============================================================================
+// DID-Auth Header
+// =============================================================================
 
-  // Convert to big integer and encode
-  let num = BigInt(0);
-  for (const b of bytes) {
-    num = num * 256n + BigInt(b);
-  }
-
-  let result = "";
-  while (num > 0n) {
-    const mod = Number(num % 58n);
-    result = BASE58_ALPHABET[mod] + result;
-    num = num / 58n;
-  }
-
-  return "1".repeat(zeros) + result;
+function base64urlEncode(data: Uint8Array): string {
+  return Buffer.from(data).toString("base64url");
 }
 
 /**
- * Compress a P-256 uncompressed point (65 bytes: 0x04 || X || Y) to 33 bytes.
+ * Create a DID-Auth Authorization header value.
+ * Format: `DID <base64url-payload>.<base64url-signature>`
  */
-function compressP256Point(raw: Uint8Array): Uint8Array {
-  // raw[0] === 0x04 (uncompressed), raw[1..32] = X, raw[33..64] = Y
-  const x = raw.slice(1, 33);
-  const yLastByte = raw[64];
-  const prefix = (yLastByte & 1) === 0 ? 0x02 : 0x03;
-  const compressed = new Uint8Array(33);
-  compressed[0] = prefix;
-  compressed.set(x, 1);
-  return compressed;
-}
+async function createDidAuthHeader(
+  privateKeyBase64: string,
+  did: string,
+  action: string,
+  body?: string,
+): Promise<string> {
+  const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
 
-/**
- * Derive a did:key from a SPKI Base64-encoded P-256 public key.
- * Uses the same algorithm as vault-sdk: multicodec 0x8024 + compressed point + base58btc.
- */
-async function publicKeyToDidKey(spkiBase64: string): Promise<string> {
-  // Import SPKI to get a CryptoKey, then export as raw to get the uncompressed point
-  const spkiBytes = Uint8Array.from(atob(spkiBase64), c => c.charCodeAt(0));
-  const key = await subtle.importKey(
-    "spki", spkiBytes,
-    { name: "ECDSA", namedCurve: "P-256" },
-    true, ["verify"],
+  const bodyHash = base64urlEncode(
+    new Uint8Array(
+      await subtle.digest("SHA-256", new TextEncoder().encode(body ?? "")),
+    ),
   );
-  const rawBytes = new Uint8Array(await subtle.exportKey("raw", key));
-  const compressed = compressP256Point(rawBytes);
 
-  // Prepend multicodec prefix for P-256: [0x80, 0x24]
-  const multicodec = new Uint8Array(2 + compressed.length);
-  multicodec[0] = 0x80;
-  multicodec[1] = 0x24;
-  multicodec.set(compressed, 2);
+  const payload = JSON.stringify({
+    did,
+    action,
+    timestamp: Date.now(),
+    bodyHash,
+  });
 
-  return `did:key:z${base58btcEncode(multicodec)}`;
+  const payloadEncoded = base64urlEncode(new TextEncoder().encode(payload));
+  const privateKey = await importUserPrivateKeyAsync(privateKeyBase64);
+  const signature = new Uint8Array(
+    await subtle.sign("Ed25519", privateKey, new TextEncoder().encode(payloadEncoded)),
+  );
+
+  return `DID ${payloadEncoded}.${base64urlEncode(signature)}`;
 }
 
+// =============================================================================
+// Identity Creation & Authentication
+// =============================================================================
+
 /**
- * Generate a fresh ECDSA P-256 identity for testing.
- * Uses WebCrypto to match the vault-sdk format exactly.
+ * Generate a fresh Ed25519 + X25519 identity for testing.
+ * Uses vault-sdk's generateUserKeypairAsync to match the app exactly.
  */
 export async function createTestIdentity(
   email?: string,
 ): Promise<TestIdentity> {
-  const keyPair = await subtle.generateKey(
-    { name: "ECDSA", namedCurve: "P-256" },
-    true,
-    ["sign", "verify"],
-  );
-
-  const spkiBytes = new Uint8Array(await subtle.exportKey("spki", keyPair.publicKey));
-  const publicKeyBase64 = btoa(String.fromCharCode(...spkiBytes));
-  const did = await publicKeyToDidKey(publicKeyBase64);
+  const keypair = await generateUserKeypairAsync();
+  const exported = await exportUserKeypairAsync(keypair);
+  const did = await publicKeyToDidKeyAsync(exported.signingPublicKey);
 
   return {
-    cryptoKeyPair: keyPair,
-    publicKeyBase64,
+    signingKeyPair: {
+      publicKey: keypair.signingPublicKey,
+      privateKey: keypair.signingPrivateKey,
+    },
+    agreementKeyPair: {
+      publicKey: keypair.agreementPublicKey,
+      privateKey: keypair.agreementPrivateKey,
+    },
+    publicKeyBase64: exported.signingPublicKey,
+    privateKeyBase64: exported.signingPrivateKey,
+    agreementPublicKeyBase64: exported.agreementPublicKey,
     did,
     email: email ?? `e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@test.haex.space`,
   };
@@ -142,7 +154,7 @@ export async function signPresentation(
   const data = new TextEncoder().encode(canonical);
 
   const sigBytes = new Uint8Array(
-    await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, identity.cryptoKeyPair.privateKey, data),
+    await subtle.sign("Ed25519", identity.signingKeyPair.privateKey, data),
   );
   const signature = btoa(String.fromCharCode(...sigBytes));
 
@@ -157,7 +169,7 @@ export async function signPresentation(
 
 /**
  * Sign a challenge nonce for authentication.
- * The server verifies: ECDSA-SHA256(nonce_bytes) using raw signature format.
+ * The server verifies: Ed25519(nonce_bytes) using raw signature format.
  */
 export async function signChallenge(
   identity: TestIdentity,
@@ -165,7 +177,7 @@ export async function signChallenge(
 ): Promise<string> {
   const data = new TextEncoder().encode(nonce);
   const sigBytes = new Uint8Array(
-    await subtle.sign({ name: "ECDSA", hash: "SHA-256" }, identity.cryptoKeyPair.privateKey, data),
+    await subtle.sign("Ed25519", identity.signingKeyPair.privateKey, data),
   );
   return btoa(String.fromCharCode(...sigBytes));
 }
@@ -289,6 +301,7 @@ export async function verifyEmail(
 
 /**
  * Perform challenge-response login and return JWT tokens.
+ * The JWT is now only needed for Supabase Realtime, not API auth.
  */
 export async function challengeLogin(
   identity: TestIdentity,
@@ -328,20 +341,10 @@ export async function challengeLogin(
 }
 
 /**
- * Create a test user via the admin API (Supabase-based) and return an auth token.
- * This is the simplest way to get a JWT for sync-server tests.
+ * Confirm a user's email via Supabase Admin API.
+ * Shared between createAdminUser and createAdminUserWithIdentity.
  */
-export async function createAdminUser(): Promise<{
-  accessToken: string;
-  userId: string;
-  email: string;
-}> {
-  // The sync server now requires a registered identity (for quota tracking).
-  // Flow: register identity → server creates GoTrue user → confirm email → challenge login → JWT.
-  const identity = await createTestIdentity();
-  const regResult = await registerIdentity(identity);
-
-  // Confirm the user's email via Supabase Admin API so challenge-login works.
+async function confirmEmailViaAdmin(email: string): Promise<void> {
   const serviceKey =
     process.env.SUPABASE_SERVICE_KEY ||
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
@@ -350,7 +353,6 @@ export async function createAdminUser(): Promise<{
     process.env.SUPABASE_ANON_KEY ||
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
 
-  // List GoTrue users to find the one created for this identity
   const listRes = await fetch(
     `${SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=50`,
     {
@@ -365,10 +367,9 @@ export async function createAdminUser(): Promise<{
     const listData = await listRes.json();
     const users = listData.users || listData;
     const user = (users as { id: string; email: string }[]).find(
-      (u) => u.email === identity.email,
+      (u) => u.email === email,
     );
     if (user) {
-      // Confirm email via admin API
       await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${user.id}`, {
         method: "PUT",
         headers: {
@@ -380,14 +381,32 @@ export async function createAdminUser(): Promise<{
       });
     }
   }
+}
 
-  // Now perform challenge-login to get JWT tokens
+/**
+ * Create a test user: register identity → confirm email → challenge login.
+ * Returns an AuthContext for DID-Auth API calls, plus user metadata.
+ */
+export async function createAdminUser(): Promise<{
+  accessToken: string;
+  userId: string;
+  email: string;
+  did: string;
+  privateKeyBase64: string;
+}> {
+  const identity = await createTestIdentity();
+  const regResult = await registerIdentity(identity);
+
+  await confirmEmailViaAdmin(identity.email);
+
   const tokens = await challengeLogin(identity);
 
   return {
     accessToken: tokens.access_token,
     userId: regResult.identityId,
     email: identity.email,
+    did: identity.did,
+    privateKeyBase64: identity.privateKeyBase64,
   };
 }
 
@@ -401,60 +420,38 @@ export async function createAdminUserWithIdentity(): Promise<{
   email: string;
   publicKey: string;
   privateKeyBase64: string;
+  did: string;
 }> {
   const identity = await createTestIdentity();
   const regResult = await registerIdentity(identity);
 
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_KEY ||
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
-  const anonKey =
-    process.env.SUPABASE_ANON_KEY ||
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
-
-  const listRes = await fetch(
-    `${SUPABASE_URL}/auth/v1/admin/users?page=1&per_page=50`,
-    {
-      headers: {
-        Authorization: `Bearer ${serviceKey}`,
-        apikey: anonKey,
-      },
-    },
-  );
-
-  if (listRes.ok) {
-    const listData = await listRes.json();
-    const users = listData.users || listData;
-    const user = (users as { id: string; email: string }[]).find(
-      (u) => u.email === identity.email,
-    );
-    if (user) {
-      await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${user.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceKey}`,
-          apikey: anonKey,
-        },
-        body: JSON.stringify({ email_confirm: true }),
-      });
-    }
-  }
+  await confirmEmailViaAdmin(identity.email);
 
   const tokens = await challengeLogin(identity);
-
-  // Export private key as Base64 PKCS8 for signRecordAsync
-  const pkcs8Bytes = new Uint8Array(
-    await subtle.exportKey("pkcs8", identity.cryptoKeyPair.privateKey),
-  );
-  const privateKeyBase64 = btoa(String.fromCharCode(...pkcs8Bytes));
 
   return {
     accessToken: tokens.access_token,
     userId: regResult.identityId,
     email: identity.email,
     publicKey: identity.publicKeyBase64,
-    privateKeyBase64,
+    privateKeyBase64: identity.privateKeyBase64,
+    did: identity.did,
+  };
+}
+
+/**
+ * Build an AuthContext from a createAdminUser/createAdminUserWithIdentity result.
+ * Convenience for functions that accept AuthContext.
+ */
+export function toAuthContext(user: {
+  did: string;
+  privateKeyBase64: string;
+  accessToken: string;
+}): AuthContext {
+  return {
+    did: user.did,
+    privateKeyBase64: user.privateKeyBase64,
+    accessToken: user.accessToken,
   };
 }
 
@@ -470,27 +467,30 @@ function randomBase64(bytes: number): string {
  * Create a shared space owned by the given user.
  */
 export async function createSpace(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
   label: string,
 ): Promise<Response> {
+  const bodyObj = {
+    id: spaceId,
+    encryptedName: randomBase64(32),
+    nameNonce: randomBase64(12),
+    label,
+    keyGrant: {
+      encryptedSpaceKey: randomBase64(32),
+      keyNonce: randomBase64(12),
+      ephemeralPublicKey: randomBase64(65),
+    },
+  };
+  const bodyStr = JSON.stringify(bodyObj);
+
   return fetch(`${SYNC_SERVER_URL}/spaces`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, bodyStr),
     },
-    body: JSON.stringify({
-      id: spaceId,
-      encryptedName: randomBase64(32),
-      nameNonce: randomBase64(12),
-      label,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-      },
-    }),
+    body: bodyStr,
   });
 }
 
@@ -498,29 +498,32 @@ export async function createSpace(
  * Add a member to a space.
  */
 export async function addSpaceMember(
-  adminToken: string,
+  auth: AuthContext,
   spaceId: string,
   memberPublicKey: string,
   label: string,
   role: "owner" | "member" | "reader",
 ): Promise<Response> {
+  const bodyObj = {
+    publicKey: memberPublicKey,
+    label,
+    role,
+    keyGrant: {
+      encryptedSpaceKey: randomBase64(32),
+      keyNonce: randomBase64(12),
+      ephemeralPublicKey: randomBase64(65),
+      generation: 1,
+    },
+  };
+  const bodyStr = JSON.stringify(bodyObj);
+
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${adminToken}`,
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, bodyStr),
     },
-    body: JSON.stringify({
-      publicKey: memberPublicKey,
-      label,
-      role,
-      keyGrant: {
-        encryptedSpaceKey: randomBase64(32),
-        keyNonce: randomBase64(12),
-        ephemeralPublicKey: randomBase64(65),
-        generation: 1,
-      },
-    }),
+    body: bodyStr,
   });
 }
 
@@ -528,7 +531,7 @@ export async function addSpaceMember(
  * Remove a member from a space.
  */
 export async function removeSpaceMember(
-  adminToken: string,
+  auth: AuthContext,
   spaceId: string,
   memberPublicKey: string,
 ): Promise<Response> {
@@ -536,7 +539,9 @@ export async function removeSpaceMember(
     `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberPublicKey)}`,
     {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${adminToken}` },
+      headers: {
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace),
+      },
     },
   );
 }
@@ -545,12 +550,14 @@ export async function removeSpaceMember(
  * Delete a space.
  */
 export async function deleteSpace(
-  adminToken: string,
+  auth: AuthContext,
   spaceId: string,
 ): Promise<Response> {
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${adminToken}` },
+    headers: {
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace),
+    },
   });
 }
 
@@ -584,24 +591,27 @@ export async function insertBroadcastMessage(
  * Store a test vault key on the sync server.
  */
 export async function createVaultKey(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
 ): Promise<void> {
+  const bodyObj = {
+    spaceId,
+    encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
+    encryptedVaultName: Buffer.from("E2E Test Vault").toString("base64"),
+    vaultKeySalt: crypto.randomBytes(16).toString("base64"),
+    ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
+    vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
+    vaultNameNonce: crypto.randomBytes(12).toString("base64"),
+  };
+  const bodyStr = JSON.stringify(bodyObj);
+
   const res = await fetch(`${SYNC_SERVER_URL}/sync/vault-key`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
     },
-    body: JSON.stringify({
-      spaceId,
-      encryptedVaultKey: crypto.randomBytes(32).toString("base64"),
-      encryptedVaultName: Buffer.from("E2E Test Vault").toString("base64"),
-      vaultKeySalt: crypto.randomBytes(16).toString("base64"),
-      ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
-      vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
-      vaultNameNonce: crypto.randomBytes(12).toString("base64"),
-    }),
+    body: bodyStr,
   });
 
   if (!res.ok) {
@@ -614,12 +624,14 @@ export async function createVaultKey(
  * Delete a vault from the sync server.
  */
 export async function deleteVault(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
 ): Promise<void> {
   const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${spaceId}`, {
     method: "DELETE",
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultDelete),
+    },
   });
 
   if (!res.ok && res.status !== 404) {
@@ -652,14 +664,12 @@ export interface SyncChange {
  * Sign and push changes to a space. Uses vault-sdk's signRecordAsync.
  */
 export async function signAndPushSpaceChanges(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
   changes: SyncChange[],
   privateKeyBase64: string,
   publicKey: string,
 ): Promise<{ count: number; serverTimestamp: string }> {
-  const { signRecordAsync } = await import("@haex-space/vault-sdk");
-
   const signedChanges = await Promise.all(
     changes.map(async (change) => {
       const signature = await signRecordAsync(
@@ -676,24 +686,27 @@ export async function signAndPushSpaceChanges(
     }),
   );
 
-  return pushChanges(accessToken, spaceId, signedChanges);
+  return pushChanges(auth, spaceId, signedChanges);
 }
 
 /**
  * Push sync changes to the server.
  */
 export async function pushChanges(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
   changes: SyncChange[],
 ): Promise<{ count: number; serverTimestamp: string }> {
+  const bodyObj = { spaceId, changes };
+  const bodyStr = JSON.stringify(bodyObj);
+
   const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPush, bodyStr),
     },
-    body: JSON.stringify({ spaceId, changes }),
+    body: bodyStr,
   });
 
   if (!res.ok) {
@@ -708,7 +721,7 @@ export async function pushChanges(
  * Pull sync changes from the server.
  */
 export async function pullChanges(
-  accessToken: string,
+  auth: AuthContext,
   spaceId: string,
   options: {
     excludeDeviceId?: string;
@@ -722,7 +735,9 @@ export async function pullChanges(
   if (options.limit) params.set("limit", options.limit.toString());
 
   const res = await fetch(`${SYNC_SERVER_URL}/sync/pull?${params}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPull),
+    },
   });
 
   if (!res.ok) {
