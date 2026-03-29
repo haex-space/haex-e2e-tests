@@ -2,94 +2,96 @@ import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
-  createAdminUser,
-  createVaultKey,
-  pushChanges,
+  createAdminUserWithIdentity,
+  createSpace,
+  addSpaceMember,
+  removeSpaceMember,
+  signAndPushSpaceChanges,
   makeSyncChange,
-  createRealtimeClient,
-  subscribeToBroadcast,
-  subscribeAndWait,
-  waitForMessages,
-  waitForConnection,
-  waitForDisconnect,
-  cleanupClient,
+  toAuthContext,
+  RealtimeTestClient,
+  type AuthContext,
 } from "../helpers";
 
 /**
- * Tests for Realtime reconnection behavior.
+ * Tests for WebSocket reconnection behavior.
  *
- * These tests cover the exact scenarios that were previously undetected:
- * - WebSocket disconnection must be recoverable
- * - CLOSED channel status must allow re-subscription
- * - Subscription after disconnect must succeed
- * - Messages must be receivable after reconnection
+ * With the plain WebSocket model, each connection uses a fresh DID-Auth token.
+ * Reconnection means creating a new WebSocket connection (the server loads
+ * memberships fresh on each connect). These tests ensure:
+ * - Disconnect → reconnect with new token works
+ * - Messages are receivable after reconnection
+ * - Multiple disconnect/reconnect cycles are reliable
  */
 test.describe("sync: realtime reconnection", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-reconnect-${Date.now()}`;
+
+  // Member identity for triggering broadcasts
+  let memberAuth: AuthContext;
+  let memberPublicKey: string;
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    await createVaultKey(accessToken, spaceId);
+    const admin = await createAdminUserWithIdentity();
+    auth = toAuthContext(admin);
+
+    const createRes = await createSpace(auth, spaceId, "Reconnection Test Space");
+    expect(createRes.status).toBe(201);
+
+    // Create a permanent member to push changes (so owner receives broadcasts)
+    const member = await createAdminUserWithIdentity();
+    memberAuth = toAuthContext(member);
+    memberPublicKey = member.publicKey;
+    const inviteRes = await addSpaceMember(auth, spaceId, memberPublicKey, "Recon Member", "member");
+    expect(inviteRes.status).toBe(201);
   });
 
-  test("can re-subscribe after explicit disconnect", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+  test.afterAll(async () => {
+    await removeSpaceMember(auth, spaceId, memberPublicKey).catch(() => {});
+  });
 
-    // First subscription — must succeed
-    const { status: status1, channel: channel1 } = await subscribeAndWait(client, channelName);
-    expect(status1).toBe("SUBSCRIBED");
+  test("can reconnect after explicit disconnect", async () => {
+    // First connection
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    expect(client1.isConnected).toBe(true);
 
-    // Disconnect — simulates network loss or app backgrounding
-    await client.removeChannel(channel1);
-    client.realtime.disconnect();
+    // Disconnect
+    client1.disconnect();
+    expect(client1.isConnected).toBe(false);
 
-    // Wait for the WebSocket to actually close (disconnect is async)
-    await waitForDisconnect(client);
-    expect(client.realtime.connectionState()).toBe("closed");
+    // Wait for server-side cleanup
+    await new Promise((r) => setTimeout(r, 500));
 
-    // Explicitly reconnect the WebSocket before re-subscribing.
-    // The Supabase JS SDK does not auto-reconnect after an explicit disconnect().
-    client.realtime.connect();
+    // Reconnect with fresh DID-Auth token
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
+    expect(client2.isConnected).toBe(true);
 
-    // Wait for the WebSocket to actually connect before subscribing
-    await waitForConnection(client);
-
-    // Re-subscribe on the same client — this is the scenario that previously failed
-    // because the Realtime client's internal state wasn't properly reset
-    const { status: status2, channel: channel2 } = await subscribeAndWait(client, channelName);
-    expect(status2).toBe("SUBSCRIBED");
-
-    await client.removeChannel(channel2);
-    await cleanupClient(client);
+    client2.disconnect();
   });
 
   test("receives messages after reconnection", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+    // Connect, then disconnect
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    client1.disconnect();
 
-    // Subscribe, then disconnect
-    const { channel: channel1 } = await subscribeAndWait(client, channelName);
-    await client.removeChannel(channel1);
-    client.realtime.disconnect();
+    // Wait for cleanup
+    await new Promise((r) => setTimeout(r, 500));
 
-    // Explicitly reconnect before re-subscribing
-    client.realtime.connect();
-    await waitForConnection(client);
+    // Reconnect
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
 
-    // Reconnect and collect messages
-    const collector = await subscribeToBroadcast(client, channelName);
-
-    // Push a change — should arrive via the reconnected subscription
-    await pushChanges(accessToken, spaceId, [
+    // Push a change — should arrive via the reconnected client
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "after-reconnect" }),
@@ -97,100 +99,97 @@ test.describe("sync: realtime reconnection", () => {
         deviceId,
         encryptedValue: btoa("reconnected-value"),
       }),
-    ]);
+    ], memberAuth.privateKeyBase64, memberPublicKey);
 
-    const messages = await waitForMessages(collector, 1, 5000);
+    const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
+    client2.disconnect();
 
-    await client.removeChannel(collector.channel);
-    await cleanupClient(client);
-
-    expect(messages.length).toBeGreaterThanOrEqual(1);
-  });
-
-  test("can re-subscribe after removeAllChannels + disconnect", async () => {
-    // This simulates the cleanup pattern used in haex-vault's cleanupSupabaseClient()
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
-
-    // Subscribe
-    const collector = await subscribeToBroadcast(client, channelName);
-    expect(client.realtime.connectionState()).toBe("open");
-
-    // Full cleanup — matches cleanupSupabaseClient() in haex-vault
-    await client.realtime.removeAllChannels();
-    client.realtime.disconnect();
-    await waitForDisconnect(client);
-    expect(client.realtime.connectionState()).toBe("closed");
-    expect(client.realtime.channels.length).toBe(0);
-
-    // Explicitly reconnect before re-subscribing
-    client.realtime.connect();
-    await waitForConnection(client);
-
-    // Re-subscribe on the same client instance
-    const { status, channel } = await subscribeAndWait(client, channelName);
-    expect(status).toBe("SUBSCRIBED");
-
-    await client.removeChannel(channel);
-    await cleanupClient(client);
+    expect(msg.type).toBe("sync");
+    expect(msg.spaceId).toBe(spaceId);
   });
 
   test("multiple disconnect/reconnect cycles work reliably", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
-
     for (let cycle = 0; cycle < 3; cycle++) {
-      // Subscribe
-      const { status, channel } = await subscribeAndWait(client, channelName);
-      expect(status).toBe("SUBSCRIBED");
+      const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+      await client.connect();
+      expect(client.isConnected).toBe(true);
 
-      // Disconnect
-      await client.removeChannel(channel);
-      client.realtime.disconnect();
-      await waitForDisconnect(client);
-      expect(client.realtime.connectionState()).toBe("closed");
+      // Verify message delivery on each cycle
+      await signAndPushSpaceChanges(memberAuth, spaceId, [
+        makeSyncChange({
+          tableName: "haex_vault_settings",
+          rowPks: JSON.stringify({ id: `cycle-${cycle}` }),
+          columnName: "value",
+          deviceId,
+        }),
+      ], memberAuth.privateKeyBase64, memberPublicKey);
 
-      // Explicitly reconnect for next cycle
-      if (cycle < 2) {
-        client.realtime.connect();
-        await waitForConnection(client);
-      }
+      const msg = await client.waitForSyncBroadcast(spaceId, 5000);
+      expect(msg.type).toBe("sync");
+
+      client.disconnect();
+      expect(client.isConnected).toBe(false);
+
+      // Brief pause between cycles
+      await new Promise((r) => setTimeout(r, 300));
     }
-
-    await cleanupClient(client);
   });
 
   test("new client works after previous client was cleaned up", async () => {
-    // Simulates the haex-vault flow: old client cleaned up, new client created
-    const client1 = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+    // First client
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    expect(client1.isConnected).toBe(true);
+    client1.disconnect();
 
-    const { channel: ch1 } = await subscribeAndWait(client1, channelName);
-    expect(client1.realtime.connectionState()).toBe("open");
+    // Second client — completely independent instance
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
 
-    // Clean up client1 completely
-    await client1.removeChannel(ch1);
-    await cleanupClient(client1);
-
-    // Create a brand new client — should work without interference
-    const client2 = createRealtimeClient(accessToken);
-    const collector = await subscribeToBroadcast(client2, channelName);
-
-    // Push and verify broadcast arrives on new client
-    await pushChanges(accessToken, spaceId, [
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "new-client-test" }),
         columnName: "value",
         deviceId,
       }),
-    ]);
+    ], memberAuth.privateKeyBase64, memberPublicKey);
 
-    const messages = await waitForMessages(collector, 1, 5000);
+    const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
+    client2.disconnect();
 
-    await client2.removeChannel(collector.channel);
-    await cleanupClient(client2);
+    expect(msg.type).toBe("sync");
+  });
 
-    expect(messages.length).toBeGreaterThanOrEqual(1);
+  test("messages pushed during disconnect are not delivered (no queuing)", async () => {
+    // Connect and verify
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    client1.disconnect();
+
+    // Push while disconnected
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
+      makeSyncChange({
+        tableName: "haex_vault_settings",
+        rowPks: JSON.stringify({ id: "during-disconnect" }),
+        columnName: "value",
+        deviceId,
+      }),
+    ], memberAuth.privateKeyBase64, memberPublicKey);
+
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Reconnect — should NOT receive the message from while disconnected
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
+
+    // Wait briefly to see if any stale messages arrive
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const msgs = client2.getSpaceMessages(spaceId);
+    client2.disconnect();
+
+    // No messages should have been queued and delivered
+    expect(msgs.length).toBe(0);
   });
 });

@@ -563,28 +563,6 @@ export async function deleteSpace(
   });
 }
 
-/**
- * Insert a broadcast message directly into realtime.messages via Postgres connection.
- * Used for testing broadcast delivery without needing Push endpoint signatures.
- */
-export async function insertBroadcastMessage(
-  topic: string,
-  event = "INSERT",
-): Promise<void> {
-  const pg = await import("pg");
-  const databaseUrl = process.env.DATABASE_URL || "postgresql://postgres:postgres@sync-db:5432/postgres";
-  const client = new pg.default.Client({ connectionString: databaseUrl });
-  await client.connect();
-  try {
-    await client.query(
-      "INSERT INTO realtime.messages (topic, extension, event, payload, private) VALUES ($1, 'broadcast', $2, $3::jsonb, true)",
-      [topic, event, JSON.stringify({ op: event })],
-    );
-  } finally {
-    await client.end();
-  }
-}
-
 // =============================================================================
 // Vault Key Helpers
 // =============================================================================

@@ -1,209 +1,358 @@
 // tests/helpers/realtime-helpers.ts
 //
-// Shared helpers for Supabase Realtime E2E tests.
-// Provides typed client creation, subscription management, and broadcast utilities.
+// Shared helpers for WebSocket-based Realtime E2E tests.
+// The sync-server uses a plain WebSocket endpoint at /ws with DID-Auth token authentication.
+// There is no subscribe/unsubscribe protocol — the server loads space memberships at connect
+// time and broadcasts to all connected members automatically.
 
-import { createClient, type SupabaseClient, type RealtimeChannel } from "@supabase/supabase-js";
+import WebSocket from "ws";
+import { createDidAuthHeader, getSyncServerUrl } from "./sync-server-helpers";
 
-const SUPABASE_URL =
-  process.env.SUPABASE_URL || process.env.SYNC_SERVER_URL || "http://sync-kong:8000";
-const SUPABASE_ANON_KEY =
-  process.env.SUPABASE_ANON_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
-
-export function getSupabaseUrl(): string {
-  return SUPABASE_URL;
-}
-
-export function getSupabaseAnonKey(): string {
-  return SUPABASE_ANON_KEY;
-}
+const SYNC_SERVER_URL = getSyncServerUrl();
 
 /**
- * Channel status types from Supabase Realtime
- */
-export type ChannelStatus = "SUBSCRIBED" | "CHANNEL_ERROR" | "TIMED_OUT" | "CLOSED";
-
-/**
- * Collected broadcast messages for assertions.
- */
-export interface BroadcastCollector {
-  messages: unknown[];
-  channel: RealtimeChannel;
-}
-
-/**
- * Creates an authenticated Supabase client for Realtime testing.
- * Uses persistSession: false to match the haex-vault client configuration.
- */
-export function createRealtimeClient(accessToken: string): SupabaseClient {
-  const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: {
-      persistSession: false,
-      detectSessionInUrl: false,
-    },
-    realtime: {
-      timeout: 15000,
-      heartbeatIntervalMs: 5000,
-    },
-  });
-  client.realtime.setAuth(accessToken);
-  return client;
-}
-
-/**
- * Subscribes to a broadcast channel and waits for the subscription to settle.
- * Returns the final status — does NOT accept CHANNEL_ERROR as success.
+ * A message received from the sync-server WebSocket.
  *
- * @param timeoutMs - How long to wait for SUBSCRIBED before failing (default 10s)
+ * Known event types:
+ * - `{ type: 'sync', spaceId }` — new changes were pushed to a space
+ * - `{ type: 'membership', spaceId }` — space membership changed
+ * - `{ type: 'mls', spaceId }` — MLS message available
  */
-export async function subscribeAndWait(
-  client: SupabaseClient,
-  channelName: string,
-  onBroadcast?: (event: string, payload: unknown) => void,
-  timeoutMs = 10000,
-  isPrivate = true,
-): Promise<{ status: ChannelStatus; channel: RealtimeChannel }> {
-  const channel = client
-    .channel(channelName, { config: { private: isPrivate } })
-    .on("broadcast", { event: "INSERT" }, (payload) => {
-      onBroadcast?.("INSERT", payload);
-    })
-    .on("broadcast", { event: "UPDATE" }, (payload) => {
-      onBroadcast?.("UPDATE", payload);
-    });
-
-  const status = await new Promise<ChannelStatus>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      resolve("TIMED_OUT");
-    }, timeoutMs);
-
-    channel.subscribe((status) => {
-      if (status === "SUBSCRIBED" || status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        clearTimeout(timer);
-        resolve(status as ChannelStatus);
-      }
-    });
-  });
-
-  return { status, channel };
+export interface WsMessage {
+  type: string;
+  spaceId?: string;
+  [key: string]: unknown;
 }
 
 /**
- * Subscribes to a broadcast channel and collects all received messages.
- * Strict: throws if subscription does not reach SUBSCRIBED status.
+ * WebSocket test client that connects to the sync-server's /ws endpoint
+ * using DID-Auth for authentication.
+ *
+ * The server loads space memberships when the connection opens and broadcasts
+ * events to all connected members. There is no subscribe/unsubscribe protocol.
  */
-export async function subscribeToBroadcast(
-  client: SupabaseClient,
-  channelName: string,
-  timeoutMs = 10000,
-): Promise<BroadcastCollector> {
-  const messages: unknown[] = [];
+export class RealtimeTestClient {
+  private ws: WebSocket | null = null;
+  private messages: WsMessage[] = [];
+  private messageListeners: Array<(msg: WsMessage) => void> = [];
+  private closeCode: number | null = null;
+  private closeReason: string | null = null;
 
-  const { status, channel } = await subscribeAndWait(
-    client,
-    channelName,
-    (_event, payload) => {
-      messages.push(payload);
-    },
-    timeoutMs,
-  );
+  constructor(
+    private privateKeyBase64: string,
+    private did: string,
+    private serverUrl: string = SYNC_SERVER_URL,
+  ) {}
 
-  if (status !== "SUBSCRIBED") {
-    // Clean up before throwing
-    await client.removeChannel(channel).catch(() => {});
-    throw new Error(
-      `Realtime subscription failed with status "${status}" on channel "${channelName}". ` +
-      `Connection state: ${client.realtime.connectionState()}`,
+  /**
+   * Connect to the WebSocket endpoint with DID-Auth.
+   * Resolves when the connection is open, rejects on error or auth failure (code 4001).
+   */
+  async connect(): Promise<void> {
+    const authHeader = await createDidAuthHeader(
+      this.privateKeyBase64,
+      this.did,
+      "ws-connect",
+    );
+    // Strip "DID " prefix — the WS token is just payload.signature
+    const token = authHeader.slice(4);
+    const wsUrl =
+      this.serverUrl.replace(/^http/, "ws") +
+      `/ws?token=${encodeURIComponent(token)}`;
+
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on("open", () => resolve());
+
+      this.ws.on("error", (err) => reject(err));
+
+      this.ws.on("close", (code, reason) => {
+        this.closeCode = code;
+        this.closeReason = reason.toString();
+      });
+
+      this.ws.on("message", (data) => {
+        try {
+          const msg = JSON.parse(data.toString()) as WsMessage;
+          this.messages.push(msg);
+          for (const fn of this.messageListeners) {
+            fn(msg);
+          }
+        } catch {
+          // Ignore non-JSON messages
+        }
+      });
+    });
+  }
+
+  /**
+   * Connect and expect auth failure (close code 4001).
+   * Returns true if auth was rejected, false if connection succeeded.
+   */
+  async connectExpectingFailure(timeoutMs = 5000): Promise<boolean> {
+    const authHeader = await createDidAuthHeader(
+      this.privateKeyBase64,
+      this.did,
+      "ws-connect",
+    );
+    const token = authHeader.slice(4);
+    const wsUrl =
+      this.serverUrl.replace(/^http/, "ws") +
+      `/ws?token=${encodeURIComponent(token)}`;
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.ws?.close();
+        resolve(false);
+      }, timeoutMs);
+
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on("open", () => {
+        // Connection opened — wait briefly to see if the server closes it
+        // The server calls ws.close(4001) in onOpen when auth fails
+        setTimeout(() => {
+          if (this.closeCode === 4001) {
+            clearTimeout(timer);
+            resolve(true);
+          } else {
+            clearTimeout(timer);
+            resolve(false);
+          }
+        }, 1000);
+      });
+
+      this.ws.on("close", (code) => {
+        this.closeCode = code;
+        clearTimeout(timer);
+        resolve(code === 4001);
+      });
+
+      this.ws.on("error", () => {
+        clearTimeout(timer);
+        resolve(true); // Connection error counts as rejection
+      });
+    });
+  }
+
+  /**
+   * Connect with a raw token string (for testing invalid tokens).
+   * Returns true if connection was rejected, false if it stayed open.
+   */
+  async connectWithRawToken(
+    token: string,
+    timeoutMs = 5000,
+  ): Promise<{ rejected: boolean; closeCode: number | null }> {
+    const wsUrl =
+      this.serverUrl.replace(/^http/, "ws") +
+      `/ws?token=${encodeURIComponent(token)}`;
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.ws?.close();
+        resolve({ rejected: false, closeCode: this.closeCode });
+      }, timeoutMs);
+
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on("open", () => {
+        // Wait to see if server closes it
+        setTimeout(() => {
+          if (this.closeCode != null) {
+            clearTimeout(timer);
+            resolve({ rejected: true, closeCode: this.closeCode });
+          } else {
+            clearTimeout(timer);
+            resolve({ rejected: false, closeCode: null });
+          }
+        }, 1000);
+      });
+
+      this.ws.on("close", (code) => {
+        this.closeCode = code;
+        clearTimeout(timer);
+        resolve({ rejected: true, closeCode: code });
+      });
+
+      this.ws.on("error", () => {
+        clearTimeout(timer);
+        resolve({ rejected: true, closeCode: this.closeCode });
+      });
+    });
+  }
+
+  /**
+   * Connect without any token (for testing unauthenticated access).
+   */
+  async connectWithoutToken(
+    timeoutMs = 5000,
+  ): Promise<{ rejected: boolean; closeCode: number | null }> {
+    const wsUrl = this.serverUrl.replace(/^http/, "ws") + `/ws`;
+
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.ws?.close();
+        resolve({ rejected: false, closeCode: this.closeCode });
+      }, timeoutMs);
+
+      this.ws = new WebSocket(wsUrl);
+
+      this.ws.on("open", () => {
+        setTimeout(() => {
+          if (this.closeCode != null) {
+            clearTimeout(timer);
+            resolve({ rejected: true, closeCode: this.closeCode });
+          } else {
+            clearTimeout(timer);
+            resolve({ rejected: false, closeCode: null });
+          }
+        }, 1000);
+      });
+
+      this.ws.on("close", (code) => {
+        this.closeCode = code;
+        clearTimeout(timer);
+        resolve({ rejected: true, closeCode: code });
+      });
+
+      this.ws.on("error", () => {
+        clearTimeout(timer);
+        resolve({ rejected: true, closeCode: this.closeCode });
+      });
+    });
+  }
+
+  /**
+   * Wait for a message matching the predicate.
+   * Checks already received messages first.
+   */
+  async waitForMessage(
+    predicate: (msg: WsMessage) => boolean,
+    timeoutMs = 5000,
+  ): Promise<WsMessage> {
+    const existing = this.messages.find(predicate);
+    if (existing) return existing;
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(
+          new Error(`Timeout waiting for message (${timeoutMs}ms)`),
+        );
+      }, timeoutMs);
+
+      const listener = (msg: WsMessage) => {
+        if (predicate(msg)) {
+          cleanup();
+          resolve(msg);
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        const idx = this.messageListeners.indexOf(listener);
+        if (idx >= 0) this.messageListeners.splice(idx, 1);
+      };
+
+      this.messageListeners.push(listener);
+    });
+  }
+
+  /**
+   * Wait for a sync broadcast for a specific space.
+   */
+  async waitForSyncBroadcast(
+    spaceId: string,
+    timeoutMs = 5000,
+  ): Promise<WsMessage> {
+    return this.waitForMessage(
+      (msg) => msg.type === "sync" && msg.spaceId === spaceId,
+      timeoutMs,
     );
   }
 
-  return { messages, channel };
-}
-
-/**
- * Waits until at least `count` messages have been collected, or times out.
- */
-export async function waitForMessages(
-  collector: BroadcastCollector,
-  count: number,
-  timeoutMs = 5000,
-): Promise<unknown[]> {
-  const start = Date.now();
-  while (collector.messages.length < count && Date.now() - start < timeoutMs) {
-    await new Promise((r) => setTimeout(r, 100));
+  /**
+   * Wait for any broadcast for a specific space (sync or membership).
+   */
+  async waitForSpaceBroadcast(
+    spaceId: string,
+    timeoutMs = 5000,
+  ): Promise<WsMessage> {
+    return this.waitForMessage(
+      (msg) => msg.spaceId === spaceId,
+      timeoutMs,
+    );
   }
-  return collector.messages;
-}
 
-/**
- * Cleanly disposes a Supabase client's Realtime resources.
- */
-export async function cleanupClient(client: SupabaseClient): Promise<void> {
-  try {
-    await client.realtime.removeAllChannels();
-    client.realtime.disconnect();
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-/**
- * Waits for the Realtime WebSocket to reach a closed/disconnected state.
- * Use after client.realtime.disconnect() since disconnect is asynchronous.
- */
-export async function waitForDisconnect(
-  client: SupabaseClient,
-  timeoutMs = 5000,
-): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const state = client.realtime.connectionState();
-    if (state === "closed") {
-      return true;
+  /**
+   * Wait until at least `count` messages matching the predicate have been collected,
+   * or times out.
+   */
+  async waitForMessageCount(
+    predicate: (msg: WsMessage) => boolean,
+    count: number,
+    timeoutMs = 5000,
+  ): Promise<WsMessage[]> {
+    const start = Date.now();
+    while (
+      this.messages.filter(predicate).length < count &&
+      Date.now() - start < timeoutMs
+    ) {
+      await new Promise((r) => setTimeout(r, 100));
     }
-    await new Promise((r) => setTimeout(r, 100));
+    return this.messages.filter(predicate);
   }
-  return false;
-}
 
-/**
- * Waits for the Realtime WebSocket to reach a connected state.
- * Use after client.realtime.connect() to ensure the socket is ready before subscribing.
- */
-export async function waitForConnection(
-  client: SupabaseClient,
-  timeoutMs = 5000,
-): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const state = client.realtime.connectionState();
-    if (state === "open") {
-      return true;
-    }
-    await new Promise((r) => setTimeout(r, 100));
+  /**
+   * Get all collected messages.
+   */
+  getMessages(): WsMessage[] {
+    return [...this.messages];
   }
-  return false;
-}
 
-/**
- * Waits for a channel status change (e.g., waiting for CLOSED after disconnect).
- */
-export function waitForChannelStatus(
-  channel: RealtimeChannel,
-  targetStatus: string,
-  timeoutMs = 5000,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), timeoutMs);
+  /**
+   * Get messages for a specific space.
+   */
+  getSpaceMessages(spaceId: string): WsMessage[] {
+    return this.messages.filter((m) => m.spaceId === spaceId);
+  }
 
-    // Poll channel state since there's no event listener for post-subscribe status changes
-    const interval = setInterval(() => {
-      if (channel.state === targetStatus) {
-        clearTimeout(timer);
-        clearInterval(interval);
-        resolve(true);
-      }
-    }, 100);
-  });
+  /**
+   * Clear collected messages.
+   */
+  clearMessages(): void {
+    this.messages = [];
+  }
+
+  /**
+   * Disconnect the WebSocket.
+   */
+  disconnect(): void {
+    this.ws?.close();
+    this.ws = null;
+    this.messages = [];
+    this.messageListeners = [];
+  }
+
+  /**
+   * Whether the WebSocket is currently open.
+   */
+  get isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * The close code from the server (e.g. 4001 for auth failure).
+   */
+  get lastCloseCode(): number | null {
+    return this.closeCode;
+  }
+
+  /**
+   * The close reason from the server.
+   */
+  get lastCloseReason(): string | null {
+    return this.closeReason;
+  }
 }

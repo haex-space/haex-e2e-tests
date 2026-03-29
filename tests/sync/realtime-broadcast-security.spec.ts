@@ -2,72 +2,28 @@
  * Realtime Broadcast Security Tests
  *
  * Adversarial tests that simulate attack scenarios against the
- * private broadcast channel authorization system. These tests ensure
- * that bad actors cannot gain unauthorized access to sync broadcasts.
+ * WebSocket-based realtime system. These tests ensure that bad actors
+ * cannot gain unauthorized access to sync broadcasts.
+ *
+ * The sync-server uses DID-Auth for WebSocket authentication and
+ * server-side membership checks for broadcast authorization.
  */
 
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
-  createAdminUser,
   createAdminUserWithIdentity,
-  createVaultKey,
+  createTestIdentity,
   createSpace,
   addSpaceMember,
   removeSpaceMember,
-  pushChanges,
+  signAndPushSpaceChanges,
   makeSyncChange,
-  insertBroadcastMessage,
-  createRealtimeClient,
-  subscribeToBroadcast,
-  subscribeAndWait,
-  waitForMessages,
-  cleanupClient,
-  getSyncServerUrl,
-  getSupabaseAnonKey,
+  toAuthContext,
+  RealtimeTestClient,
+  type AuthContext,
 } from "../helpers";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-
-const SUPABASE_URL = getSyncServerUrl();
-const ANON_KEY = getSupabaseAnonKey();
-const SERVICE_ROLE_KEY =
-  process.env.SUPABASE_SERVICE_KEY ||
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU";
-
-/** Helper: create a raw Supabase client with a specific token */
-function createRawClient(token?: string): SupabaseClient {
-  const client = createClient(SUPABASE_URL, ANON_KEY, {
-    auth: { persistSession: false, detectSessionInUrl: false },
-    realtime: { timeout: 10000 },
-  });
-  if (token) client.realtime.setAuth(token);
-  return client;
-}
-
-/** Helper: attempt to subscribe and return the status */
-async function trySubscribe(
-  client: SupabaseClient,
-  channelName: string,
-  timeoutMs = 10000,
-): Promise<string> {
-  const channel = client
-    .channel(channelName, { config: { private: true } })
-    .on("broadcast", { event: "INSERT" }, () => {});
-
-  const status = await new Promise<string>((resolve) => {
-    const timer = setTimeout(() => resolve("TIMED_OUT"), timeoutMs);
-    channel.subscribe((s) => {
-      if (s === "SUBSCRIBED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT") {
-        clearTimeout(timer);
-        resolve(s);
-      }
-    });
-  });
-
-  await client.removeChannel(channel).catch(() => {});
-  return status;
-}
 
 // =============================================================================
 // Token Manipulation Attacks
@@ -76,183 +32,117 @@ async function trySubscribe(
 test.describe("security: token manipulation attacks", () => {
   test.describe.configure({ mode: "serial" });
 
-  let validToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    const admin = await createAdminUser();
-    validToken = admin.accessToken;
-    await createVaultKey(validToken, spaceId);
+    const admin = await createAdminUserWithIdentity();
+    auth = toAuthContext(admin);
+
+    const createRes = await createSpace(auth, spaceId, "Security Test Space");
+    expect(createRes.status).toBe(201);
   });
 
-  test("expired JWT token is rejected", async () => {
-    // Craft a JWT that expired in the past
-    // Header: {"alg":"HS256","typ":"JWT"}
-    const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
-      .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const payload = btoa(JSON.stringify({
-      iss: "supabase-demo",
-      role: "authenticated",
-      aud: "authenticated",
-      exp: Math.floor(Date.now() / 1000) - 3600, // Expired 1 hour ago
-      sub: crypto.randomUUID(),
-    })).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    const fakeSignature = "invalid-signature";
-    const expiredToken = `${header}.${payload}.${fakeSignature}`;
+  test("completely fabricated token is rejected", async () => {
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const result = await client.connectWithRawToken("totally-fake-token");
 
-    const client = createRawClient(expiredToken);
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+    client.disconnect();
 
-    expect(status).not.toBe("SUBSCRIBED");
+    expect(result.rejected).toBe(true);
+    expect(result.closeCode).toBe(4001);
   });
 
-  test("tampered JWT payload is rejected", async () => {
-    // Take a valid token and modify the payload (change sub to a different user)
-    const parts = validToken.split(".");
-    const originalPayload = JSON.parse(atob(parts[1]!));
-    const tamperedPayload = { ...originalPayload, sub: crypto.randomUUID() };
-    const tamperedB64 = btoa(JSON.stringify(tamperedPayload))
-      .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-    // Keep original header and signature — signature won't match tampered payload
-    const tamperedToken = `${parts[0]}.${tamperedB64}.${parts[2]}`;
+  test("token with valid format but wrong signature is rejected", async () => {
+    // Create a payload that looks right but sign it with a different key
+    const otherIdentity = await createTestIdentity();
+    const fakePayload = Buffer.from(JSON.stringify({
+      did: auth.did, // Claim to be the real user
+      action: "ws-connect",
+      timestamp: Date.now(),
+      bodyHash: Buffer.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
+      ).toString("base64url"),
+    })).toString("base64url");
+    // Sign with wrong key
+    const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
+    const wrongKey = await importUserPrivateKeyAsync(otherIdentity.privateKeyBase64);
+    const signature = new Uint8Array(
+      await crypto.subtle.sign("Ed25519", wrongKey, new TextEncoder().encode(fakePayload)),
+    );
+    const fakeToken = `${fakePayload}.${Buffer.from(signature).toString("base64url")}`;
 
-    const client = createRawClient(tamperedToken);
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const result = await client.connectWithRawToken(fakeToken);
 
-    expect(status).not.toBe("SUBSCRIBED");
+    client.disconnect();
+
+    expect(result.rejected).toBe(true);
+    expect(result.closeCode).toBe(4001);
   });
 
-  test("completely fabricated JWT is rejected", async () => {
-    const fakeToken = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJoYWNrZXIiLCJyb2xlIjoiYXV0aGVudGljYXRlZCJ9.fake-signature";
+  test("token with wrong action field is rejected", async () => {
+    // Create a properly signed token but with action != 'ws-connect'
+    const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
+    const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
+    const bodyHash = Buffer.from(
+      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
+    ).toString("base64url");
 
-    const client = createRawClient(fakeToken);
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+    const payload = JSON.stringify({
+      did: auth.did,
+      action: "wrong-action",
+      timestamp: Date.now(),
+      bodyHash,
+    });
+    const payloadEncoded = Buffer.from(payload).toString("base64url");
+    const signature = new Uint8Array(
+      await crypto.subtle.sign("Ed25519", privateKey, new TextEncoder().encode(payloadEncoded)),
+    );
+    const token = `${payloadEncoded}.${Buffer.from(signature).toString("base64url")}`;
 
-    expect(status).not.toBe("SUBSCRIBED");
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const result = await client.connectWithRawToken(token);
+
+    client.disconnect();
+
+    expect(result.rejected).toBe(true);
+    expect(result.closeCode).toBe(4001);
   });
 
-  test("service_role key does not grant broadcast access to user vaults", async () => {
-    // Service role should NOT be able to subscribe to a user's private channel
-    const client = createRawClient(SERVICE_ROLE_KEY);
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+  test("empty string as token is rejected", async () => {
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const result = await client.connectWithRawToken("");
 
-    expect(status).not.toBe("SUBSCRIBED");
+    client.disconnect();
+
+    expect(result.rejected).toBe(true);
+    expect(result.closeCode).toBe(4001);
   });
 
-  test("anon key without auth token is rejected", async () => {
-    const client = createRawClient(); // No token set
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+  test("no token at all is rejected", async () => {
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const result = await client.connectWithoutToken();
 
-    expect(status).not.toBe("SUBSCRIBED");
+    client.disconnect();
+
+    expect(result.rejected).toBe(true);
+    expect(result.closeCode).toBe(4001);
   });
 
-  test("empty string as auth token is rejected", async () => {
-    const client = createRawClient("");
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
+  test("unregistered DID with valid signature is rejected", async () => {
+    // Create a valid Ed25519 keypair but do NOT register the identity
+    const unregistered = await createTestIdentity();
 
-    expect(status).not.toBe("SUBSCRIBED");
-  });
-});
+    const client = new RealtimeTestClient(unregistered.privateKeyBase64, unregistered.did);
+    const rejected = await client.connectExpectingFailure();
 
-// =============================================================================
-// Channel Name Injection Attacks
-// =============================================================================
+    client.disconnect();
 
-test.describe("security: channel name injection attacks", () => {
-  test.describe.configure({ mode: "serial" });
-
-  let validToken: string;
-  const spaceId = crypto.randomUUID();
-
-  test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUser();
-    validToken = admin.accessToken;
-    await createVaultKey(validToken, spaceId);
-  });
-
-  test("SQL injection in channel name does not cause errors", async () => {
-    const client = createRawClient(validToken);
-    const maliciousNames = [
-      "sync:'; DROP TABLE vault_keys; --",
-      "sync:\" OR 1=1 --",
-      "sync:${spaceId}' UNION SELECT * FROM vault_keys --",
-      "sync:'); DELETE FROM realtime.messages; --",
-    ];
-
-    for (const name of maliciousNames) {
-      const status = await trySubscribe(client, name, 5000);
-      // Should either reject or timeout — never grant access
-      expect(status).not.toBe("SUBSCRIBED");
-    }
-
-    client.realtime.disconnect();
-  });
-
-  test("wildcard channel names do not grant broad access", async () => {
-    const client = createRawClient(validToken);
-    const wildcardNames = [
-      "sync:*",
-      "sync:%",
-      "sync:_",
-      "*",
-      "sync:.*",
-      "sync:[a-z]*",
-    ];
-
-    for (const name of wildcardNames) {
-      const status = await trySubscribe(client, name, 5000);
-      expect(status).not.toBe("SUBSCRIBED");
-    }
-
-    client.realtime.disconnect();
-  });
-
-  test("empty vault_id in channel name is rejected", async () => {
-    const client = createRawClient(validToken);
-    const emptyNames = [
-      "sync:",
-      "sync",
-      "",
-      ":",
-    ];
-
-    for (const name of emptyNames) {
-      const status = await trySubscribe(client, name, 5000);
-      expect(status).not.toBe("SUBSCRIBED");
-    }
-
-    client.realtime.disconnect();
-  });
-
-  test("internal realtime channels are not accessible", async () => {
-    const client = createRawClient(validToken);
-    const internalNames = [
-      "realtime:system",
-      "realtime:postgres_changes",
-      "phoenix",
-      "presence",
-      "realtime:broadcast",
-    ];
-
-    for (const name of internalNames) {
-      const status = await trySubscribe(client, name, 5000);
-      // Internal channels should never be subscribable by regular users
-      expect(status).not.toBe("SUBSCRIBED");
-    }
-
-    client.realtime.disconnect();
+    expect(rejected).toBe(true);
   });
 });
 
@@ -263,7 +153,8 @@ test.describe("security: channel name injection attacks", () => {
 test.describe("security: race conditions and session lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
-  let ownerToken: string;
+  let ownerAuth: AuthContext;
+  let ownerPublicKey: string;
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
@@ -271,78 +162,133 @@ test.describe("security: race conditions and session lifecycle", () => {
     expect(healthy).toBe(true);
 
     const owner = await createAdminUserWithIdentity();
-    ownerToken = owner.accessToken;
+    ownerAuth = toAuthContext(owner);
+    ownerPublicKey = owner.publicKey;
 
-    const createRes = await createSpace(ownerToken, spaceId, "Race Condition Test Space");
+    const createRes = await createSpace(ownerAuth, spaceId, "Race Condition Test Space");
     expect(createRes.status).toBe(201);
   });
 
-  test("removed member cannot re-subscribe after disconnecting", async () => {
-    // Add a member, verify they can subscribe, remove them,
-    // then verify they cannot subscribe again on a new connection.
-    // Note: Supabase Realtime checks authorization at subscribe time,
-    // so existing connections may still receive messages until they disconnect.
-    // The critical security property is that removed members cannot
-    // establish NEW connections.
+  test("removed member stops receiving broadcasts on active connection", async () => {
+    // Add a member, connect, verify broadcasts, remove, verify no more broadcasts
     const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
     const inviteRes = await addSpaceMember(
-      ownerToken, spaceId, member.publicKey, "Soon Removed", "member",
+      ownerAuth, spaceId, member.publicKey, "Soon Removed", "member",
     );
     expect(inviteRes.status).toBe(201);
 
-    // Verify member can subscribe before removal
-    const client1 = createRealtimeClient(member.accessToken);
-    const { status: before } = await subscribeAndWait(client1, `sync:${spaceId}`);
-    await cleanupClient(client1);
-    expect(before).toBe("SUBSCRIBED");
+    // Member connects
+    const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
+    await client.connect();
+
+    // Verify member receives broadcasts before removal
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
+      makeSyncChange({
+        tableName: "test",
+        rowPks: JSON.stringify({ id: "before-remove" }),
+        columnName: "value",
+        deviceId: `e2e-race-${Date.now()}`,
+      }),
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
+
+    const beforeMsg = await client.waitForSyncBroadcast(spaceId, 5000);
+    expect(beforeMsg.type).toBe("sync");
 
     // Remove the member
-    const removeRes = await removeSpaceMember(ownerToken, spaceId, member.publicKey);
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
     expect(removeRes.status).toBe(200);
 
-    // Removed member tries to subscribe again — must be rejected
-    const client2 = createRealtimeClient(member.accessToken);
-    const { status: after } = await subscribeAndWait(client2, `sync:${spaceId}`);
-    await cleanupClient(client2);
+    // Clear and push again — removed member should NOT receive sync broadcasts
+    client.clearMessages();
 
-    expect(after).not.toBe("SUBSCRIBED");
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
+      makeSyncChange({
+        tableName: "test",
+        rowPks: JSON.stringify({ id: "after-remove" }),
+        columnName: "value",
+        deviceId: `e2e-race-after-${Date.now()}`,
+      }),
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
+
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const syncMsgs = client.getMessages().filter((m) => m.type === "sync");
+    client.disconnect();
+
+    expect(syncMsgs.length).toBe(0);
   });
 
-  test("multiple simultaneous unauthorized subscribe attempts all fail", async () => {
-    const outsider = await createAdminUser();
+  test("removed member cannot reconnect and receive broadcasts", async () => {
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+    const inviteRes = await addSpaceMember(
+      ownerAuth, spaceId, member.publicKey, "Removed Then Reconnect", "member",
+    );
+    expect(inviteRes.status).toBe(201);
 
-    // Fire 5 concurrent subscription attempts
-    const attempts = Array.from({ length: 5 }, async () => {
-      const client = createRawClient(outsider.accessToken);
-      const status = await trySubscribe(client, `sync:${spaceId}`, 5000);
-      client.realtime.disconnect();
-      return status;
-    });
+    // Verify initial connection works
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
+    await client1.connect();
+    expect(client1.isConnected).toBe(true);
+    client1.disconnect();
 
-    const results = await Promise.all(attempts);
+    // Remove the member
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
+    expect(removeRes.status).toBe(200);
 
-    // Every single attempt must be rejected
-    for (const status of results) {
-      expect(status).not.toBe("SUBSCRIBED");
+    // Reconnect — the connection itself may succeed (user is still registered),
+    // but broadcasts for this space should not arrive
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
+    await client2.connect();
+
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
+      makeSyncChange({
+        tableName: "test",
+        rowPks: JSON.stringify({ id: "after-remove-reconnect" }),
+        columnName: "value",
+        deviceId: `e2e-reconnect-${Date.now()}`,
+      }),
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
+
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const msgs = client2.getSpaceMessages(spaceId);
+    client2.disconnect();
+
+    expect(msgs.length).toBe(0);
+  });
+
+  test("multiple simultaneous connections from outsider receive no broadcasts", async () => {
+    const outsider = await createAdminUserWithIdentity();
+    const outsiderAuth = toAuthContext(outsider);
+
+    // Open 3 concurrent connections
+    const clients = await Promise.all(
+      Array.from({ length: 3 }, async () => {
+        const client = new RealtimeTestClient(outsiderAuth.privateKeyBase64, outsiderAuth.did);
+        await client.connect();
+        return client;
+      }),
+    );
+
+    // Owner pushes — none of the outsider connections should receive
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
+      makeSyncChange({
+        tableName: "test",
+        rowPks: JSON.stringify({ id: "multi-outsider" }),
+        columnName: "value",
+        deviceId: `e2e-multi-${Date.now()}`,
+      }),
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
+
+    await new Promise((r) => setTimeout(r, 2000));
+
+    for (const client of clients) {
+      const msgs = client.getSpaceMessages(spaceId);
+      client.disconnect();
+      expect(msgs.length).toBe(0);
     }
-  });
-
-  test("re-subscribing after token should have expired is rejected", async () => {
-    // This tests that the server validates tokens on each subscribe, not just on first connect
-    const tempUser = await createAdminUser();
-
-    // First subscription works
-    const client1 = createRealtimeClient(tempUser.accessToken);
-    // Subscribe to a channel the user has NO access to (not their vault)
-    const { status } = await subscribeAndWait(client1, `sync:${spaceId}`);
-    await cleanupClient(client1);
-    expect(status).not.toBe("SUBSCRIBED");
-
-    // Same token, different client — still rejected
-    const client2 = createRealtimeClient(tempUser.accessToken);
-    const { status: status2 } = await subscribeAndWait(client2, `sync:${spaceId}`);
-    await cleanupClient(client2);
-    expect(status2).not.toBe("SUBSCRIBED");
   });
 });
 
@@ -353,10 +299,10 @@ test.describe("security: race conditions and session lifecycle", () => {
 test.describe("security: privilege escalation", () => {
   test.describe.configure({ mode: "serial" });
 
-  let ownerToken: string;
-  let outsiderToken: string;
+  let ownerAuth: AuthContext;
+  let ownerPublicKey: string;
+  let outsiderAuth: AuthContext;
   const spaceId = crypto.randomUUID();
-  const personalSpaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -364,85 +310,43 @@ test.describe("security: privilege escalation", () => {
 
     const [owner, outsider] = await Promise.all([
       createAdminUserWithIdentity(),
-      createAdminUser(),
+      createAdminUserWithIdentity(),
     ]);
 
-    ownerToken = owner.accessToken;
-    outsiderToken = outsider.accessToken;
+    ownerAuth = toAuthContext(owner);
+    ownerPublicKey = owner.publicKey;
+    outsiderAuth = toAuthContext(outsider);
 
-    await createVaultKey(ownerToken, personalSpaceId);
-    const createRes = await createSpace(ownerToken, spaceId, "Privesc Test Space");
+    const createRes = await createSpace(ownerAuth, spaceId, "Privesc Test Space");
     expect(createRes.status).toBe(201);
   });
 
-  test("outsider subscribing as public channel receives no private broadcasts", async () => {
-    // Attacker tries to bypass private:true by subscribing without private config
-    const client = createRawClient(outsiderToken);
-    const messages: unknown[] = [];
-    const channel = client
-      .channel(`sync:${personalSpaceId}`) // No private:true — trying to bypass
-      .on("broadcast", { event: "INSERT" }, (p) => messages.push(p))
-      .on("broadcast", { event: "UPDATE" }, (p) => messages.push(p));
+  test("outsider with own space does not receive broadcasts from other spaces", async () => {
+    // Outsider creates their own space
+    const outsiderSpaceId = crypto.randomUUID();
+    const createRes = await createSpace(outsiderAuth, outsiderSpaceId, "Outsider Space");
+    expect(createRes.status).toBe(201);
 
-    await new Promise<void>((resolve) => {
-      channel.subscribe((s) => {
-        // Even if it "subscribes" to a public channel, it shouldn't get private messages
-        if (s === "SUBSCRIBED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT") resolve();
-      });
-    });
+    // Outsider connects — valid user with their own space
+    const client = new RealtimeTestClient(outsiderAuth.privateKeyBase64, outsiderAuth.did);
+    await client.connect();
 
-    // Owner pushes changes (these generate private:true messages in DB)
-    await pushChanges(ownerToken, personalSpaceId, [
+    // Owner pushes to their space — outsider should NOT receive
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
       makeSyncChange({
         tableName: "test",
-        rowPks: JSON.stringify({ id: "privesc-public-bypass" }),
+        rowPks: JSON.stringify({ id: "privesc-test" }),
         columnName: "val",
         deviceId: `e2e-privesc-${Date.now()}`,
       }),
-    ]);
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
 
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 2000));
 
-    await client.removeChannel(channel);
-    client.realtime.disconnect();
+    const msgs = client.getSpaceMessages(spaceId);
+    client.disconnect();
 
-    expect(messages.length).toBe(0);
-  });
-
-  test("outsider subscribing to space as public channel receives no broadcasts", async () => {
-    const client = createRawClient(outsiderToken);
-    const messages: unknown[] = [];
-    const channel = client
-      .channel(`sync:${spaceId}`) // No private:true
-      .on("broadcast", { event: "INSERT" }, (p) => messages.push(p));
-
-    await new Promise<void>((resolve) => {
-      channel.subscribe((s) => {
-        if (s === "SUBSCRIBED" || s === "CHANNEL_ERROR" || s === "TIMED_OUT") resolve();
-      });
-    });
-
-    // Insert broadcast directly (space pushes require ECDSA signatures)
-    await insertBroadcastMessage(`sync:${spaceId}`);
-
-    await new Promise((r) => setTimeout(r, 3000));
-
-    await client.removeChannel(channel);
-    client.realtime.disconnect();
-
-    expect(messages.length).toBe(0);
-  });
-
-  test("using another user's vault_id as space channel does not grant access", async () => {
-    // Outsider has their own vault — try to use its vault_id to subscribe to owner's space
-    const outsiderSpaceId = crypto.randomUUID();
-    await createVaultKey(outsiderToken, outsiderSpaceId);
-
-    const client = createRawClient(outsiderToken);
-    const status = await trySubscribe(client, `sync:${spaceId}`);
-    client.realtime.disconnect();
-
-    expect(status).not.toBe("SUBSCRIBED");
+    expect(msgs.length).toBe(0);
   });
 });
 
@@ -453,50 +357,54 @@ test.describe("security: privilege escalation", () => {
 test.describe("security: enumeration resistance", () => {
   test.describe.configure({ mode: "serial" });
 
-  let validToken: string;
+  let ownerAuth: AuthContext;
+  let ownerPublicKey: string;
   const realSpaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    const admin = await createAdminUser();
-    validToken = admin.accessToken;
-    await createVaultKey(validToken, realSpaceId);
+    const owner = await createAdminUserWithIdentity();
+    ownerAuth = toAuthContext(owner);
+    ownerPublicKey = owner.publicKey;
+
+    const createRes = await createSpace(ownerAuth, realSpaceId, "Enum Test Space");
+    expect(createRes.status).toBe(201);
   });
 
-  test("non-existent vault_id and unauthorized vault_id produce same result", async () => {
-    // An attacker should not be able to distinguish "vault exists but I'm unauthorized"
-    // from "vault does not exist" — both should give the same response
-    const outsider = await createAdminUser();
+  test("outsider cannot determine if a space exists by connecting", async () => {
+    // The WS endpoint does not have subscribe/unsubscribe — the connection itself
+    // succeeds for any valid user. Space membership is checked server-side during broadcast.
+    // An outsider should get the same experience regardless of whether a space exists.
+    const outsider = await createAdminUserWithIdentity();
+    const outsiderAuth = toAuthContext(outsider);
 
-    // Try subscribing to the real vault (unauthorized)
-    const client1 = createRawClient(outsider.accessToken);
-    const statusReal = await trySubscribe(client1, `sync:${realSpaceId}`, 5000);
-    client1.realtime.disconnect();
+    // Connect (valid user, not a member of either space)
+    const client = new RealtimeTestClient(outsiderAuth.privateKeyBase64, outsiderAuth.did);
+    await client.connect();
 
-    // Try subscribing to a non-existent vault
-    const client2 = createRawClient(outsider.accessToken);
-    const statusFake = await trySubscribe(client2, `sync:${crypto.randomUUID()}`, 5000);
-    client2.realtime.disconnect();
+    // Owner pushes to real space
+    await signAndPushSpaceChanges(ownerAuth, realSpaceId, [
+      makeSyncChange({
+        tableName: "test",
+        rowPks: JSON.stringify({ id: "enum-test" }),
+        columnName: "value",
+        deviceId: `e2e-enum-${Date.now()}`,
+      }),
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
 
-    // Both should give the same non-SUBSCRIBED status
-    expect(statusReal).not.toBe("SUBSCRIBED");
-    expect(statusFake).not.toBe("SUBSCRIBED");
-    // Ideally, both produce the exact same status (no information leakage)
-    expect(statusReal).toBe(statusFake);
-  });
+    await new Promise((r) => setTimeout(r, 2000));
 
-  test("random UUID guessing never succeeds", async () => {
-    const outsider = await createAdminUser();
+    // Outsider receives nothing — cannot distinguish real space from non-existent
+    const realMsgs = client.getSpaceMessages(realSpaceId);
+    const fakeMsgs = client.getSpaceMessages(crypto.randomUUID());
 
-    // Try 10 random UUIDs — none should succeed
-    for (let i = 0; i < 10; i++) {
-      const client = createRawClient(outsider.accessToken);
-      const status = await trySubscribe(client, `sync:${crypto.randomUUID()}`, 3000);
-      client.realtime.disconnect();
+    client.disconnect();
 
-      expect(status).not.toBe("SUBSCRIBED");
-    }
+    expect(realMsgs.length).toBe(0);
+    expect(fakeMsgs.length).toBe(0);
+    // Both return the same result — no information leakage
+    expect(realMsgs.length).toBe(fakeMsgs.length);
   });
 });

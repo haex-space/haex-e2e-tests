@@ -1,29 +1,33 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
-import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   checkSyncServerHealth,
-  createAdminUser,
-  createVaultKey,
-  pushChanges,
+  createAdminUserWithIdentity,
+  createSpace,
+  addSpaceMember,
+  removeSpaceMember,
+  signAndPushSpaceChanges,
   makeSyncChange,
-  createRealtimeClient,
-  subscribeToBroadcast,
-  subscribeAndWait,
-  waitForMessages,
-  cleanupClient,
+  toAuthContext,
+  RealtimeTestClient,
+  type AuthContext,
 } from "../helpers";
 
 /**
- * Tests for Realtime channel lifecycle management.
+ * Tests for WebSocket connection lifecycle management.
  *
- * These cover the channel create/subscribe/unsubscribe/dispose patterns
- * used in haex-vault, ensuring no resource leaks or stale state.
+ * The sync-server uses a simple WebSocket model:
+ * - Connect with DID-Auth → server loads memberships
+ * - Server broadcasts to all connected members
+ * - Disconnect → cleanup
+ *
+ * These tests cover connect/disconnect/reconnect patterns and
+ * ensure no resource leaks or stale state.
  */
-test.describe("sync: realtime channel lifecycle", () => {
+test.describe("sync: realtime connection lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
-  let accessToken: string;
+  let auth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-lifecycle-${Date.now()}`;
 
@@ -31,160 +35,181 @@ test.describe("sync: realtime channel lifecycle", () => {
     const healthy = await checkSyncServerHealth();
     expect(healthy).toBe(true);
 
-    const admin = await createAdminUser();
-    accessToken = admin.accessToken;
-    await createVaultKey(accessToken, spaceId);
+    const admin = await createAdminUserWithIdentity();
+    auth = toAuthContext(admin);
+
+    const createRes = await createSpace(auth, spaceId, "Lifecycle Test Space");
+    expect(createRes.status).toBe(201);
   });
 
-  test("unsubscribe removes channel from client", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+  test("disconnect closes the connection", async () => {
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client.connect();
+    expect(client.isConnected).toBe(true);
 
-    const { channel } = await subscribeAndWait(client, channelName);
-    expect(client.realtime.channels.length).toBe(1);
-
-    await client.removeChannel(channel);
-    expect(client.realtime.channels.length).toBe(0);
-
-    await cleanupClient(client);
+    client.disconnect();
+    expect(client.isConnected).toBe(false);
   });
 
-  test("re-subscribe after unsubscribe works", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+  test("reconnect after disconnect works", async () => {
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    expect(client1.isConnected).toBe(true);
+    client1.disconnect();
 
-    // Subscribe
-    const { status: s1, channel: ch1 } = await subscribeAndWait(client, channelName);
-    expect(s1).toBe("SUBSCRIBED");
-
-    // Unsubscribe
-    await client.removeChannel(ch1);
-
-    // Brief delay to let the server process the channel leave
+    // Brief delay for server cleanup
     await new Promise((r) => setTimeout(r, 500));
 
-    // Re-subscribe on the same channel name
-    const { status: s2, channel: ch2 } = await subscribeAndWait(client, channelName);
-    expect(s2).toBe("SUBSCRIBED");
-
-    await client.removeChannel(ch2);
-    await cleanupClient(client);
+    // New connection with fresh DID-Auth token
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
+    expect(client2.isConnected).toBe(true);
+    client2.disconnect();
   });
 
-  test("messages only arrive on active subscription", async () => {
-    const client = createRealtimeClient(accessToken);
-    const channelName = `sync:${spaceId}`;
+  test("messages only arrive while connected", async () => {
+    // Create a member to push changes (so the owner receives broadcasts)
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+    const inviteRes = await addSpaceMember(auth, spaceId, member.publicKey, "Lifecycle Member", "member");
+    expect(inviteRes.status).toBe(201);
 
-    // Subscribe and collect
-    const collector = await subscribeToBroadcast(client, channelName);
+    // Connect and verify broadcasts work
+    const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client.connect();
 
-    // Unsubscribe
-    await client.removeChannel(collector.channel);
-
-    // Push while unsubscribed — should NOT be received
-    await pushChanges(accessToken, spaceId, [
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
-        rowPks: JSON.stringify({ id: "while-unsubscribed" }),
+        rowPks: JSON.stringify({ id: "while-connected" }),
         columnName: "value",
         deviceId,
       }),
-    ]);
+    ], memberAuth.privateKeyBase64, member.publicKey);
+
+    const msg = await client.waitForSyncBroadcast(spaceId, 5000);
+    expect(msg.type).toBe("sync");
+    const connectedCount = client.getMessages().length;
+    expect(connectedCount).toBeGreaterThanOrEqual(1);
+
+    // Disconnect
+    client.disconnect();
+
+    // Push while disconnected — cannot receive
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
+      makeSyncChange({
+        tableName: "haex_vault_settings",
+        rowPks: JSON.stringify({ id: "while-disconnected" }),
+        columnName: "value",
+        deviceId,
+      }),
+    ], memberAuth.privateKeyBase64, member.publicKey);
 
     await new Promise((r) => setTimeout(r, 1500));
 
-    // No messages should have arrived after unsubscribe
-    const messagesWhileUnsubscribed = collector.messages.length;
+    // Reconnect with fresh client and verify new messages arrive
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
 
-    // Re-subscribe with fresh collector
-    const collector2 = await subscribeToBroadcast(client, channelName);
-
-    // Push while subscribed — SHOULD be received
-    await pushChanges(accessToken, spaceId, [
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
-        rowPks: JSON.stringify({ id: "while-subscribed" }),
+        rowPks: JSON.stringify({ id: "after-reconnect" }),
         columnName: "value",
         deviceId,
       }),
-    ]);
+    ], memberAuth.privateKeyBase64, member.publicKey);
 
-    const messages = await waitForMessages(collector2, 1, 5000);
+    const msg2 = await client2.waitForSyncBroadcast(spaceId, 5000);
+    expect(msg2.type).toBe("sync");
+    client2.disconnect();
 
-    await client.removeChannel(collector2.channel);
-    await cleanupClient(client);
-
-    expect(messagesWhileUnsubscribed).toBe(0);
-    expect(messages.length).toBeGreaterThanOrEqual(1);
+    await removeSpaceMember(auth, spaceId, member.publicKey);
   });
 
-  test("multiple channels on same client work independently", async () => {
-    // Create two vaults with separate channels
+  test("multiple concurrent connections from same DID work independently", async () => {
+    // Create two members for two separate spaces
     const spaceId2 = crypto.randomUUID();
-    await createVaultKey(accessToken, spaceId2);
+    const createRes = await createSpace(auth, spaceId2, "Second Space");
+    expect(createRes.status).toBe(201);
 
-    const client = createRealtimeClient(accessToken);
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+    await addSpaceMember(auth, spaceId, member.publicKey, "Multi1", "member");
+    await addSpaceMember(auth, spaceId2, member.publicKey, "Multi2", "member");
 
-    const collector1 = await subscribeToBroadcast(client, `sync:${spaceId}`);
-    const collector2 = await subscribeToBroadcast(client, `sync:${spaceId2}`);
+    // Owner opens two connections (same DID)
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    await client2.connect();
 
-    expect(client.realtime.channels.length).toBe(2);
-
-    // Push to vault1 only
-    await pushChanges(accessToken, spaceId, [
+    // Member pushes to space 1
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
-        rowPks: JSON.stringify({ id: "multi-channel-v1" }),
+        rowPks: JSON.stringify({ id: "multi-conn-1" }),
         columnName: "value",
         deviceId,
       }),
-    ]);
+    ], memberAuth.privateKeyBase64, member.publicKey);
 
-    // Push to vault2 only
-    await pushChanges(accessToken, spaceId2, [
-      makeSyncChange({
-        tableName: "haex_vault_settings",
-        rowPks: JSON.stringify({ id: "multi-channel-v2" }),
-        columnName: "value",
-        deviceId,
-      }),
-    ]);
+    // Both connections should receive the broadcast
+    const msg1 = await client1.waitForSyncBroadcast(spaceId, 5000);
+    const msg2 = await client2.waitForSyncBroadcast(spaceId, 5000);
 
-    await waitForMessages(collector1, 1, 5000);
-    await waitForMessages(collector2, 1, 5000);
+    expect(msg1.type).toBe("sync");
+    expect(msg2.type).toBe("sync");
 
-    await client.removeChannel(collector1.channel);
-    await client.removeChannel(collector2.channel);
-    await cleanupClient(client);
+    client1.disconnect();
+    client2.disconnect();
 
-    // Each channel should have received its own vault's messages
-    expect(collector1.messages.length).toBeGreaterThanOrEqual(1);
-    expect(collector2.messages.length).toBeGreaterThanOrEqual(1);
+    await removeSpaceMember(auth, spaceId, member.publicKey);
+    await removeSpaceMember(auth, spaceId2, member.publicKey);
   });
 
-  test("removeAllChannels cleans up all subscriptions", async () => {
-    const client = createRealtimeClient(accessToken);
+  test("multiple disconnect/reconnect cycles work reliably", async () => {
+    for (let cycle = 0; cycle < 3; cycle++) {
+      const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+      await client.connect();
+      expect(client.isConnected).toBe(true);
+      client.disconnect();
+      expect(client.isConnected).toBe(false);
 
-    // Create multiple channels
-    const { channel: ch1 } = await subscribeAndWait(client, `sync:${spaceId}`);
-    const spaceId2 = crypto.randomUUID();
-    await createVaultKey(accessToken, spaceId2);
-    const { channel: ch2 } = await subscribeAndWait(client, `sync:${spaceId2}`);
+      // Brief pause between cycles
+      await new Promise((r) => setTimeout(r, 300));
+    }
+  });
 
-    expect(client.realtime.channels.length).toBe(2);
+  test("new client works after previous client was cleaned up", async () => {
+    // Create member for broadcast testing
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+    await addSpaceMember(auth, spaceId, member.publicKey, "Cleanup Member", "member");
 
-    // Remove all at once
-    await client.realtime.removeAllChannels();
-    expect(client.realtime.channels.length).toBe(0);
+    // First client
+    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client1.connect();
+    expect(client1.isConnected).toBe(true);
+    client1.disconnect();
 
-    // Brief delay to let the server process channel leaves
-    await new Promise((r) => setTimeout(r, 500));
+    // Second client — should work without interference
+    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    await client2.connect();
 
-    // Should still be able to subscribe after removeAllChannels
-    const { status, channel } = await subscribeAndWait(client, `sync:${spaceId}`);
-    expect(status).toBe("SUBSCRIBED");
+    await signAndPushSpaceChanges(memberAuth, spaceId, [
+      makeSyncChange({
+        tableName: "haex_vault_settings",
+        rowPks: JSON.stringify({ id: "new-client-test" }),
+        columnName: "value",
+        deviceId,
+      }),
+    ], memberAuth.privateKeyBase64, member.publicKey);
 
-    await client.removeChannel(channel);
-    await cleanupClient(client);
+    const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
+    client2.disconnect();
+    expect(msg.type).toBe("sync");
+
+    await removeSpaceMember(auth, spaceId, member.publicKey);
   });
 });
