@@ -22,7 +22,7 @@ function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
 }
 
-test.describe("spaces: RBAC permissions", () => {
+test.describe("spaces: capability-based permissions", () => {
   test.describe.configure({ mode: "serial" });
 
   let ownerAuth: AuthContext;
