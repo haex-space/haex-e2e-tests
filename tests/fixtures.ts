@@ -1243,7 +1243,7 @@ export class VaultAutomation {
       const { invoke } = window.__TAURI_INTERNALS__;
       invoke('${command}', ${JSON.stringify(args)})
         .then(result => callback({ success: true, data: result }))
-        .catch(error => callback({ success: false, error: error.message || String(error) }));
+        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)) }));
     `;
 
     const config = VAULT_CONFIG[this.instance];
@@ -1339,7 +1339,7 @@ export class VaultAutomation {
       args.onEvent = channelToken;
 
       internals.invoke('peer_storage_remote_read', args)
-        .catch(error => callback({ success: false, error: error.message || String(error) }));
+        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)) }));
     `;
 
     const config = VAULT_CONFIG[this.instance];
