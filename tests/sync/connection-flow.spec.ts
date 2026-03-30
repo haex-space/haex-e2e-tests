@@ -173,9 +173,10 @@ test.describe("sync: full connection flow", () => {
     const otherAdmin = await createAdminUser();
     const otherAuth = toAuthContext(otherAdmin);
 
-    // Pull should return empty (RLS blocks access)
-    const result = await pullChanges(otherAuth, spaceId);
-    expect(result.changes.length).toBe(0);
+    // Pull should be rejected (403 — non-owner)
+    await expect(
+      pullChanges(otherAuth, spaceId),
+    ).rejects.toThrow(/403/);
 
     // Push should be rejected (403)
     await expect(
