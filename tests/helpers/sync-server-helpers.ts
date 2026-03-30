@@ -195,6 +195,7 @@ export function getSyncServerUrl(): string {
   return SYNC_SERVER_URL;
 }
 
+
 /**
  * Ensure the 'free' tier exists in the sync-server database.
  * The Drizzle migration creates the tiers table but doesn't seed data.
