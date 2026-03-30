@@ -174,7 +174,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, member.publicKey, "Soon Removed", "member",
+      ownerAuth, spaceId, member.did, "Soon Removed", "member",
     );
     expect(inviteRes.status).toBe(201);
 
@@ -196,7 +196,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     expect(beforeMsg.type).toBe("sync");
 
     // Remove the member
-    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.did);
     expect(removeRes.status).toBe(200);
 
     // Clear and push again — removed member should NOT receive sync broadcasts
@@ -223,7 +223,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, member.publicKey, "Removed Then Reconnect", "member",
+      ownerAuth, spaceId, member.did, "Removed Then Reconnect", "member",
     );
     expect(inviteRes.status).toBe(201);
 
@@ -234,7 +234,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     client1.disconnect();
 
     // Remove the member
-    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, member.did);
     expect(removeRes.status).toBe(200);
 
     // Reconnect — the connection itself may succeed (user is still registered),

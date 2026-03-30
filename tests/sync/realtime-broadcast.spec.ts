@@ -82,7 +82,7 @@ test.describe("sync: realtime broadcast delivery", () => {
     // Create a second user and add them to the space
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.publicKey, "Member B", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Member B", "member");
     expect(inviteRes.status).toBe(201);
 
     // Member B connects via WebSocket
@@ -108,13 +108,13 @@ test.describe("sync: realtime broadcast delivery", () => {
     expect(msg.spaceId).toBe(spaceId);
 
     // Clean up member
-    await removeSpaceMember(auth, spaceId, member.publicKey);
+    await removeSpaceMember(auth, spaceId, member.did);
   });
 
   test("multiple rapid pushes result in broadcast messages", async () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.publicKey, "Rapid Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Rapid Member", "member");
     expect(inviteRes.status).toBe(201);
 
     const clientB = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -143,7 +143,7 @@ test.describe("sync: realtime broadcast delivery", () => {
 
     expect(messages.length).toBeGreaterThanOrEqual(1);
 
-    await removeSpaceMember(auth, spaceId, member.publicKey);
+    await removeSpaceMember(auth, spaceId, member.did);
   });
 
   test("different spaces do not receive each other's broadcasts", async () => {
@@ -154,7 +154,7 @@ test.describe("sync: realtime broadcast delivery", () => {
     // Create a member who is only in otherSpace
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, otherSpaceId, member.publicKey, "Other Member", "member");
+    const inviteRes = await addSpaceMember(auth, otherSpaceId, member.did, "Other Member", "member");
     expect(inviteRes.status).toBe(201);
 
     const clientB = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -179,14 +179,14 @@ test.describe("sync: realtime broadcast delivery", () => {
     expect(spaceMessages.length).toBe(0);
 
     // Clean up
-    await removeSpaceMember(auth, otherSpaceId, member.publicKey);
+    await removeSpaceMember(auth, otherSpaceId, member.did);
     await deleteSpace(auth, otherSpaceId);
   });
 
   test("broadcast payload contains only type and spaceId, no record data", async () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.publicKey, "Payload Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Payload Member", "member");
     expect(inviteRes.status).toBe(201);
 
     const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -212,7 +212,7 @@ test.describe("sync: realtime broadcast delivery", () => {
     expect(payload).not.toContain("super-secret-value");
     expect(payload).not.toContain("payload-check");
 
-    await removeSpaceMember(auth, spaceId, member.publicKey);
+    await removeSpaceMember(auth, spaceId, member.did);
   });
 });
 
@@ -245,31 +245,31 @@ test.describe("sync: broadcast authorization for spaces", () => {
   });
 
   test("space owner can connect and receive broadcasts", async () => {
-    // Add a member so someone can trigger a broadcast the owner receives
+    // Add a member who listens, owner pushes — member should receive
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(ownerAuth, spaceId, member.publicKey, "Temp", "member");
+    const inviteRes = await addSpaceMember(ownerAuth, spaceId, member.did, "Temp", "member");
     expect(inviteRes.status).toBe(201);
 
-    const client = new RealtimeTestClient(ownerAuth.privateKeyBase64, ownerAuth.did);
+    const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client.connect();
     expect(client.isConnected).toBe(true);
 
-    // Member pushes — owner should receive
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    // Owner pushes — member should receive broadcast
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
       makeSyncChange({
         tableName: "test",
         rowPks: JSON.stringify({ id: "owner-auth" }),
         columnName: "value",
         deviceId: `e2e-auth-${Date.now()}`,
       }),
-    ], memberAuth.privateKeyBase64, member.publicKey);
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
 
     const msg = await client.waitForSyncBroadcast(spaceId, 5000);
     client.disconnect();
     expect(msg.type).toBe("sync");
 
-    await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
+    await removeSpaceMember(ownerAuth, spaceId, member.did);
   });
 
   test("stranger connected via WS does not receive broadcasts for space they are not in", async () => {
@@ -278,20 +278,15 @@ test.describe("sync: broadcast authorization for spaces", () => {
     await strangerClient.connect();
     expect(strangerClient.isConnected).toBe(true);
 
-    // Add a temp member to trigger a broadcast the owner would receive
-    const member = await createAdminUserWithIdentity();
-    const memberAuth = toAuthContext(member);
-    await addSpaceMember(ownerAuth, spaceId, member.publicKey, "Temp2", "member");
-
-    // Member pushes — stranger should NOT receive
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    // Owner pushes — stranger should NOT receive (not a member)
+    await signAndPushSpaceChanges(ownerAuth, spaceId, [
       makeSyncChange({
         tableName: "test",
         rowPks: JSON.stringify({ id: "stranger-test" }),
         columnName: "value",
         deviceId: `e2e-stranger-${Date.now()}`,
       }),
-    ], memberAuth.privateKeyBase64, member.publicKey);
+    ], ownerAuth.privateKeyBase64, ownerPublicKey);
 
     await new Promise((r) => setTimeout(r, 2000));
 
@@ -299,8 +294,6 @@ test.describe("sync: broadcast authorization for spaces", () => {
     strangerClient.disconnect();
 
     expect(msgs.length).toBe(0);
-
-    await removeSpaceMember(ownerAuth, spaceId, member.publicKey);
   });
 
   test("unauthenticated client (no token) is rejected", async () => {
@@ -324,9 +317,9 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
   let ownerAuth: AuthContext;
   let ownerPublicKey: string;
   let memberAuth: AuthContext;
-  let memberPublicKey: string;
+  let memberDid: string;
   let readerAuth: AuthContext;
-  let readerPublicKey: string;
+  let readerDid: string;
   let outsiderAuth: AuthContext;
   const spaceId = crypto.randomUUID();
 
@@ -344,9 +337,9 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     ownerAuth = toAuthContext(owner);
     ownerPublicKey = owner.publicKey;
     memberAuth = toAuthContext(member);
-    memberPublicKey = member.publicKey;
+    memberDid = member.did;
     readerAuth = toAuthContext(reader);
-    readerPublicKey = reader.publicKey;
+    readerDid = reader.did;
     outsiderAuth = toAuthContext(outsider);
 
     // Owner creates a space
@@ -355,8 +348,8 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
 
     // Owner invites member (write access) and reader (read-only)
     const [inviteMember, inviteReader] = await Promise.all([
-      addSpaceMember(ownerAuth, spaceId, memberPublicKey, "Member", "member"),
-      addSpaceMember(ownerAuth, spaceId, readerPublicKey, "Reader", "reader"),
+      addSpaceMember(ownerAuth, spaceId, memberDid, "Member", "member"),
+      addSpaceMember(ownerAuth, spaceId, readerDid, "Reader", "reader"),
     ]);
     expect(inviteMember.status).toBe(201);
     expect(inviteReader.status).toBe(201);
@@ -447,7 +440,7 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     const tempMember = await createAdminUserWithIdentity();
     const tempAuth = toAuthContext(tempMember);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, tempMember.publicKey, "Temp Member", "member",
+      ownerAuth, spaceId, tempMember.did, "Temp Member", "member",
     );
     expect(inviteRes.status).toBe(201);
 
@@ -468,7 +461,7 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     expect(beforeMsg.type).toBe("sync");
 
     // Remove the member (server updates membershipCache)
-    const removeRes = await removeSpaceMember(ownerAuth, spaceId, tempMember.publicKey);
+    const removeRes = await removeSpaceMember(ownerAuth, spaceId, tempMember.did);
     expect(removeRes.status).toBe(200);
 
     // Clear messages and push again — should NOT receive

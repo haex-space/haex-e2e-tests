@@ -30,6 +30,7 @@ test.describe("sync: realtime auth lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   let auth: AuthContext;
+  let publicKey: string;
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
@@ -38,6 +39,7 @@ test.describe("sync: realtime auth lifecycle", () => {
 
     const admin = await createAdminUserWithIdentity();
     auth = toAuthContext(admin);
+    publicKey = admin.publicKey;
 
     const createRes = await createSpace(auth, spaceId, "Auth Lifecycle Space");
     expect(createRes.status).toBe(201);
@@ -138,8 +140,13 @@ test.describe("sync: realtime auth lifecycle", () => {
   });
 
   test("reconnection with fresh DID-Auth token works", async () => {
-    // First connection
-    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    // Add a member to receive broadcasts
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+    await addSpaceMember(auth, spaceId, member.did, "Recon Member", "member");
+
+    // First connection as member
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client1.connect();
     expect(client1.isConnected).toBe(true);
     client1.disconnect();
@@ -148,30 +155,25 @@ test.describe("sync: realtime auth lifecycle", () => {
     await new Promise((r) => setTimeout(r, 500));
 
     // Second connection with a new token (createDidAuthHeader generates fresh timestamp)
-    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client2.connect();
     expect(client2.isConnected).toBe(true);
 
-    // Add a member so we can test broadcast delivery after reconnection
-    const member = await createAdminUserWithIdentity();
-    const memberAuth = toAuthContext(member);
-    await addSpaceMember(auth, spaceId, member.publicKey, "Recon Member", "member");
-
-    // Member pushes — owner on new connection should receive
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    // Owner pushes — member on reconnected WS should receive broadcast
+    await signAndPushSpaceChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "test",
         rowPks: JSON.stringify({ id: "reconnect-test" }),
         columnName: "value",
         deviceId: `e2e-reconnect-${Date.now()}`,
       }),
-    ], memberAuth.privateKeyBase64, member.publicKey);
+    ], auth.privateKeyBase64, publicKey);
 
     const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
     client2.disconnect();
     expect(msg.type).toBe("sync");
 
-    await removeSpaceMember(auth, spaceId, member.publicKey);
+    await removeSpaceMember(auth, spaceId, member.did);
   });
 
   test("connection with unregistered DID is rejected", async () => {

@@ -547,4 +547,64 @@ In haex-space wurden folgende Komponenten erstellt:
 | `tests/extensions/permissions.spec.ts` | `Option<Vec>` handling, zusätzliche Felder, korrigierte Assertions |
 | `tests/extensions/resource-limits.spec.ts` | Korrekte Feldnamen, `{ request: {} }` wrapper für update |
 
+---
+
+## 2026-03-29 - Rewrite Realtime E2E Tests for Plain WebSocket
+
+### Durchgeführt
+- Alle Supabase Realtime E2E Tests auf plain WebSocket umgeschrieben
+- `realtime-helpers.ts` komplett neu: `RealtimeTestClient` Klasse statt Supabase Client Wrapper
+- 5 Realtime Test-Suites aktualisiert + `connection-flow.spec.ts` angepasst
+- `@supabase/supabase-js` Dependency entfernt
+- `insertBroadcastMessage()` Helper entfernt (schrieb in `realtime.messages` Tabelle die nicht mehr existiert)
+
+### Architektur-Änderung
+Sync-Server nutzt jetzt `/ws` Endpoint statt Supabase Realtime:
+- **Auth**: DID-Auth Token als Query-Parameter (`?token=<payload>.<signature>`)
+- **Kein Subscribe/Unsubscribe Protokoll**: Server lädt Memberships bei Connect, `onMessage` ist leer
+- **Broadcast-Format**: `{ type: 'sync', spaceId }` oder `{ type: 'membership', spaceId }`
+- **Access Control**: Server-seitig via `membershipCache` (nicht RLS)
+- **Auth-Fehler**: Close Code 4001
+- **Caller-Exclusion**: `broadcastToSpace()` excludiert den Caller-DID
+
+### RealtimeTestClient API
+```typescript
+class RealtimeTestClient {
+  constructor(privateKeyBase64, did, serverUrl?)
+  connect(): Promise<void>                          // DID-Auth WS connect
+  connectExpectingFailure(timeout?): Promise<bool>   // Expect close 4001
+  connectWithRawToken(token, timeout?): Promise<{rejected, closeCode}>
+  connectWithoutToken(timeout?): Promise<{rejected, closeCode}>
+  waitForMessage(predicate, timeout?): Promise<WsMessage>
+  waitForSyncBroadcast(spaceId, timeout?): Promise<WsMessage>
+  waitForSpaceBroadcast(spaceId, timeout?): Promise<WsMessage>
+  waitForMessageCount(predicate, count, timeout?): Promise<WsMessage[]>
+  getMessages(): WsMessage[]
+  getSpaceMessages(spaceId): WsMessage[]
+  clearMessages(): void
+  disconnect(): void
+  isConnected: boolean
+  lastCloseCode: number | null
+}
+```
+
+### Test-Pattern-Änderungen
+- **Kein `accessToken`** mehr für Realtime — alles über `AuthContext` (DID + privateKey)
+- **Broadcast-Tests brauchen 2 User**: Server excludiert Caller-DID, daher muss ein anderer User pushen
+- **Keine Channel-Konzepte**: Kein subscribe/unsubscribe, kein removeChannel, keine Channels-Liste
+- **Jede Connection = neuer Client**: Kein reconnect auf bestehendem Client, neues `RealtimeTestClient` Objekt
+
+### Geänderte Dateien
+| Datei | Änderung |
+|-------|----------|
+| `tests/helpers/realtime-helpers.ts` | Komplett neu: RealtimeTestClient statt Supabase-Wrapper |
+| `tests/helpers/sync-server-helpers.ts` | `insertBroadcastMessage()` entfernt |
+| `tests/sync/realtime-broadcast.spec.ts` | WS-basierte Broadcast-Tests mit 2-User-Pattern |
+| `tests/sync/realtime-auth-lifecycle.spec.ts` | DID-Auth Token Lifecycle statt JWT |
+| `tests/sync/realtime-broadcast-security.spec.ts` | WS-basierte Security-Tests |
+| `tests/sync/realtime-channel-lifecycle.spec.ts` | Connect/Disconnect Lifecycle |
+| `tests/sync/realtime-reconnection.spec.ts` | WS Reconnection-Tests |
+| `tests/sync/connection-flow.spec.ts` | Supabase Realtime → RealtimeTestClient |
+| `package.json` | `@supabase/supabase-js` Dependency entfernt |
+
 <!-- Neue Sessions hier eintragen -->

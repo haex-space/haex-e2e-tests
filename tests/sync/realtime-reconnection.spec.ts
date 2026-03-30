@@ -27,12 +27,13 @@ test.describe("sync: realtime reconnection", () => {
   test.describe.configure({ mode: "serial" });
 
   let auth: AuthContext;
+  let publicKey: string;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-reconnect-${Date.now()}`;
 
-  // Member identity for triggering broadcasts
+  // Member identity for broadcast membership
   let memberAuth: AuthContext;
-  let memberPublicKey: string;
+  let memberDid: string;
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -40,25 +41,26 @@ test.describe("sync: realtime reconnection", () => {
 
     const admin = await createAdminUserWithIdentity();
     auth = toAuthContext(admin);
+    publicKey = admin.publicKey;
 
     const createRes = await createSpace(auth, spaceId, "Reconnection Test Space");
     expect(createRes.status).toBe(201);
 
-    // Create a permanent member to push changes (so owner receives broadcasts)
+    // Create a permanent member (listens for broadcasts when owner pushes)
     const member = await createAdminUserWithIdentity();
     memberAuth = toAuthContext(member);
-    memberPublicKey = member.publicKey;
-    const inviteRes = await addSpaceMember(auth, spaceId, memberPublicKey, "Recon Member", "member");
+    memberDid = member.did;
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Recon Member", "member");
     expect(inviteRes.status).toBe(201);
   });
 
   test.afterAll(async () => {
-    await removeSpaceMember(auth, spaceId, memberPublicKey).catch(() => {});
+    await removeSpaceMember(auth, spaceId, memberDid).catch(() => {});
   });
 
   test("can reconnect after explicit disconnect", async () => {
     // First connection
-    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client1.connect();
     expect(client1.isConnected).toBe(true);
 
@@ -70,7 +72,7 @@ test.describe("sync: realtime reconnection", () => {
     await new Promise((r) => setTimeout(r, 500));
 
     // Reconnect with fresh DID-Auth token
-    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client2.connect();
     expect(client2.isConnected).toBe(true);
 
@@ -79,7 +81,7 @@ test.describe("sync: realtime reconnection", () => {
 
   test("receives messages after reconnection", async () => {
     // Connect, then disconnect
-    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client1.connect();
     client1.disconnect();
 
@@ -87,11 +89,11 @@ test.describe("sync: realtime reconnection", () => {
     await new Promise((r) => setTimeout(r, 500));
 
     // Reconnect
-    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client2.connect();
 
     // Push a change — should arrive via the reconnected client
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    await signAndPushSpaceChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "after-reconnect" }),
@@ -99,7 +101,7 @@ test.describe("sync: realtime reconnection", () => {
         deviceId,
         encryptedValue: btoa("reconnected-value"),
       }),
-    ], memberAuth.privateKeyBase64, memberPublicKey);
+    ], auth.privateKeyBase64, publicKey);
 
     const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
     client2.disconnect();
@@ -110,19 +112,19 @@ test.describe("sync: realtime reconnection", () => {
 
   test("multiple disconnect/reconnect cycles work reliably", async () => {
     for (let cycle = 0; cycle < 3; cycle++) {
-      const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+      const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
       await client.connect();
       expect(client.isConnected).toBe(true);
 
       // Verify message delivery on each cycle
-      await signAndPushSpaceChanges(memberAuth, spaceId, [
+      await signAndPushSpaceChanges(auth, spaceId, [
         makeSyncChange({
           tableName: "haex_vault_settings",
           rowPks: JSON.stringify({ id: `cycle-${cycle}` }),
           columnName: "value",
           deviceId,
         }),
-      ], memberAuth.privateKeyBase64, memberPublicKey);
+      ], auth.privateKeyBase64, publicKey);
 
       const msg = await client.waitForSyncBroadcast(spaceId, 5000);
       expect(msg.type).toBe("sync");
@@ -137,23 +139,23 @@ test.describe("sync: realtime reconnection", () => {
 
   test("new client works after previous client was cleaned up", async () => {
     // First client
-    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client1.connect();
     expect(client1.isConnected).toBe(true);
     client1.disconnect();
 
     // Second client — completely independent instance
-    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client2.connect();
 
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    await signAndPushSpaceChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "new-client-test" }),
         columnName: "value",
         deviceId,
       }),
-    ], memberAuth.privateKeyBase64, memberPublicKey);
+    ], auth.privateKeyBase64, publicKey);
 
     const msg = await client2.waitForSyncBroadcast(spaceId, 5000);
     client2.disconnect();
@@ -163,24 +165,24 @@ test.describe("sync: realtime reconnection", () => {
 
   test("messages pushed during disconnect are not delivered (no queuing)", async () => {
     // Connect and verify
-    const client1 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client1.connect();
     client1.disconnect();
 
     // Push while disconnected
-    await signAndPushSpaceChanges(memberAuth, spaceId, [
+    await signAndPushSpaceChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "during-disconnect" }),
         columnName: "value",
         deviceId,
       }),
-    ], memberAuth.privateKeyBase64, memberPublicKey);
+    ], auth.privateKeyBase64, publicKey);
 
     await new Promise((r) => setTimeout(r, 500));
 
     // Reconnect — should NOT receive the message from while disconnected
-    const client2 = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
+    const client2 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
     await client2.connect();
 
     // Wait briefly to see if any stale messages arrive
