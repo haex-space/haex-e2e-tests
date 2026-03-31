@@ -100,11 +100,14 @@ test.describe("storage: P2P connectivity between vaults", () => {
       data: nestedBase64,
     });
 
-    // Create the space record so haex_peer_shares FK constraint is satisfied
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, role) VALUES (?1, ?2, ?3, ?4)`,
-      params: [spaceId, "local", "E2E P2P Space", "owner"],
-    });
+    // Create the space record on both vaults so FK constraints on
+    // haex_peer_shares and haex_space_devices are satisfied
+    for (const vault of [vaultA, vaultB]) {
+      await vault.invokeTauriCommand("sql_execute_with_crdt", {
+        sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, role) VALUES (?1, ?2, ?3, ?4)`,
+        params: [spaceId, "local", "E2E P2P Space", "owner"],
+      });
+    }
   });
 
   test.afterAll(async () => {
