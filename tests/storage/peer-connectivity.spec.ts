@@ -406,6 +406,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
     const otherDir = `/tmp/e2e-p2p-other-${Date.now()}`;
     const otherShareId = crypto.randomUUID();
 
+    // Create the space record for the other space
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, role) VALUES (?1, ?2, ?3, ?4)`,
+      params: [otherSpaceId, "local", "E2E P2P Other Space", "owner"],
+    });
+
     // Create a share in a different space
     await vaultA.invokeTauriCommand("filesystem_mkdir", { path: otherDir });
     await vaultA.invokeTauriCommand("filesystem_write_file", {
