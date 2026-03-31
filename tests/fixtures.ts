@@ -203,19 +203,17 @@ export class VaultBridgeClient {
   }
 
   private async initialize(): Promise<void> {
-    // Generate ECDH key pair using P-256 curve
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
+    // Generate X25519 key pair (matching vault's Rust X25519 implementation)
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("x25519");
 
     this.keyPair = { publicKey, privateKey };
 
-    // Export public key to SPKI format and base64 encode
-    const publicKeyDer = publicKey.export({ type: "spki", format: "der" });
-    this.publicKeyBase64 = publicKeyDer.toString("base64");
+    // Export public key as raw 32 bytes and base64 encode
+    const publicKeyRaw = publicKey.export({ type: "spki", format: "der" }).subarray(-32);
+    this.publicKeyBase64 = publicKeyRaw.toString("base64");
 
     // Generate client ID from public key hash (first 16 bytes of SHA-256)
-    const hash = crypto.createHash("sha256").update(publicKeyDer).digest();
+    const hash = crypto.createHash("sha256").update(publicKeyRaw).digest();
     this.clientId = hash.subarray(0, 16).toString("hex");
   }
 
@@ -369,11 +367,15 @@ export class VaultBridgeClient {
       pendingApproval: response.pendingApproval,
     });
 
-    // Import server's public key
+    // Import server's X25519 public key (raw 32 bytes)
     if (response.serverPublicKey) {
-      const keyDer = Buffer.from(response.serverPublicKey, "base64");
+      const keyRaw = Buffer.from(response.serverPublicKey, "base64");
       this.serverPublicKey = crypto.createPublicKey({
-        key: keyDer,
+        key: Buffer.concat([
+          // X25519 SPKI header (12 bytes) + raw key
+          Buffer.from("302a300506032b656e032100", "hex"),
+          keyRaw,
+        ]),
         format: "der",
         type: "spki",
       });
@@ -406,10 +408,13 @@ export class VaultBridgeClient {
     }
 
     try {
-      // Import sender's ephemeral public key
-      const senderKeyDer = Buffer.from(envelope.publicKey, "base64");
+      // Import sender's ephemeral X25519 public key (raw 32 bytes)
+      const senderKeyRaw = Buffer.from(envelope.publicKey, "base64");
       const senderPublicKey = crypto.createPublicKey({
-        key: senderKeyDer,
+        key: Buffer.concat([
+          Buffer.from("302a300506032b656e032100", "hex"),
+          senderKeyRaw,
+        ]),
         format: "der",
         type: "spki",
       });
@@ -522,20 +527,18 @@ export class VaultBridgeClient {
     const requestId = crypto.randomBytes(16).toString("hex");
     const payloadWithId = { ...payload, requestId };
 
-    // Generate ephemeral key pair for forward secrecy
+    // Generate ephemeral X25519 key pair for forward secrecy
     const { publicKey: ephemeralPublic, privateKey: ephemeralPrivate } =
-      crypto.generateKeyPairSync("ec", {
-        namedCurve: "prime256v1",
-      });
+      crypto.generateKeyPairSync("x25519");
 
-    // Derive shared secret using ECDH
+    // Derive shared secret using X25519 ECDH
     const sharedSecret = crypto.diffieHellman({
       privateKey: ephemeralPrivate,
       publicKey: this.serverPublicKey,
     });
 
-    // Use first 32 bytes as AES key
-    const aesKey = sharedSecret.subarray(0, 32);
+    // Use shared secret as AES key (X25519 produces exactly 32 bytes)
+    const aesKey = sharedSecret;
 
     // Generate random IV (12 bytes for GCM)
     const iv = crypto.randomBytes(12);
@@ -549,10 +552,9 @@ export class VaultBridgeClient {
     // Combine encrypted data with auth tag
     const ciphertext = Buffer.concat([encrypted, authTag]);
 
-    // Export ephemeral public key
-    const ephemeralPublicKeyBase64 = ephemeralPublic
-      .export({ type: "spki", format: "der" })
-      .toString("base64");
+    // Export ephemeral public key as raw 32 bytes
+    const ephemeralPublicDer = ephemeralPublic.export({ type: "spki", format: "der" });
+    const ephemeralPublicKeyBase64 = ephemeralPublicDer.subarray(-32).toString("base64");
 
     // Get extension info for request routing
     const extensionPublicKey = getHaexPassPublicKey();
