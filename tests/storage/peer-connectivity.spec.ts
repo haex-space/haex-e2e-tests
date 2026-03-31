@@ -99,6 +99,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
       path: `${testDir}/subfolder/nested.txt`,
       data: nestedBase64,
     });
+
+    // Create the space record so haex_peer_shares FK constraint is satisfied
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, role) VALUES (?1, ?2, ?3, ?4)`,
+      params: [spaceId, "local", "E2E P2P Space", "owner"],
+    });
   });
 
   test.afterAll(async () => {

@@ -69,6 +69,7 @@ test.describe("sync: full connection flow", () => {
       ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
       vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
       vaultNameNonce: crypto.randomBytes(12).toString("base64"),
+      vaultNameSalt: crypto.randomBytes(16).toString("base64"),
     };
     const bodyStr = JSON.stringify(bodyObj);
 
@@ -200,6 +201,7 @@ test.describe("sync: full connection flow", () => {
       ephemeralPublicKey: crypto.randomBytes(65).toString("base64"),
       vaultKeyNonce: crypto.randomBytes(12).toString("base64"),
       vaultNameNonce: crypto.randomBytes(12).toString("base64"),
+      vaultNameSalt: crypto.randomBytes(16).toString("base64"),
     };
     const bodyStr = JSON.stringify(bodyObj);
 
