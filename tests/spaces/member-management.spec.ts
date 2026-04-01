@@ -13,6 +13,7 @@ import {
   DidAuthAction,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -51,7 +52,7 @@ test.describe("spaces: member-management", () => {
   });
 
   test("invite user B as member returns 201", async () => {
-    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, "member");
+    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, SpaceCapabilities.WRITE);
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -71,7 +72,7 @@ test.describe("spaces: member-management", () => {
     expect(space.members.length).toBeGreaterThanOrEqual(2);
 
     const admin = space.members.find(
-      (m: { role: string }) => m.role === "admin",
+      (m: { capability: string }) => m.capability === SpaceCapabilities.ADMIN,
     );
     expect(admin).toBeDefined();
     expect(typeof admin.did).toBe("string");
@@ -80,7 +81,7 @@ test.describe("spaces: member-management", () => {
       (m: { did: string }) => m.did === memberBDid,
     );
     expect(member).toBeDefined();
-    expect(member.role).toBe("member");
+    expect(member.capability).toBe(SpaceCapabilities.WRITE);
     expect(member.label).toBe(memberLabel);
     expect(typeof member.joinedAt).toBe("string");
   });
@@ -89,7 +90,7 @@ test.describe("spaces: member-management", () => {
     const body = JSON.stringify({
       did: "did:key:z6MkUnauthorized",
       label: "Unauthorized Invite",
-      role: "member",
+      capability: SpaceCapabilities.WRITE,
     });
     const authHeader = await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -127,7 +128,7 @@ test.describe("spaces: member-management", () => {
   });
 
   test("re-invite removed member succeeds", async () => {
-    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, "member");
+    const res = await addSpaceMember(authA, spaceId, memberBDid, memberLabel, SpaceCapabilities.WRITE);
 
     expect(res.status).toBe(201);
     const body = await res.json();
@@ -145,6 +146,6 @@ test.describe("spaces: member-management", () => {
       (m: { did: string }) => m.did === memberBDid,
     );
     expect(member).toBeDefined();
-    expect(member.role).toBe("member");
+    expect(member.capability).toBe(SpaceCapabilities.WRITE);
   });
 });

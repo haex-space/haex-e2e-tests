@@ -14,6 +14,7 @@ import {
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 /**
  * Tests for WebSocket authentication lifecycle.
@@ -143,7 +144,7 @@ test.describe("sync: realtime auth lifecycle", () => {
     // Add a member to receive broadcasts
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    await addSpaceMember(auth, spaceId, member.did, "Recon Member", "member");
+    await addSpaceMember(auth, spaceId, member.did, "Recon Member", SpaceCapabilities.WRITE);
 
     // First connection as member
     const client1 = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);

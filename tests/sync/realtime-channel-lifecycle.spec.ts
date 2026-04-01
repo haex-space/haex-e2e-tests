@@ -12,6 +12,7 @@ import {
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 /**
  * Tests for WebSocket connection lifecycle management.
@@ -47,7 +48,7 @@ test.describe("sync: realtime connection lifecycle", () => {
     // Permanent member for broadcast tests (owner pushes, member receives)
     const member = await createAdminUserWithIdentity();
     memberAuth = toAuthContext(member);
-    await addSpaceMember(auth, spaceId, member.did, "Lifecycle Member", "member");
+    await addSpaceMember(auth, spaceId, member.did, "Lifecycle Member", SpaceCapabilities.WRITE);
   });
 
   test("disconnect closes the connection", async () => {
@@ -79,7 +80,7 @@ test.describe("sync: realtime connection lifecycle", () => {
     // Create a member who listens for broadcasts, owner pushes
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Lifecycle Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Lifecycle Member", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     // Member connects to receive broadcasts
@@ -142,8 +143,8 @@ test.describe("sync: realtime connection lifecycle", () => {
     expect(createRes.status).toBe(201);
 
     const member = await createAdminUserWithIdentity();
-    await addSpaceMember(auth, spaceId, member.did, "Multi1", "member");
-    await addSpaceMember(auth, spaceId2, member.did, "Multi2", "member");
+    await addSpaceMember(auth, spaceId, member.did, "Multi1", SpaceCapabilities.WRITE);
+    await addSpaceMember(auth, spaceId2, member.did, "Multi2", SpaceCapabilities.WRITE);
 
     // Member opens two connections (same DID) to receive owner broadcasts
     const mAuth = toAuthContext(member);
@@ -192,7 +193,7 @@ test.describe("sync: realtime connection lifecycle", () => {
   test("new client works after previous client was cleaned up", async () => {
     // Create member for broadcast testing
     const member = await createAdminUserWithIdentity();
-    await addSpaceMember(auth, spaceId, member.did, "Cleanup Member", "member");
+    await addSpaceMember(auth, spaceId, member.did, "Cleanup Member", SpaceCapabilities.WRITE);
 
     // First client (member receives, owner pushes)
     const mAuth = toAuthContext(member);

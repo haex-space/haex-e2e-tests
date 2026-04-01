@@ -500,12 +500,12 @@ export async function addSpaceMember(
   spaceId: string,
   memberDid: string,
   label: string,
-  role: "owner" | "member" | "reader",
+  capability: "space/write" | "space/read",
 ): Promise<Response> {
   const bodyObj = {
     did: memberDid,
     label,
-    role,
+    capability,
   };
   const bodyStr = JSON.stringify(bodyObj);
 

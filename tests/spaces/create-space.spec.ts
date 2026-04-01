@@ -10,6 +10,7 @@ import {
   createDidAuthHeader,
   DidAuthAction,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -60,7 +61,7 @@ test.describe("spaces: create-space", () => {
     expect(Array.isArray(spaces)).toBe(true);
     const found = spaces.find((s: { id: string }) => s.id === spaceId);
     expect(found).toBeDefined();
-    expect(found.role).toBe("admin");
+    expect(found.capability).toBe(SpaceCapabilities.ADMIN);
     expect(typeof found.ownerId).toBe("string");
     expect(typeof found.encryptedName).toBe("string");
     expect(typeof found.nameNonce).toBe("string");
@@ -85,7 +86,7 @@ test.describe("spaces: create-space", () => {
     expect(space.members.length).toBeGreaterThanOrEqual(1);
 
     const creator = space.members.find(
-      (m: { role: string }) => m.role === "admin",
+      (m: { capability: string }) => m.capability === SpaceCapabilities.ADMIN,
     );
     expect(creator).toBeDefined();
     expect(typeof creator.publicKey).toBe("string");

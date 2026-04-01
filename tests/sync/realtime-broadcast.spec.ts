@@ -16,6 +16,7 @@ import {
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 // =============================================================================
 // Broadcast Delivery Tests
@@ -82,7 +83,7 @@ test.describe("sync: realtime broadcast delivery", () => {
     // Create a second user and add them to the space
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Member B", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Member B", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     // Member B connects via WebSocket
@@ -114,7 +115,7 @@ test.describe("sync: realtime broadcast delivery", () => {
   test("multiple rapid pushes result in broadcast messages", async () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Rapid Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Rapid Member", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     const clientB = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -154,7 +155,7 @@ test.describe("sync: realtime broadcast delivery", () => {
     // Create a member who is only in otherSpace
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, otherSpaceId, member.did, "Other Member", "member");
+    const inviteRes = await addSpaceMember(auth, otherSpaceId, member.did, "Other Member", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     const clientB = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -186,7 +187,7 @@ test.describe("sync: realtime broadcast delivery", () => {
   test("broadcast payload contains only type and spaceId, no record data", async () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Payload Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Payload Member", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -248,7 +249,7 @@ test.describe("sync: broadcast authorization for spaces", () => {
     // Add a member who listens, owner pushes — member should receive
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
-    const inviteRes = await addSpaceMember(ownerAuth, spaceId, member.did, "Temp", "member");
+    const inviteRes = await addSpaceMember(ownerAuth, spaceId, member.did, "Temp", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
 
     const client = new RealtimeTestClient(memberAuth.privateKeyBase64, memberAuth.did);
@@ -348,8 +349,8 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
 
     // Owner invites member (write access) and reader (read-only)
     const [inviteMember, inviteReader] = await Promise.all([
-      addSpaceMember(ownerAuth, spaceId, memberDid, "Member", "member"),
-      addSpaceMember(ownerAuth, spaceId, readerDid, "Reader", "reader"),
+      addSpaceMember(ownerAuth, spaceId, memberDid, "Member", SpaceCapabilities.WRITE),
+      addSpaceMember(ownerAuth, spaceId, readerDid, "Reader", SpaceCapabilities.READ),
     ]);
     expect(inviteMember.status).toBe(201);
     expect(inviteReader.status).toBe(201);
@@ -440,7 +441,7 @@ test.describe("sync: broadcast authorization for shared spaces", () => {
     const tempMember = await createAdminUserWithIdentity();
     const tempAuth = toAuthContext(tempMember);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, tempMember.did, "Temp Member", "member",
+      ownerAuth, spaceId, tempMember.did, "Temp Member", SpaceCapabilities.WRITE,
     );
     expect(inviteRes.status).toBe(201);
 

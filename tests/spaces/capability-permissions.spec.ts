@@ -15,6 +15,7 @@ import {
   signAndPushSpaceChanges,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -60,10 +61,10 @@ test.describe("spaces: capability-based permissions", () => {
     expect(createRes.status).toBe(201);
 
     // Add members with different roles
-    const addMemberRes = await addSpaceMember(ownerAuth, spaceId, memberDid, "Member User", "member");
+    const addMemberRes = await addSpaceMember(ownerAuth, spaceId, memberDid, "Member User", SpaceCapabilities.WRITE);
     expect(addMemberRes.status).toBe(201);
 
-    const addReaderRes = await addSpaceMember(ownerAuth, spaceId, readerDid, "Reader User", "reader");
+    const addReaderRes = await addSpaceMember(ownerAuth, spaceId, readerDid, "Reader User", SpaceCapabilities.READ);
     expect(addReaderRes.status).toBe(201);
   });
 
@@ -98,7 +99,7 @@ test.describe("spaces: capability-based permissions", () => {
 
   test("owner can invite new members", async () => {
     const tempUser = await createAdminUserWithIdentity();
-    const res = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Another Invite", "member");
+    const res = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Another Invite", SpaceCapabilities.WRITE);
     expect(res.status).toBe(201);
 
     // Cleanup
@@ -109,7 +110,7 @@ test.describe("spaces: capability-based permissions", () => {
     const body = JSON.stringify({
       did: "did:key:z6MkUnauthorizedMember",
       label: "Unauthorized Invite",
-      role: "member",
+      capability: SpaceCapabilities.WRITE,
     });
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -128,7 +129,7 @@ test.describe("spaces: capability-based permissions", () => {
     const body = JSON.stringify({
       did: "did:key:z6MkUnauthorizedReader",
       label: "Unauthorized Reader Invite",
-      role: "reader",
+      capability: SpaceCapabilities.READ,
     });
     const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
@@ -196,7 +197,7 @@ test.describe("spaces: capability-based permissions", () => {
 
   test("owner can remove a member", async () => {
     const tempUser = await createAdminUserWithIdentity();
-    const addRes = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Temp Member", "member");
+    const addRes = await addSpaceMember(ownerAuth, spaceId, tempUser.did, "Temp Member", SpaceCapabilities.WRITE);
     expect(addRes.status).toBe(201);
 
     const removeRes = await removeSpaceMember(ownerAuth, spaceId, tempUser.did);

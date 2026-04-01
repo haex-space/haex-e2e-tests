@@ -24,6 +24,7 @@ import {
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 // =============================================================================
 // Token Manipulation Attacks
@@ -174,7 +175,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, member.did, "Soon Removed", "member",
+      ownerAuth, spaceId, member.did, "Soon Removed", SpaceCapabilities.WRITE,
     );
     expect(inviteRes.status).toBe(201);
 
@@ -223,7 +224,7 @@ test.describe("security: race conditions and session lifecycle", () => {
     const member = await createAdminUserWithIdentity();
     const memberAuth = toAuthContext(member);
     const inviteRes = await addSpaceMember(
-      ownerAuth, spaceId, member.did, "Removed Then Reconnect", "member",
+      ownerAuth, spaceId, member.did, "Removed Then Reconnect", SpaceCapabilities.WRITE,
     );
     expect(inviteRes.status).toBe(201);
 

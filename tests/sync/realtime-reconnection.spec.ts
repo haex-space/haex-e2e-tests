@@ -12,6 +12,7 @@ import {
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
+import { SpaceCapabilities } from "@haex-space/ucan";
 
 /**
  * Tests for WebSocket reconnection behavior.
@@ -50,7 +51,7 @@ test.describe("sync: realtime reconnection", () => {
     const member = await createAdminUserWithIdentity();
     memberAuth = toAuthContext(member);
     memberDid = member.did;
-    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Recon Member", "member");
+    const inviteRes = await addSpaceMember(auth, spaceId, member.did, "Recon Member", SpaceCapabilities.WRITE);
     expect(inviteRes.status).toBe(201);
   });
 
