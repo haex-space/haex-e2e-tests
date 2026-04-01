@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "test": "DISPLAY=:1 playwright test",
+    "test:db": "bun test tests-db/",
     "test:headed": "playwright test --headed",
     "test:debug": "playwright test --debug",
     "test:ui": "playwright test --ui",
@@ -37,10 +38,13 @@
     "@haex-space/ucan": "0.1.9",
     "@haex-space/vault-sdk": "^2.8.0",
     "@playwright/test": "^1.49.0",
+    "@types/bun": "^1.3.11",
     "@types/node": "^25.0.3",
     "@types/pg": "^8.20.0",
     "@types/ws": "^8.5.13",
+    "drizzle-orm": "^0.45.2",
     "pg": "^8.20.0",
+    "postgres": "^3.4.8",
     "typescript": "^5.7.2",
     "ws": "^8.18.0"
   }

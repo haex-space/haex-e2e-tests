@@ -13,10 +13,13 @@ importers:
         version: 0.1.9
       '@haex-space/vault-sdk':
         specifier: ^2.8.0
-        version: 2.8.0(@types/pg@8.20.0)(pg@8.20.0)
+        version: 2.8.0(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)
       '@playwright/test':
         specifier: ^1.49.0
         version: 1.57.0
+      '@types/bun':
+        specifier: ^1.3.11
+        version: 1.3.11
       '@types/node':
         specifier: ^25.0.3
         version: 25.0.3
@@ -26,9 +29,15 @@ importers:
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)
       pg:
         specifier: ^8.20.0
         version: 8.20.0
+      postgres:
+        specifier: ^3.4.8
+        version: 3.4.8
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
@@ -74,6 +83,9 @@ packages:
     resolution: {integrity: sha512-6TyEnHgd6SArQO8UO2OMTxshln3QMWBtPGrOCgs3wVEmQmwyuNtB10IZMfmYDE0riwNR1cu4q+pPcxMVtaG3TA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@types/bun@1.3.11':
+    resolution: {integrity: sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg==}
 
   '@types/node@25.0.3':
     resolution: {integrity: sha512-W609buLVRVmeW693xKfzHeIV6nJGGz98uCPfeXI1ELMLXVeKYZ9m15fAMSaUPBHYLGFsVRcMmSCksQOrZV9BYA==}
@@ -147,6 +159,9 @@ packages:
   buffer@6.0.3:
     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
 
+  bun-types@1.3.11:
+    resolution: {integrity: sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg==}
+
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
     engines: {node: '>=7.0.0'}
@@ -178,8 +193,8 @@ packages:
     resolution: {integrity: sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==}
     engines: {node: '>= 8'}
 
-  drizzle-orm@0.45.1:
-    resolution: {integrity: sha512-Te0FOdKIistGNPMq2jscdqngBRfBpC8uMFVwqjf6gtTVJHIQ/dosgV/CLBU2N4ZJBsXL5savCba9b0YJskKdcA==}
+  drizzle-orm@0.45.2:
+    resolution: {integrity: sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==}
     peerDependencies:
       '@aws-sdk/client-rds-data': '>=3'
       '@cloudflare/workers-types': '>=4'
@@ -442,6 +457,10 @@ packages:
     resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
     engines: {node: '>=0.10.0'}
 
+  postgres@3.4.8:
+    resolution: {integrity: sha512-d+JFcLM17njZaOLkv6SCev7uoLaBtfK86vMUXhW1Z4glPWh4jozno9APvW/XKFJ3CCxVoC7OL38BqRydtu5nGg==}
+    engines: {node: '>=12'}
+
   process-nextick-args@2.0.1:
     resolution: {integrity: sha512-3ouUOpQhtgrbOa17J7+uxOTpITYWaGP7/AhoR3+A+/1e9skrzelGi/dXzEYyvbxubEF6Wn2ypscTKiKJFFn1ag==}
 
@@ -563,11 +582,11 @@ snapshots:
 
   '@haex-space/ucan@0.1.9': {}
 
-  '@haex-space/vault-sdk@2.8.0(@types/pg@8.20.0)(pg@8.20.0)':
+  '@haex-space/vault-sdk@2.8.0(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)':
     dependencies:
       archiver: 7.0.1
       commander: 14.0.3
-      drizzle-orm: 0.45.1(@types/pg@8.20.0)(pg@8.20.0)
+      drizzle-orm: 0.45.2(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)
       jszip: 3.10.1
     transitivePeerDependencies:
       - '@aws-sdk/client-rds-data'
@@ -617,6 +636,10 @@ snapshots:
   '@playwright/test@1.57.0':
     dependencies:
       playwright: 1.57.0
+
+  '@types/bun@1.3.11':
+    dependencies:
+      bun-types: 1.3.11
 
   '@types/node@25.0.3':
     dependencies:
@@ -690,6 +713,10 @@ snapshots:
       base64-js: 1.5.1
       ieee754: 1.2.1
 
+  bun-types@1.3.11:
+    dependencies:
+      '@types/node': 25.0.3
+
   color-convert@2.0.1:
     dependencies:
       color-name: 1.1.4
@@ -721,10 +748,12 @@ snapshots:
       shebang-command: 2.0.0
       which: 2.0.2
 
-  drizzle-orm@0.45.1(@types/pg@8.20.0)(pg@8.20.0):
+  drizzle-orm@0.45.2(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8):
     optionalDependencies:
       '@types/pg': 8.20.0
+      bun-types: 1.3.11
       pg: 8.20.0
+      postgres: 3.4.8
 
   eastasianwidth@0.2.0: {}
 
@@ -877,6 +906,8 @@ snapshots:
   postgres-interval@1.2.0:
     dependencies:
       xtend: 4.0.2
+
+  postgres@3.4.8: {}
 
   process-nextick-args@2.0.1: {}
 
