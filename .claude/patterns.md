@@ -211,3 +211,68 @@ if (!background) {
 }
 const extensionId = background.url().split("/")[2];
 ```
+
+## UI-Test-Patterns (Tauri WebDriver)
+
+### Pinia Store-Zugriff
+```typescript
+// RICHTIG: Über Vue App Instance
+await vault.executeScript(`
+  const app = document.getElementById('__nuxt')?.__vue_app__;
+  const pinia = app?.config?.globalProperties?.$pinia;
+  const store = pinia?._s?.get('storeName');
+`);
+
+// FALSCH: window.__pinia__ existiert nicht in Nuxt 3
+```
+
+### Settings-Fenster öffnen
+```typescript
+// Über windowManager Pinia Store (zuverlässiger als UI-Klick)
+await vault.executeScript(`
+  const app = document.getElementById('__nuxt')?.__vue_app__;
+  const pinia = app?.config?.globalProperties?.$pinia;
+  const wm = pinia?._s?.get('windowManager');
+  wm?.openWindowAsync({
+    sourceId: 'settings', type: 'system',
+    params: { category: 'spaces' },
+  });
+`);
+await wait(2000);
+// Dann Kategorie klicken
+await vault.executeScript(`
+  document.querySelector('[data-testid="settings-category-spaces"]')?.click();
+`);
+```
+
+### Icon-Only Buttons finden (kein textContent)
+```typescript
+// Über title-Attribut statt textContent
+const btn = [...item.querySelectorAll('button')].find(b => {
+  const title = (b.getAttribute('title') || '').toLowerCase();
+  return title.includes('invite') || title.includes('einlad');
+});
+```
+
+### Cross-Container: IMMER executeScript statt findElement/sendKeys
+```typescript
+// Vault B: findElement/sendKeys nutzen fetch → scheitert cross-container
+// IMMER executeScript verwenden:
+await vault.executeScript(`
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+  const input = document.querySelector('input[type="password"]');
+  setter.call(input, 'password');
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+`);
+```
+
+### Dialoge scopen
+```typescript
+// Nuxt UI Modals rendern mit role="dialog"
+await vault.executeScript(`
+  const dialog = document.querySelector('[role="dialog"]');
+  const btn = [...dialog.querySelectorAll('button')]
+    .find(b => b.textContent?.includes('Create'));
+  btn?.click();
+`);
+```

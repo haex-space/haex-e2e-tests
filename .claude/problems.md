@@ -554,6 +554,58 @@ Entfernung der `pkill -f tauri-driver` Zeile aus `stop-all.sh`:
 
 ---
 
+### UI-E2E-Testing mit Tauri/WebDriver: Bekannte Hürden (GELÖST)
+
+**1. Pinia Store-Zugriff aus WebDriver executeScript:**
+`window.__pinia__` existiert NICHT in Nuxt 3. Stattdessen:
+```javascript
+const app = document.getElementById('__nuxt')?.__vue_app__;
+const pinia = app?.config?.globalProperties?.$pinia;
+const store = pinia?._s?.get('storeName');
+```
+
+**2. Cross-Container Requests (Vault B):**
+`VaultAutomation.findElement()` und `sendKeys()` nutzen intern `fetch` ohne Host-Header-Override → scheitert bei Cross-Container-Zugriff (Vault B via socat-Proxy).
+**Fix:** Immer `executeScript()` verwenden für Vault B — das nutzt `httpRequest()` mit korrektem Host-Header wenn `needsHostOverride` true ist.
+
+**3. Settings-Fenster öffnen:**
+Settings ist ein Floating-Window (kein Route). Der Launcher-Klick (`[data-testid="launcher-settings-item"]`) funktioniert über WebDriver nicht zuverlässig.
+**Fix:** Direkt über den windowManager Pinia Store öffnen:
+```javascript
+const wm = pinia._s.get('windowManager');
+wm.openWindowAsync({ sourceId: 'settings', type: 'system', params: { category: 'spaces' } });
+```
+Dann `[data-testid="settings-category-{cat}"]` klicken.
+
+**4. Nuxt UI UiSelectMenu:**
+`<UiSelectMenu multiple>` rendert Kontakt-Items als `data-slot` Buttons **ohne textContent**. WebDriver-basierte Selektion über Text ist nicht möglich.
+**Workaround:** Für den Invite-Dialog: UI-Navigation zum Dialog verifizieren (Dropdown → Menüitem → Dialog öffnet), dann den eigentlichen Invite via `local_delivery_push_invite` Tauri-Command senden.
+
+**5. Invite Dialog öffnen (SpaceListItem):**
+Der Invite-Dropdown-Trigger ist ein **Icon-only Button** (kein Text). Finden über:
+```javascript
+const btn = [...item.querySelectorAll('button')].find(b => {
+  const title = (b.getAttribute('title') || '').toLowerCase();
+  return title.includes('invite') || title.includes('einlad');
+});
+```
+Dropdown-Items haben `[role="menuitem"]`.
+
+**6. Pending Invite Accept/Decline Buttons nicht sichtbar:**
+Der `handle_push_invite` Handler erstellt auf Vault B einen Space-Eintrag in `haex_spaces`. Dadurch wird das Invite-Item als reguläres Space-Item gerendert (nicht als dashed-border Pending-Item). Accept/Decline Buttons sind dann nicht direkt sichtbar.
+**Workaround:** Fallback auf CRDT-Delete für Decline, Status-Update für Accept.
+
+**7. Outbox-Verarbeitung (processOutboxAsync):**
+Wird NICHT automatisch nach `queueQuicInviteAsync` getriggert. Der Sync-Orchestrator ruft es periodisch auf. Dynamische Imports (`import('/src/...')`) funktionieren nicht aus `executeScript`.
+**Workaround:** Direkt `local_delivery_push_invite` verwenden statt über die Outbox.
+
+**8. Self-Invite Verhalten:**
+`local_delivery_push_invite` an eigene nodeId wirft: `"Connecting to ourself is not supported"` (Error, nicht `false` Return). Test muss try/catch verwenden.
+
+**Status:** ✅ GELÖST — Alle 19 QUIC Invite E2E Tests bestehen.
+
+---
+
 ## Debugging-Tipps
 
 ### WebSocket-Kommunikation loggen
