@@ -607,4 +607,66 @@ class RealtimeTestClient {
 | `tests/sync/connection-flow.spec.ts` | Supabase Realtime → RealtimeTestClient |
 | `package.json` | `@supabase/supabase-js` Dependency entfernt |
 
+---
+
+## 2026-04-04 - QUIC Invite E2E Tests: Komplett-Rewrite als UI-Flow
+
+### Durchgeführt
+- `quic-invite-flow.spec.ts` komplett neu geschrieben als UI-driven Tests
+- Alle Benutzerinteraktionen gehen durch die echte UI (nicht über Tauri-Commands)
+- UI-Helper-Funktionen für alle Settings-Interaktionen erstellt
+
+### UI-driven Aktionen
+| Aktion | Methode | Helper-Funktion |
+|--------|---------|-----------------|
+| Vault erstellen/öffnen | UI | `initializeVaultViaUI()` |
+| P2P Endpoint starten | Settings → P2P → Connection → Start | `startP2PEndpointViaUI()` |
+| Space erstellen | Settings → Spaces → Create Dialog | `createLocalSpaceViaUI()` |
+| Invite senden | SpaceDetail → Invite Dialog (Contact Mode) | `sendInviteViaUI()` |
+| Invite annehmen | Spaces → Pending Item → Accept Button | `acceptInviteViaUI()` |
+| Invite ablehnen | Spaces → Pending Item → Decline Button | `declineInviteViaUI()` |
+| Policy ändern | Spaces → Policy Dropdown | `setInvitePolicyViaUI()` |
+
+### SQL/Commands nur für
+- Contact-Registrierung (kein UI für DID-basierte Kontakt-Hinzufügung)
+- Identity-Loading (Infrastructure)
+- Device-Registrierung im Space (falls UI es nicht automatisch macht)
+- Self-Invite-Test (via UI nicht möglich — man kann sich selbst nicht einladen)
+- Verifikations-Assertions (DB-State prüfen)
+
+### UI-Selektoren (aus haex-vault Vue-Komponenten)
+- Settings-Navigation: `[data-testid="settings-category-{cat}"]`
+- Settings öffnen: `[data-testid="launcher-settings-item"]` + Pinia-Fallback
+- Dialoge: `[role="dialog"]` als Scope für Formular-Interaktionen
+- Dropdowns: `[role="combobox"]` trigger, `[role="option"]` Auswahl
+- Checkboxes: Label-basierte Suche (EN/DE)
+- Buttons: Text-basierte Suche mit EN/DE Fallback
+
+### Wichtige Erkenntnisse
+- Settings ist ein Floating Window (kein Route), geöffnet via WindowManager
+- `initializeVaultViaUI` darf NIEMALS `location.reload()` nutzen (zerstört WebDriver-Session)
+- `sql_select_with_crdt` gibt `Vec<Vec<JsonValue>>` zurück — `sqlQuery<T>()` mappt zu Objekten
+- Invite-Outbox: `queueQuicInviteAsync` → `processOutboxAsync` → `local_delivery_push_invite`
+- Backoff startet bei 0s, daher sofortige Verarbeitung nach Queuing
+- Policy-Check passiert auf der Empfängerseite
+
+### Test-Struktur (12 Tests)
+1. Vault A öffnen (UI)
+2. Vault B öffnen (UI)
+3. P2P auf A starten (UI)
+4. P2P auf B starten (UI)
+5. Identities laden (SQL)
+6. B als Kontakt auf A registrieren (SQL)
+7. Lokalen Space auf A erstellen (UI)
+8. Device-Registrierung prüfen/ergänzen
+9. Invite von A → B senden (UI Dialog)
+10. Pending Invite auf B prüfen (UI + SQL)
+11. Invite ablehnen (UI)
+12. A's Space noch aktiv prüfen
+13. Zweiten Invite mit Write senden (UI)
+14. Invite annehmen (UI)
+15. Self-Invite Prevention (Command)
+16. Policy auf "nobody" setzen (UI), Rejection prüfen
+17. Logs prüfen (SQL)
+
 <!-- Neue Sessions hier eintragen -->
