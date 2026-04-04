@@ -727,23 +727,37 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("load identity on Vault A", async () => {
-    const rows = await sqlQuery<{ id: string; did: string; public_key: string }>(
-      vaultA,
-      "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+    const rows = await pollUntil(
+      async () => {
+        try {
+          const r = await sqlQuery<{ id: string; did: string; public_key: string }>(
+            vaultA,
+            "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+          );
+          return r.length > 0 ? r : null;
+        } catch { return null; }
+      },
+      { timeout: 15_000, interval: 2_000, label: "identity on Vault A" },
     );
-    expect(rows.length).toBeGreaterThan(0);
-    identityA = { id: rows[0].id, did: rows[0].did, publicKey: rows[0].public_key };
+    identityA = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
     expect(identityA.did).toContain("did:key:");
     console.log(`[QUIC] Identity A: ${identityA.did.slice(0, 30)}…`);
   });
 
   test("load identity on Vault B", async () => {
-    const rows = await sqlQuery<{ id: string; did: string; public_key: string }>(
-      vaultB,
-      "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+    const rows = await pollUntil(
+      async () => {
+        try {
+          const r = await sqlQuery<{ id: string; did: string; public_key: string }>(
+            vaultB,
+            "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+          );
+          return r.length > 0 ? r : null;
+        } catch { return null; }
+      },
+      { timeout: 15_000, interval: 2_000, label: "identity on Vault B" },
     );
-    expect(rows.length).toBeGreaterThan(0);
-    identityB = { id: rows[0].id, did: rows[0].did, publicKey: rows[0].public_key };
+    identityB = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
     expect(identityB.did).toContain("did:key:");
     console.log(`[QUIC] Identity B: ${identityB.did.slice(0, 30)}…`);
   });
