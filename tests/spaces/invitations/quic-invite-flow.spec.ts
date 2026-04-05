@@ -498,13 +498,24 @@ async function sendInviteViaUI(
     await wait(500);
   }
 
-  // 5. Send the actual invite via local_delivery_push_invite (real QUIC P2P transport)
+  // 5. Create the invite token on the leader so ClaimInvite can find it
+  const tokenId = await vault.invokeTauriCommand<string>("local_delivery_create_invite", {
+    spaceId,
+    targetDid: null,
+    capability: capabilities[capabilities.length - 1] || "space/read",
+    maxUses: 1,
+    expiresInSeconds: 7 * 24 * 3600,
+    includeHistory: false,
+  });
+  console.log(`[QUIC] Created invite token: ${tokenId.slice(0, 8)}…`);
+
+  // 6. Send the invite via local_delivery_push_invite (real QUIC P2P transport)
   const accepted = await vault.invokeTauriCommand<boolean>("local_delivery_push_invite", {
     targetEndpointId: targetEndpoint,
     spaceId,
     spaceName,
     spaceType: "local",
-    tokenId: crypto.randomUUID(),
+    tokenId,
     capabilities,
     includeHistory: false,
     inviterDid,
