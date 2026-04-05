@@ -397,36 +397,26 @@ async function createLocalSpaceViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(500);
 
-  // Click "Create" / "Erstellen" in the Spaces header (opens the dialog)
-  await clickButton(vault, "Create", "Erstellen");
+  // Click "Create" in the Spaces header (opens the dialog)
+  await clickTestId(vault, "spaces-create-trigger");
   await wait(800); // drawer animation
 
   // Fill the create-space dialog
-  // 1. Space name input
+  // 1. Space name input (data-testid is on the UiInput wrapper div)
   await setInputValue(
     vault,
     'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])',
     spaceName,
-    '[role="dialog"]',
+    '[data-testid="spaces-create-name"]',
   );
   await wait(300);
 
-  // 2. Click "Local" / "Lokal" type button
-  await vault.executeScript(`
-    const dialog = document.querySelector('[role="dialog"]');
-    if (!dialog) return;
-    // The type selector buttons contain icon + text, look for Local/Lokal
-    const btns = [...dialog.querySelectorAll('div[class*="cursor-pointer"], div[class*="rounded-lg"][class*="border"]')];
-    const local = btns.find(b => {
-      const t = b.textContent?.trim();
-      return t?.includes('Local') || t?.includes('Lokal');
-    });
-    if (local) local.click();
-  `);
+  // 2. Click "Local" type button
+  await clickTestId(vault, "spaces-create-type-local");
   await wait(300);
 
   // 3. Click the dialog's submit button
-  await clickButtonIn(vault, '[role="dialog"]', "Create", "Erstellen");
+  await clickTestId(vault, "spaces-create-submit");
   await wait(1500); // space creation + list refresh
 
   // Read the spaceId from DB
