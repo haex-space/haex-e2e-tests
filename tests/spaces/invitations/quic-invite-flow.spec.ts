@@ -453,26 +453,13 @@ async function sendInviteViaUI(
   spaceName: string,
   spaceEndpoints: string[],
   capabilities: string[] = ["space/read"],
+  contactLabel: string = "Vault B Contact",
 ): Promise<void> {
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // 1. Navigate the invite UI: space item → invite dropdown → "Invite contact" → dialog opens
-  await vault.executeScript(`
-    const name = ${JSON.stringify(spaceName)};
-    const items = [...document.querySelectorAll('div')].filter(el => {
-      const c = el.className || '';
-      return c.includes('p-3') && c.includes('rounded-lg') && el.textContent?.includes(name)
-        && !c.includes('dashed');
-    });
-    if (items.length === 0) return;
-    const item = items[items.length - 1];
-    const btn = [...item.querySelectorAll('button')].find(b => {
-      const title = (b.getAttribute('title') || '').toLowerCase();
-      return title.includes('invite') || title.includes('einlad');
-    });
-    if (btn) btn.click();
-  `);
+  // 1. Click the invite trigger button on the space list item
+  await clickTestId(vault, "space-invite-trigger");
   await wait(500);
 
   // 2. Click "Invite contact" in the dropdown menu
@@ -487,45 +474,38 @@ async function sendInviteViaUI(
   `);
   await wait(1000);
 
-  // 3. Verify dialog opened (UI verification)
   const dialogOpen = await elementExists(vault, '[role="dialog"]');
   console.log(`[QUIC] Invite dialog opened: ${dialogOpen}, menu clicked: ${menuClicked}`);
 
-  // 4. Close the dialog — we'll send the invite via QUIC command directly
-  //    (UiSelectMenu renders contacts without textContent, making WebDriver selection unreliable)
-  if (dialogOpen) {
-    await clickButtonIn(vault, '[role="dialog"]', "Cancel", "Abbrechen", "Close", "Schließen");
-    await wait(500);
+  // 3. Open the contact select dropdown and pick the contact by label
+  await clickTestId(vault, "invite-contact-select");
+  await wait(500);
+
+  const contactSelected = await vault.executeScript<boolean>(`
+    const label = ${JSON.stringify(contactLabel)};
+    const items = [...document.querySelectorAll('[data-slot="item"]')];
+    const match = items.find(el => el.textContent?.includes(label));
+    if (match) { match.click(); return true; }
+    return false;
+  `);
+  console.log(`[QUIC] Contact selected: ${contactSelected}`);
+  await wait(300);
+
+  // Close the dropdown by clicking elsewhere
+  await vault.executeScript(`document.body.click()`);
+  await wait(300);
+
+  // 4. Set capabilities if write is requested
+  if (capabilities.includes("space/write")) {
+    await clickTestId(vault, "invite-cap-write");
+    await wait(200);
   }
 
-  // 5. Create the invite token on the leader so ClaimInvite can find it
-  const tokenId = await vault.invokeTauriCommand<string>("local_delivery_create_invite", {
-    spaceId,
-    targetDid: null,
-    capability: capabilities[capabilities.length - 1] || "space/read",
-    maxUses: 1,
-    expiresInSeconds: 7 * 24 * 3600,
-    includeHistory: false,
-  });
-  console.log(`[QUIC] Created invite token: ${tokenId.slice(0, 8)}…`);
+  // 5. Click the submit button
+  await clickTestId(vault, "invite-submit");
+  await wait(2000);
 
-  // 6. Send the invite via local_delivery_push_invite (real QUIC P2P transport)
-  const accepted = await vault.invokeTauriCommand<boolean>("local_delivery_push_invite", {
-    targetEndpointId: targetEndpoint,
-    spaceId,
-    spaceName,
-    spaceType: "local",
-    tokenId,
-    capabilities,
-    includeHistory: false,
-    inviterDid,
-    inviterLabel: "Vault A",
-    spaceEndpoints,
-    originUrl: null,
-    expiresAt: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
-  });
-  expect(accepted).toBe(true);
-  console.log(`[QUIC] Invite sent via QUIC: accepted=${accepted}`);
+  console.log(`[QUIC] Invite sent via UI dialog`);
 }
 
 /**
@@ -778,59 +758,51 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Step 4 — Register Vault B as contact on Vault A
-  //          (SQL — no UI for adding contacts by DID + endpoint ID)
+  // Step 4 — Share Vault B's identity and import as contact on Vault A
+  //          Uses the JSON import flow in Settings → Contacts
   // ═══════════════════════════════════════════════════════════════════════════
 
-  test("register Vault B as contact on Vault A", async () => {
-    // Check if contact already exists (from a previous test run)
-    let contacts = await sqlQuery<{ id: string }>(
-      vaultA,
-      `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
-      [identityB.did],
-    );
+  test("register Vault B as contact on Vault A via JSON import", async () => {
+    // Build the identity JSON payload (same format as ShareIdentityDialog / QR export)
+    const identityPayload = JSON.stringify({
+      v: 2,
+      publicKey: identityB.publicKey,
+      label: contactLabel,
+      claims: [{ type: "endpointId", value: nodeIdB }],
+    });
 
-    let contactId: string;
-    if (contacts.length > 0) {
-      contactId = contacts[0].id;
-      // Update label in case it changed
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `UPDATE haex_identities SET label = ?1 WHERE id = ?2`,
-        params: [contactLabel, contactId],
-      });
-    } else {
-      contactId = crypto.randomUUID();
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT INTO haex_identities (id, did, label, public_key)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [contactId, identityB.did, contactLabel, identityB.publicKey],
-      });
-    }
+    // Navigate to Settings → Contacts
+    await openSettingsCategory(vaultA, "contacts");
+    await wait(500);
 
-    // Upsert endpoint claim so the invite dialog knows where to send QUIC invites
-    const existingClaims = await sqlQuery<{ id: string }>(
-      vaultA,
-      `SELECT id FROM haex_identity_claims WHERE identity_id = ?1 AND type = 'endpointId'`,
-      [contactId],
-    );
-    if (existingClaims.length > 0) {
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `UPDATE haex_identity_claims SET value = ?1 WHERE id = ?2`,
-        params: [nodeIdB, existingClaims[0].id],
-      });
-    } else {
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT INTO haex_identity_claims (id, identity_id, type, value)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [crypto.randomUUID(), contactId, "endpointId", nodeIdB],
-      });
-    }
+    // Click "Add" button
+    await clickTestId(vaultA, "contacts-add-trigger");
+    await wait(800);
 
-    // Verify
-    contacts = await sqlQuery<{ id: string }>(
+    // The "From file" tab is selected by default — paste the JSON
+    await vaultA.executeScript(`
+      const textarea = document.querySelector('[data-testid="contacts-import-json"] textarea');
+      if (textarea) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+        setter.call(textarea, ${JSON.stringify(identityPayload)});
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    `);
+    await wait(300);
+
+    // Click "Preview"
+    await clickTestId(vaultA, "contacts-import-preview");
+    await wait(500);
+
+    // Click "Add" to confirm import
+    await clickTestId(vaultA, "contacts-import-submit");
+    await wait(1000);
+
+    // Verify contact exists in DB
+    const contacts = await sqlQuery<{ id: string }>(
       vaultA,
-      `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
-      [identityB.did],
+      `SELECT id FROM haex_identities WHERE public_key = ?1 AND private_key IS NULL`,
+      [identityB.publicKey],
     );
     expect(contacts.length).toBe(1);
   });
