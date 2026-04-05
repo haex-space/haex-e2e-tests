@@ -776,26 +776,34 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     await wait(500);
 
     // Click "Add" button
-    await clickTestId(vaultA, "contacts-add-trigger");
+    const addClicked = await clickTestId(vaultA, "contacts-add-trigger");
+    console.log(`[QUIC] Add contact button clicked: ${addClicked}`);
     await wait(800);
 
-    // The "From file" tab is selected by default — paste the JSON
-    await vaultA.executeScript(`
-      const textarea = document.querySelector('[data-testid="contacts-import-json"] textarea');
-      if (textarea) {
-        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-        setter.call(textarea, ${JSON.stringify(identityPayload)});
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-      }
+    const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
+    console.log(`[QUIC] Add contact dialog open: ${dialogOpen}`);
+
+    // The "From file" tab is selected by default — paste the JSON into the textarea
+    const pasted = await vaultA.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="contacts-import-json"]');
+      const textarea = el?.tagName === 'TEXTAREA' ? el : el?.querySelector('textarea');
+      if (!textarea) return false;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+      setter.call(textarea, ${JSON.stringify(identityPayload)});
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
     `);
+    console.log(`[QUIC] JSON pasted into textarea: ${pasted}`);
     await wait(300);
 
     // Click "Preview"
-    await clickTestId(vaultA, "contacts-import-preview");
+    const previewClicked = await clickTestId(vaultA, "contacts-import-preview");
+    console.log(`[QUIC] Preview button clicked: ${previewClicked}`);
     await wait(500);
 
     // Click "Add" to confirm import
-    await clickTestId(vaultA, "contacts-import-submit");
+    const submitClicked = await clickTestId(vaultA, "contacts-import-submit");
+    console.log(`[QUIC] Import submit clicked: ${submitClicked}`);
     await wait(1000);
 
     // Verify contact exists in DB
