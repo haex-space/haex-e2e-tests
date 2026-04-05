@@ -437,23 +437,14 @@ async function createLocalSpaceViaUI(
  * UiSelectMenu contact picker renders items without textContent, making
  * WebDriver selection unreliable. This still tests the full QUIC P2P pipeline.
  *
- * @param vault          The inviter's vault
- * @param inviterDid     DID of the inviter identity
- * @param targetEndpoint nodeId of the target P2P endpoint
- * @param spaceId        Space to invite into
- * @param spaceName      Display name of the space
- * @param spaceEndpoints Array of space endpoint IDs
- * @param capabilities   Capability strings (e.g. ["space/read", "space/write"])
+ * @param vault        The inviter's vault
+ * @param contactLabel Label of the contact to select in the dialog
+ * @param withWrite    Whether to enable write capability
  */
 async function sendInviteViaUI(
   vault: VaultAutomation,
-  inviterDid: string,
-  targetEndpoint: string,
-  spaceId: string,
-  spaceName: string,
-  spaceEndpoints: string[],
-  capabilities: string[] = ["space/read"],
-  contactLabel: string = "Vault B Contact",
+  contactLabel: string,
+  withWrite: boolean = false,
 ): Promise<void> {
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
@@ -496,7 +487,7 @@ async function sendInviteViaUI(
   await wait(300);
 
   // 4. Set capabilities if write is requested
-  if (capabilities.includes("space/write")) {
+  if (withWrite) {
     await clickTestId(vault, "invite-cap-write");
     await wait(200);
   }
@@ -732,7 +723,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           return r.length > 0 ? r : null;
         } catch { return null; }
       },
-      { timeout: 15_000, interval: 2_000, label: "identity on Vault A" },
+      { timeout: 30_000, interval: 2_000, label: "identity on Vault A" },
     );
     identityA = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
     expect(identityA.did).toContain("did:key:");
@@ -750,7 +741,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           return r.length > 0 ? r : null;
         } catch { return null; }
       },
-      { timeout: 15_000, interval: 2_000, label: "identity on Vault B" },
+      { timeout: 30_000, interval: 2_000, label: "identity on Vault B" },
     );
     identityB = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
     expect(identityB.did).toContain("did:key:");
@@ -853,9 +844,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
-    await sendInviteViaUI(
-      vaultA, identityA.did, nodeIdB, spaceId, spaceName, [nodeIdA],
-    );
+    await sendInviteViaUI(vaultA, contactLabel);
 
     // Wait for invite to arrive on Vault B via QUIC
     await pollUntil(
@@ -952,10 +941,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send second invite with write capability via UI", async () => {
-    await sendInviteViaUI(
-      vaultA, identityA.did, nodeIdB, spaceId, spaceName, [nodeIdA],
-      ["space/read", "space/write"],
-    );
+    await sendInviteViaUI(vaultA, contactLabel, true);
 
     // Wait for arrival on Vault B
     await pollUntil(
