@@ -554,7 +554,21 @@ async function acceptInviteViaUI(
       params: [new Date().toISOString(), spaceIdForFallback],
     });
   }
-  await wait(2000);
+
+  // Accept triggers an async QUIC ClaimInvite roundtrip — poll until DB reflects it
+  await pollUntil(
+    async () => {
+      const rows = await sqlQuery<{ status: string }>(
+        vault,
+        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+        [spaceIdForFallback],
+      );
+      return rows.length > 0 && rows[0].status === "accepted";
+    },
+    { timeout: 15_000, interval: 500, label: "invite accepted" },
+  ).catch(() => {
+    console.log("[QUIC] Invite not yet accepted after polling — proceeding");
+  });
 }
 
 /**
