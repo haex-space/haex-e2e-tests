@@ -774,15 +774,21 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
     console.log(`[QUIC] Add contact dialog open: ${dialogOpen}`);
 
-    // Click the "From file" tab explicitly (UTabs might default to first tab "Scan")
-    await vaultA.executeScript(`
-      const tabs = [...document.querySelectorAll('[role="tab"]')];
+    // Click the "From file" tab explicitly
+    // reka-ui TabsTrigger activates on mousedown.left, NOT click — .click() won't work
+    const tabSwitched = await vaultA.executeScript<boolean>(`
+      const container = document.querySelector('[data-testid="contacts-add-tabs"]');
+      if (!container) return false;
+      const tabs = [...container.querySelectorAll('[role="tab"]')];
       const fileTab = tabs.find(t => {
         const text = t.textContent?.toLowerCase() || '';
         return text.includes('file') || text.includes('datei');
       });
-      if (fileTab) fileTab.click();
+      if (!fileTab) return false;
+      fileTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+      return true;
     `);
+    console.log(`[QUIC] File tab switched: ${tabSwitched}`);
     await wait(300);
 
     // Paste JSON into the textarea
