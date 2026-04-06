@@ -774,7 +774,18 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
     console.log(`[QUIC] Add contact dialog open: ${dialogOpen}`);
 
-    // The "From file" tab is selected by default — paste the JSON into the textarea
+    // Click the "From file" tab explicitly (UTabs might default to first tab "Scan")
+    await vaultA.executeScript(`
+      const tabs = [...document.querySelectorAll('[role="tab"]')];
+      const fileTab = tabs.find(t => {
+        const text = t.textContent?.toLowerCase() || '';
+        return text.includes('file') || text.includes('datei');
+      });
+      if (fileTab) fileTab.click();
+    `);
+    await wait(300);
+
+    // Paste JSON into the textarea
     const pasted = await vaultA.executeScript<boolean>(`
       const el = document.querySelector('[data-testid="contacts-import-json"]');
       const textarea = el?.tagName === 'TEXTAREA' ? el : el?.querySelector('textarea');
