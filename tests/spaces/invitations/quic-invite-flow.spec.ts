@@ -874,21 +874,15 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite from Vault A to Vault B via UI", async () => {
     await sendInviteViaUI(vaultA, contactLabel);
 
-    // Debug: capture console errors from the app
-    const consoleErrors = await vaultA.executeScript<string[]>(`
-      return window.__e2eConsoleErrors || [];
+    // Debug: read app logs from the logging store
+    const appLogs = await vaultA.executeScript<string[]>(`
+      try {
+        const logs = JSON.parse(localStorage.getItem('haex-logs') || '[]');
+        return logs.filter(l => l.includes('QUIC') || l.includes('INVITE') || l.includes('SPACES:INVITE')).slice(-20);
+      } catch { return []; }
     `);
-    if (consoleErrors?.length > 0) {
-      console.log('[QUIC] App console errors:', JSON.stringify(consoleErrors));
-    }
-
-    // Debug: check if a toast error appeared
-    const toastError = await vaultA.executeScript<string | null>(`
-      const toast = document.querySelector('[class*="toast"][class*="error"], [data-type="error"]');
-      return toast?.textContent || null;
-    `);
-    if (toastError) {
-      console.log('[QUIC] Toast error visible:', toastError);
+    if (appLogs?.length > 0) {
+      for (const l of appLogs) console.log('[APP]', l);
     }
 
     // Debug: check outbox and token status on Vault A
