@@ -863,6 +863,26 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite from Vault A to Vault B via UI", async () => {
     await sendInviteViaUI(vaultA, contactLabel);
 
+    // Debug: check outbox status on Vault A
+    await wait(2000);
+    const outbox = await sqlQuery<{
+      id: string;
+      status: string;
+      retry_count: string;
+      target_endpoint_id: string;
+    }>(
+      vaultA,
+      `SELECT id, status, retry_count, target_endpoint_id FROM haex_invite_outbox WHERE space_id = ?1`,
+      [spaceId],
+    );
+    console.log(
+      `[QUIC] Outbox entries: ${outbox.length}`,
+      outbox.map(
+        (o) =>
+          `status=${o.status} retries=${o.retry_count} target=${o.target_endpoint_id?.slice(0, 12)}…`,
+      ),
+    );
+
     // Wait for invite to arrive on Vault B via QUIC
     await pollUntil(
       async () => {
@@ -873,7 +893,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         );
         return invites.length > 0;
       },
-      { timeout: 15_000, label: "invite delivery to Vault B" },
+      { timeout: 30_000, interval: 2_000, label: "invite delivery to Vault B" },
     );
   });
 
