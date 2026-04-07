@@ -872,18 +872,25 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
+    // Intercept console logs to capture app-side logging
+    await vaultA.executeScript(`
+      window.__capturedLogs = [];
+      const origLog = console.log;
+      const origWarn = console.warn;
+      const origError = console.error;
+      console.log = (...args) => { window.__capturedLogs.push('LOG: ' + args.join(' ')); origLog.apply(console, args); };
+      console.warn = (...args) => { window.__capturedLogs.push('WARN: ' + args.join(' ')); origWarn.apply(console, args); };
+      console.error = (...args) => { window.__capturedLogs.push('ERR: ' + args.join(' ')); origError.apply(console, args); };
+    `);
+
     await sendInviteViaUI(vaultA, contactLabel);
 
-    // Debug: read app logs from the logging store
-    const appLogs = await vaultA.executeScript<string[]>(`
-      try {
-        const logs = JSON.parse(localStorage.getItem('haex-logs') || '[]');
-        return logs.filter(l => l.includes('QUIC') || l.includes('INVITE') || l.includes('SPACES:INVITE')).slice(-20);
-      } catch { return []; }
-    `);
-    if (appLogs?.length > 0) {
-      for (const l of appLogs) console.log('[APP]', l);
-    }
+    // Dump captured app logs
+    const capturedLogs = await vaultA.executeScript<string[]>(`return window.__capturedLogs || [];`);
+    const inviteLogs = capturedLogs?.filter(l =>
+      l.includes('INVITE') || l.includes('QUIC') || l.includes('SPACES') || l.includes('endpoint') || l.includes('SQL Error')
+    ) || [];
+    for (const l of inviteLogs) console.log(`[APP] ${l}`);
 
     // Debug: check outbox and token status on Vault A
     await wait(3000);
