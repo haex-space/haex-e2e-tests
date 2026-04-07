@@ -874,6 +874,23 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite from Vault A to Vault B via UI", async () => {
     await sendInviteViaUI(vaultA, contactLabel);
 
+    // Debug: capture console errors from the app
+    const consoleErrors = await vaultA.executeScript<string[]>(`
+      return window.__e2eConsoleErrors || [];
+    `);
+    if (consoleErrors?.length > 0) {
+      console.log('[QUIC] App console errors:', JSON.stringify(consoleErrors));
+    }
+
+    // Debug: check if a toast error appeared
+    const toastError = await vaultA.executeScript<string | null>(`
+      const toast = document.querySelector('[class*="toast"][class*="error"], [data-type="error"]');
+      return toast?.textContent || null;
+    `);
+    if (toastError) {
+      console.log('[QUIC] Toast error visible:', toastError);
+    }
+
     // Debug: check outbox and token status on Vault A
     await wait(3000);
 
