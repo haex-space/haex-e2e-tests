@@ -355,6 +355,25 @@ services:
       - e2e-network
 
   # ===========================================================================
+  # IROH RELAY (local P2P relay for QUIC connections between vaults)
+  # Docker bridge networks block mDNS multicast, so vaults need a relay
+  # to discover each other. Dev mode runs plain HTTP on port 3340.
+  # ===========================================================================
+
+  iroh-relay:
+    image: n0computer/iroh-relay:v0.97.0
+    container_name: haex_e2e_iroh_relay
+    command: ["--dev"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3340/generate_204 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    networks:
+      - e2e-network
+
+  # ===========================================================================
   # VAULT TEST INSTANCES
   # ===========================================================================
 
@@ -390,6 +409,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=A
+      # Local iroh relay for P2P discovery (mDNS doesn't work in Docker bridge)
+      - HAEX_RELAY_URL=http://iroh-relay:3340
     volumes:
       - test-results:/app/test-results
     shm_size: "2gb"
@@ -397,6 +418,8 @@ services:
       sync-server:
         condition: service_healthy
       marketplace:
+        condition: service_healthy
+      iroh-relay:
         condition: service_healthy
     networks:
       - e2e-network
@@ -430,11 +453,15 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=B
+      # Local iroh relay for P2P discovery (mDNS doesn't work in Docker bridge)
+      - HAEX_RELAY_URL=http://iroh-relay:3340
     shm_size: "2gb"
     depends_on:
       sync-server:
         condition: service_healthy
       marketplace:
+        condition: service_healthy
+      iroh-relay:
         condition: service_healthy
     networks:
       - e2e-network
