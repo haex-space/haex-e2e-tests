@@ -821,6 +821,17 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       [identityB.publicKey],
     );
     expect(contacts.length).toBe(1);
+
+    // Verify endpointId claim was saved
+    const claims = await sqlQuery<{ type: string; value: string }>(
+      vaultA,
+      `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
+      [contacts[0].id],
+    );
+    console.log(`[QUIC] Contact claims: ${JSON.stringify(claims)}`);
+    const epClaim = claims.find((c) => c.type === "endpointId");
+    expect(epClaim).toBeDefined();
+    expect(epClaim!.value).toBe(nodeIdB);
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -863,25 +874,51 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite from Vault A to Vault B via UI", async () => {
     await sendInviteViaUI(vaultA, contactLabel);
 
-    // Debug: check outbox status on Vault A
-    await wait(2000);
+    // Debug: check outbox and token status on Vault A
+    await wait(3000);
+
+    const tokens = await sqlQuery<{ id: string; capabilities: string }>(
+      vaultA,
+      `SELECT id, capabilities FROM haex_invite_tokens WHERE space_id = ?1`,
+      [spaceId],
+    );
+    console.log(`[QUIC] Invite tokens: ${tokens.length}`, JSON.stringify(tokens));
+
     const outbox = await sqlQuery<{
       id: string;
       status: string;
       retry_count: string;
       target_endpoint_id: string;
+      target_did: string;
     }>(
       vaultA,
-      `SELECT id, status, retry_count, target_endpoint_id FROM haex_invite_outbox WHERE space_id = ?1`,
+      `SELECT id, status, retry_count, target_endpoint_id, target_did FROM haex_invite_outbox WHERE space_id = ?1`,
       [spaceId],
     );
     console.log(
       `[QUIC] Outbox entries: ${outbox.length}`,
       outbox.map(
         (o) =>
-          `status=${o.status} retries=${o.retry_count} target=${o.target_endpoint_id?.slice(0, 12)}…`,
+          `status=${o.status} retries=${o.retry_count} target=${o.target_endpoint_id?.slice(0, 12)}… did=${o.target_did?.slice(0, 20)}…`,
       ),
     );
+
+    // If no outbox entries, check if the contact has endpointId claims
+    if (outbox.length === 0) {
+      const contactRows = await sqlQuery<{ id: string }>(
+        vaultA,
+        `SELECT id FROM haex_identities WHERE public_key = ?1 AND private_key IS NULL`,
+        [identityB.publicKey],
+      );
+      if (contactRows.length > 0) {
+        const claimsCheck = await sqlQuery<{ type: string; value: string }>(
+          vaultA,
+          `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
+          [contactRows[0].id],
+        );
+        console.log(`[QUIC] Contact claims at invite time: ${JSON.stringify(claimsCheck)}`);
+      }
+    }
 
     // Wait for invite to arrive on Vault B via QUIC
     await pollUntil(
