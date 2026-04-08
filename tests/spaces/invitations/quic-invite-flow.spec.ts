@@ -443,14 +443,25 @@ async function createLocalSpaceViaUI(
  */
 async function sendInviteViaUI(
   vault: VaultAutomation,
+  spaceName: string,
   contactLabel: string,
   withWrite: boolean = false,
 ): Promise<void> {
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // 1. Click the invite trigger button on the space list item
-  await clickTestId(vault, "space-invite-trigger");
+  // 1. Find the correct space by name and click its invite trigger
+  const triggerClicked = await vault.executeScript<boolean>(`
+    const name = ${JSON.stringify(spaceName)};
+    const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
+    for (const item of items) {
+      if (!item.textContent?.includes(name)) continue;
+      const trigger = item.querySelector('[data-testid="space-invite-trigger"]');
+      if (trigger) { trigger.click(); return true; }
+    }
+    return false;
+  `);
+  console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
   await wait(500);
 
   // 2. Click "Invite contact" in the dropdown menu
@@ -883,7 +894,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       console.error = (...args) => { window.__capturedLogs.push('ERR: ' + args.join(' ')); origError.apply(console, args); };
     `);
 
-    await sendInviteViaUI(vaultA, contactLabel);
+    await sendInviteViaUI(vaultA, spaceName, contactLabel);
 
     // Dump captured app logs
     const capturedLogs = await vaultA.executeScript<string[]>(`return window.__capturedLogs || [];`);
@@ -1033,7 +1044,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send second invite with write capability via UI", async () => {
-    await sendInviteViaUI(vaultA, contactLabel, true);
+    await sendInviteViaUI(vaultA, spaceName, contactLabel, true);
 
     // Wait for arrival on Vault B
     await pollUntil(
