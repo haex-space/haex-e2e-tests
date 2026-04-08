@@ -665,6 +665,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   let nodeIdB: string;
   let identityA: { id: string; did: string; publicKey: string };
   let identityB: { id: string; did: string; publicKey: string };
+  let personalSpaceId: string;
   let spaceId: string;
   const spaceName = "QUIC Invite Test";
   const contactLabel = "Vault B Contact";
@@ -846,6 +847,61 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Step 4b — Invite to Personal space (auto-created default space)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test("find Personal space on Vault A", async () => {
+    const spaces = await sqlQuery<{ id: string; name: string }>(
+      vaultA,
+      `SELECT id, name FROM haex_spaces WHERE name = 'Personal' AND status = 'active' LIMIT 1`,
+    );
+    expect(spaces.length).toBe(1);
+    personalSpaceId = spaces[0].id;
+    console.log(`[QUIC] Personal space: ${personalSpaceId.slice(0, 8)}…`);
+
+    // Ensure device is registered in Personal space
+    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+      vaultA,
+      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      [personalSpaceId],
+    );
+    if (!devices.some((d) => d.device_endpoint_id === nodeIdA)) {
+      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
+              VALUES (?1, ?2, ?3, ?4)`,
+        params: [crypto.randomUUID(), personalSpaceId, nodeIdA, "Vault A Desktop"],
+      });
+    }
+  });
+
+  test("send invite to Personal space from Vault A to Vault B", async () => {
+    await sendInviteViaUI(vaultA, "Personal", contactLabel);
+
+    await pollUntil(
+      async () => {
+        const invites = await sqlQuery<{ id: string }>(
+          vaultB,
+          `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
+          [personalSpaceId],
+        );
+        return invites.length > 0;
+      },
+      { timeout: 30_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
+    );
+  });
+
+  test("decline Personal space invite on Vault B", async () => {
+    await declineInviteViaUI(vaultB, "Personal", personalSpaceId);
+
+    const remaining = await sqlQuery<{ id: string }>(
+      vaultB,
+      `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
+      [personalSpaceId],
+    );
+    expect(remaining.length).toBe(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Step 5 — Create local space on Vault A via UI
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -883,73 +939,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
-    // Intercept console logs to capture app-side logging
-    await vaultA.executeScript(`
-      window.__capturedLogs = [];
-      const origLog = console.log;
-      const origWarn = console.warn;
-      const origError = console.error;
-      console.log = (...args) => { window.__capturedLogs.push('LOG: ' + args.join(' ')); origLog.apply(console, args); };
-      console.warn = (...args) => { window.__capturedLogs.push('WARN: ' + args.join(' ')); origWarn.apply(console, args); };
-      console.error = (...args) => { window.__capturedLogs.push('ERR: ' + args.join(' ')); origError.apply(console, args); };
-    `);
-
     await sendInviteViaUI(vaultA, spaceName, contactLabel);
 
-    // Dump captured app logs
-    const capturedLogs = await vaultA.executeScript<string[]>(`return window.__capturedLogs || [];`);
-    const inviteLogs = capturedLogs?.filter(l =>
-      l.includes('INVITE') || l.includes('QUIC') || l.includes('SPACES') || l.includes('endpoint') || l.includes('SQL Error')
-    ) || [];
-    for (const l of inviteLogs) console.log(`[APP] ${l}`);
-
-    // Debug: check outbox and token status on Vault A
-    await wait(3000);
-
-    const tokens = await sqlQuery<{ id: string; capabilities: string }>(
-      vaultA,
-      `SELECT id, capabilities FROM haex_invite_tokens WHERE space_id = ?1`,
-      [spaceId],
-    );
-    console.log(`[QUIC] Invite tokens: ${tokens.length}`, JSON.stringify(tokens));
-
-    const outbox = await sqlQuery<{
-      id: string;
-      status: string;
-      retry_count: string;
-      target_endpoint_id: string;
-      target_did: string;
-    }>(
-      vaultA,
-      `SELECT id, status, retry_count, target_endpoint_id, target_did FROM haex_invite_outbox WHERE space_id = ?1`,
-      [spaceId],
-    );
-    console.log(
-      `[QUIC] Outbox entries: ${outbox.length}`,
-      outbox.map(
-        (o) =>
-          `status=${o.status} retries=${o.retry_count} target=${o.target_endpoint_id?.slice(0, 12)}… did=${o.target_did?.slice(0, 20)}…`,
-      ),
-    );
-
-    // If no outbox entries, check if the contact has endpointId claims
-    if (outbox.length === 0) {
-      const contactRows = await sqlQuery<{ id: string }>(
-        vaultA,
-        `SELECT id FROM haex_identities WHERE public_key = ?1 AND private_key IS NULL`,
-        [identityB.publicKey],
-      );
-      if (contactRows.length > 0) {
-        const claimsCheck = await sqlQuery<{ type: string; value: string }>(
-          vaultA,
-          `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
-          [contactRows[0].id],
-        );
-        console.log(`[QUIC] Contact claims at invite time: ${JSON.stringify(claimsCheck)}`);
-      }
-    }
-
-    // Wait for invite to arrive on Vault B via QUIC
     await pollUntil(
       async () => {
         const invites = await sqlQuery<{ id: string }>(
