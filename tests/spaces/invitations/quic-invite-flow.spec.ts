@@ -901,6 +901,55 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     expect(remaining.length).toBe(0);
   });
 
+  test("Vault A Personal space still active after decline", async () => {
+    const spaces = await sqlQuery<{ id: string; status: string }>(
+      vaultA,
+      `SELECT id, status FROM haex_spaces WHERE id = ?1`,
+      [personalSpaceId],
+    );
+    expect(spaces.length).toBe(1);
+    expect(spaces[0].status).toBe("active");
+  });
+
+  test("re-invite to Personal space after decline", async () => {
+    await sendInviteViaUI(vaultA, "Personal", contactLabel);
+
+    await pollUntil(
+      async () => {
+        const invites = await sqlQuery<{ id: string }>(
+          vaultB,
+          `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
+          [personalSpaceId],
+        );
+        return invites.length > 0;
+      },
+      { timeout: 30_000, interval: 2_000, label: "Personal space re-invite delivery" },
+    );
+  });
+
+  test("accept Personal space invite on Vault B", async () => {
+    await acceptInviteViaUI(vaultB, "Personal", personalSpaceId);
+
+    const invites = await sqlQuery<{ status: string }>(
+      vaultB,
+      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+      [personalSpaceId],
+    );
+    expect(invites.length).toBeGreaterThan(0);
+    expect(invites[0].status).toBe("accepted");
+  });
+
+  test("Vault B has Personal space after accepting", async () => {
+    const spaces = await sqlQuery<{ id: string; name: string; status: string }>(
+      vaultB,
+      `SELECT id, name, status FROM haex_spaces WHERE id = ?1`,
+      [personalSpaceId],
+    );
+    expect(spaces.length).toBe(1);
+    expect(spaces[0].name).toBe("Personal");
+    console.log(`[QUIC] Vault B joined Personal space: ${spaces[0].status}`);
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // Step 5 — Create local space on Vault A via UI
   // ═══════════════════════════════════════════════════════════════════════════
