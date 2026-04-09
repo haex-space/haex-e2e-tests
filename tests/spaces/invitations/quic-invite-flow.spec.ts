@@ -1122,18 +1122,50 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
-    await sendInviteViaUI(vaultA, spaceName, contactLabel);
-
-    // Diagnostic: check outbox + tokens for custom space
-    const outbox = await sqlQuery<{
-      id: string; status: string; targetEndpointId: string;
-      retryCount: string; nextRetryAt: string;
-    }>(
+    // Diagnostic: check ALL outbox entries and tokens BEFORE sending
+    const outboxBefore = await sqlQuery<{ spaceId: string; status: string }>(
       vaultA,
-      `SELECT id, status, target_endpoint_id AS targetEndpointId, retry_count AS retryCount, next_retry_at AS nextRetryAt FROM haex_invite_outbox WHERE space_id = ?1`,
+      `SELECT space_id AS spaceId, status FROM haex_invite_outbox`,
+    );
+    console.log(`[QUIC-DIAG] All outbox BEFORE send: ${JSON.stringify(outboxBefore)}`);
+
+    // Diagnostic: verify the custom space exists in haex_spaces
+    const spaceCheck = await sqlQuery<{ id: string; name: string; type: string; status: string }>(
+      vaultA,
+      `SELECT id, name, type, status FROM haex_spaces WHERE id = ?1`,
       [spaceId],
     );
-    console.log(`[QUIC-DIAG] Custom space outbox: ${JSON.stringify(outbox)}`);
+    console.log(`[QUIC-DIAG] Custom space in DB: ${JSON.stringify(spaceCheck)}`);
+
+    await sendInviteViaUI(vaultA, spaceName, contactLabel);
+
+    // Diagnostic: check ALL outbox entries AFTER sending (not just custom space)
+    const outboxAfter = await sqlQuery<{ spaceId: string; status: string; targetEndpointId: string }>(
+      vaultA,
+      `SELECT space_id AS spaceId, status, target_endpoint_id AS targetEndpointId FROM haex_invite_outbox`,
+    );
+    console.log(`[QUIC-DIAG] All outbox AFTER send: ${JSON.stringify(outboxAfter)}`);
+
+    // Diagnostic: check ALL invite tokens (not filtered by spaceId)
+    const allTokens = await sqlQuery<{ id: string; spaceId: string }>(
+      vaultA,
+      `SELECT id, space_id AS spaceId FROM haex_invite_tokens`,
+    );
+    console.log(`[QUIC-DIAG] All tokens AFTER send: ${JSON.stringify(allTokens)}`);
+
+    // Diagnostic: read frontend logs about the invite submission
+    try {
+      const inviteLogs = await sqlQuery<{ level: string; source: string; message: string }>(
+        vaultA,
+        `SELECT level, source, message FROM haex_logs WHERE (source LIKE '%INVITE%' OR source LIKE '%SPACES%' OR message LIKE '%invite%' OR message LIKE '%endpoint%') AND timestamp > ?1 ORDER BY timestamp DESC LIMIT 15`,
+        [new Date(Date.now() - 30_000).toISOString()],
+      );
+      for (const l of inviteLogs) {
+        console.log(`[QUIC-DIAG] Vault-A LOG [${l.source}] [${l.level}] ${l.message}`);
+      }
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Failed to read invite logs: ${error}`);
+    }
 
     const devs = await sqlQuery<{ deviceEndpointId: string }>(
       vaultA,
