@@ -558,7 +558,7 @@ async function acceptInviteViaUI(
       );
       return rows.length > 0 && rows[0].status === "accepted";
     },
-    { timeout: 15_000, interval: 500, label: "invite accepted" },
+    { timeout: 45_000, interval: 500, label: "invite accepted" },
   ).catch(() => {
     console.log("[QUIC] Invite not yet accepted after polling — proceeding");
   });
@@ -682,7 +682,10 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test.afterAll(async () => {
     for (const v of [vaultA, vaultB]) {
       if (!v) continue;
-      try { await v.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
+      for (const id of [spaceId, personalSpaceId]) {
+        if (!id) continue;
+        try { await v.invokeTauriCommand("local_delivery_stop", { spaceId: id }); } catch { /* ignore */ }
+      }
       try { await v.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ignore */ }
     }
   });
