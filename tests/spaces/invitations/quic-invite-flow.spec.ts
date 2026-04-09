@@ -483,34 +483,66 @@ async function sendInviteViaUI(
   await clickTestId(vault, "invite-contact-select");
   await wait(500);
 
-  // Diagnostic: list ALL dropdown items visible
-  const dropdownItems = await vault.executeScript<string[]>(`
-    return [...document.querySelectorAll('[data-slot="item"]')].map(el => el.textContent?.trim() ?? '');
-  `);
-  console.log(`[QUIC-DIAG] Dropdown items: ${JSON.stringify(dropdownItems)}`);
-
+  // Select contact from the OPEN dropdown content (scoped to data-slot="content")
   const contactSelected = await vault.executeScript<boolean>(`
     const label = ${JSON.stringify(contactLabel)};
-    const items = [...document.querySelectorAll('[data-slot="item"]')];
-    const match = items.find(el => el.textContent?.includes(label));
-    if (match) { match.click(); return true; }
+    // Reka UI renders the open dropdown in a portal with data-slot="content"
+    const contents = [...document.querySelectorAll('[data-slot="content"]')];
+    for (const content of contents) {
+      const items = [...content.querySelectorAll('[data-slot="item"]')];
+      const match = items.find(el => el.textContent?.includes(label));
+      if (match) { match.click(); return true; }
+    }
+    // Fallback: global search
+    const allItems = [...document.querySelectorAll('[data-slot="item"]')];
+    const fallback = allItems.find(el => el.textContent?.includes(label));
+    if (fallback) { fallback.click(); return true; }
     return false;
   `);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
   await wait(500);
 
-  // Diagnostic: check if the select now shows selected items
-  const selectState = await vault.executeScript<{ selectedCount: number; selectText: string }>(`
-    const selectEl = document.querySelector('[data-testid="invite-contact-select"]');
-    if (!selectEl) return { selectedCount: -1, selectText: 'select not found' };
-    // Check for selected indicators: badges, checked items, or text changes
-    const badges = selectEl.querySelectorAll('[data-slot="badge"]').length;
-    return { selectedCount: badges, selectText: selectEl.textContent?.trim().substring(0, 100) ?? '' };
+  // Verify selection took effect — check submit button is enabled
+  const submitEnabled = await vault.executeScript<boolean>(`
+    const btn = document.querySelector('[data-testid="invite-submit"]');
+    return btn ? !btn.disabled : false;
   `);
-  console.log(`[QUIC-DIAG] After contact click: ${JSON.stringify(selectState)}`);
+  console.log(`[QUIC-DIAG] Submit enabled after contact select: ${submitEnabled}`);
 
-  // Close the dropdown by clicking elsewhere
-  await vault.executeScript(`document.body.click()`);
+  // Fallback: if submit is still disabled, retry by re-opening dropdown and clicking
+  if (!submitEnabled) {
+    console.log(`[QUIC-DIAG] Submit still disabled — retrying contact selection`);
+
+    // Close any open popover first
+    await vault.executeScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+    await wait(300);
+
+    // Re-open the contact select
+    await clickTestId(vault, "invite-contact-select");
+    await wait(500);
+
+    // Try clicking the item again with more specific targeting
+    const retryResult = await vault.executeScript<boolean>(`
+      const label = ${JSON.stringify(contactLabel)};
+      const content = document.querySelector('[data-slot="content"]');
+      if (!content) return false;
+      const items = [...content.querySelectorAll('[data-slot="item"]')];
+      console.log('[QUIC-DIAG] Retry: found ' + items.length + ' items in content portal');
+      for (const item of items) {
+        console.log('[QUIC-DIAG] Retry item: ' + item.textContent?.trim());
+      }
+      const match = items.find(el => el.textContent?.includes(label));
+      if (match) { match.click(); return true; }
+      return false;
+    `);
+    console.log(`[QUIC-DIAG] Retry contact select: ${retryResult}`);
+    await wait(500);
+  }
+
+  // Close any open dropdown by pressing Escape
+  await vault.executeScript(`
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  `);
   await wait(300);
 
   // 4. Set capabilities if write is requested
