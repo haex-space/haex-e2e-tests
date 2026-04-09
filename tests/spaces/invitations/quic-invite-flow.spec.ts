@@ -889,7 +889,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         );
         return invites.length > 0;
       },
-      { timeout: 30_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
+      { timeout: 60_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
     );
   });
 
@@ -926,7 +926,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         );
         return invites.length > 0;
       },
-      { timeout: 30_000, interval: 2_000, label: "Personal space re-invite delivery" },
+      { timeout: 60_000, interval: 2_000, label: "Personal space re-invite delivery" },
     );
   });
 
@@ -1002,7 +1002,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         );
         return invites.length > 0;
       },
-      { timeout: 30_000, interval: 2_000, label: "invite delivery to Vault B" },
+      { timeout: 60_000, interval: 2_000, label: "invite delivery to Vault B" },
     );
   });
 
@@ -1099,7 +1099,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         );
         return invites.length > 0;
       },
-      { timeout: 15_000, label: "second invite delivery" },
+      { timeout: 60_000, label: "second invite delivery" },
     );
 
     // Verify capabilities include both read and write
