@@ -1027,13 +1027,48 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("accept Personal space invite on Vault B", async () => {
+    // Diagnostic: check invite state before accept
+    const beforeAccept = await sqlQuery<{ id: string; status: string; spaceEndpoints: string; tokenId: string }>(
+      vaultB,
+      `SELECT id, status, space_endpoints AS spaceEndpoints, token_id AS tokenId FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+      [personalSpaceId],
+    );
+    console.log(`[QUIC-DIAG] Invite before accept: ${JSON.stringify(beforeAccept)}`);
+
+    // Diagnostic: check if leader is active on Vault A for this space
+    try {
+      const leaderStatus = await vaultA.invokeTauriCommand<{ is_leader: boolean; active_spaces?: string[] }>(
+        "local_delivery_status",
+        {},
+      );
+      console.log(`[QUIC-DIAG] Vault A leader status: ${JSON.stringify(leaderStatus)}`);
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Vault A leader status FAILED: ${error}`);
+    }
+
     await acceptInviteViaUI(vaultB, "Personal", personalSpaceId);
 
+    // Diagnostic: check invite state AFTER accept attempt (including error: prefix)
     const invites = await sqlQuery<{ status: string }>(
       vaultB,
       `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
       [personalSpaceId],
     );
+    console.log(`[QUIC-DIAG] Invite after accept: ${JSON.stringify(invites)}`);
+
+    // Diagnostic: check Vault B logs for ClaimInvite errors
+    try {
+      const logsB = await sqlQuery<{ level: string; source: string; message: string }>(
+        vaultB,
+        `SELECT level, source, message FROM haex_logs WHERE message LIKE '%Claim%' OR message LIKE '%accept%' OR source = 'SPACES' ORDER BY timestamp DESC LIMIT 10`,
+      );
+      for (const l of logsB) {
+        console.log(`[QUIC-DIAG] Vault-B [${l.source}] [${l.level}] ${l.message}`);
+      }
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Failed to read Vault B claim logs: ${error}`);
+    }
+
     expect(invites.length).toBeGreaterThan(0);
     expect(invites[0].status).toBe("accepted");
   });
