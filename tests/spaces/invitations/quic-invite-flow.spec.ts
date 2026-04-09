@@ -880,13 +880,109 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite to Personal space from Vault A to Vault B", async () => {
     await sendInviteViaUI(vaultA, "Personal", contactLabel);
 
+    // Diagnostic: check outbox state on Vault A immediately after sending
+    const outboxEntries = await sqlQuery<{
+      id: string; status: string; targetEndpointId: string;
+      retryCount: string; nextRetryAt: string; spaceId: string;
+    }>(
+      vaultA,
+      `SELECT id, status, target_endpoint_id AS targetEndpointId, retry_count AS retryCount, next_retry_at AS nextRetryAt, space_id AS spaceId FROM haex_invite_outbox WHERE space_id = ?1`,
+      [personalSpaceId],
+    );
+    console.log(`[QUIC-DIAG] Outbox entries for Personal space: ${JSON.stringify(outboxEntries)}`);
+
+    // Diagnostic: check invite tokens on Vault A
+    const tokens = await sqlQuery<{ id: string; spaceId: string; targetDid: string; capabilities: string }>(
+      vaultA,
+      `SELECT id, space_id AS spaceId, target_did AS targetDid, capabilities FROM haex_invite_tokens WHERE space_id = ?1`,
+      [personalSpaceId],
+    );
+    console.log(`[QUIC-DIAG] Invite tokens: ${JSON.stringify(tokens)}`);
+
+    // Diagnostic: check space devices on Vault A (needed for spaceEndpoints param)
+    const devices = await sqlQuery<{ deviceEndpointId: string }>(
+      vaultA,
+      `SELECT device_endpoint_id AS deviceEndpointId FROM haex_space_devices WHERE space_id = ?1`,
+      [personalSpaceId],
+    );
+    console.log(`[QUIC-DIAG] Space devices: ${JSON.stringify(devices)}`);
+
+    // Diagnostic: check UCAN tokens for identity resolution
+    const ucans = await sqlQuery<{ issuerDid: string }>(
+      vaultA,
+      `SELECT issuer_did AS issuerDid FROM haex_ucan_tokens WHERE space_id = ?1 LIMIT 1`,
+      [personalSpaceId],
+    );
+    console.log(`[QUIC-DIAG] UCAN tokens: ${JSON.stringify(ucans)}`);
+
+    // Diagnostic: try a direct local_delivery_push_invite to see if QUIC works
+    try {
+      const directResult = await vaultA.invokeTauriCommand<boolean>(
+        "local_delivery_push_invite",
+        {
+          targetEndpointId: nodeIdB,
+          spaceId: personalSpaceId,
+          spaceName: "Personal",
+          spaceType: "local",
+          tokenId: tokens[0]?.id ?? "diag-token",
+          capabilities: ["space/read"],
+          includeHistory: false,
+          inviterDid: identityA.did,
+          inviterLabel: null,
+          spaceEndpoints: devices.map(d => d.deviceEndpointId),
+          originUrl: null,
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      );
+      console.log(`[QUIC-DIAG] Direct push invite result: ${directResult}`);
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Direct push invite FAILED: ${error}`);
+    }
+
+    // Diagnostic: read DB logs from Vault A for PushInvite-Send and INVITE-OUTBOX
+    try {
+      const logs = await sqlQuery<{ level: string; source: string; message: string }>(
+        vaultA,
+        `SELECT level, source, message FROM haex_logs WHERE source IN ('PushInvite-Send', 'INVITE-OUTBOX', 'PushInvite') ORDER BY timestamp DESC LIMIT 20`,
+      );
+      for (const l of logs) {
+        console.log(`[QUIC-DIAG] DB-LOG [${l.source}] [${l.level}] ${l.message}`);
+      }
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Failed to read DB logs: ${error}`);
+    }
+
+    // Diagnostic: read DB logs from Vault B for incoming invites
+    try {
+      const logsB = await sqlQuery<{ level: string; source: string; message: string }>(
+        vaultB,
+        `SELECT level, source, message FROM haex_logs WHERE source IN ('MultiLeader', 'PushInvite') ORDER BY timestamp DESC LIMIT 10`,
+      );
+      for (const l of logsB) {
+        console.log(`[QUIC-DIAG] Vault-B DB-LOG [${l.source}] [${l.level}] ${l.message}`);
+      }
+    } catch (error) {
+      console.log(`[QUIC-DIAG] Failed to read Vault B logs: ${error}`);
+    }
+
+    let pollCount = 0;
     await pollUntil(
       async () => {
+        pollCount++;
         const invites = await sqlQuery<{ id: string }>(
           vaultB,
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [personalSpaceId],
         );
+        // Log outbox state every 5th poll to track retry progress
+        if (pollCount % 5 === 0) {
+          const outbox = await sqlQuery<{ status: string; retryCount: string }>(
+            vaultA,
+            `SELECT status, retry_count AS retryCount FROM haex_invite_outbox WHERE space_id = ?1`,
+            [personalSpaceId],
+          );
+          console.log(`[QUIC-DIAG] Poll #${pollCount}: invites=${invites.length}, outbox=${JSON.stringify(outbox)}`);
+        }
         return invites.length > 0;
       },
       { timeout: 60_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
@@ -993,13 +1089,41 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite from Vault A to Vault B via UI", async () => {
     await sendInviteViaUI(vaultA, spaceName, contactLabel);
 
+    // Diagnostic: check outbox + tokens for custom space
+    const outbox = await sqlQuery<{
+      id: string; status: string; targetEndpointId: string;
+      retryCount: string; nextRetryAt: string;
+    }>(
+      vaultA,
+      `SELECT id, status, target_endpoint_id AS targetEndpointId, retry_count AS retryCount, next_retry_at AS nextRetryAt FROM haex_invite_outbox WHERE space_id = ?1`,
+      [spaceId],
+    );
+    console.log(`[QUIC-DIAG] Custom space outbox: ${JSON.stringify(outbox)}`);
+
+    const devs = await sqlQuery<{ deviceEndpointId: string }>(
+      vaultA,
+      `SELECT device_endpoint_id AS deviceEndpointId FROM haex_space_devices WHERE space_id = ?1`,
+      [spaceId],
+    );
+    console.log(`[QUIC-DIAG] Custom space devices: ${JSON.stringify(devs)}`);
+
+    let pollCount = 0;
     await pollUntil(
       async () => {
+        pollCount++;
         const invites = await sqlQuery<{ id: string }>(
           vaultB,
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [spaceId],
         );
+        if (pollCount % 5 === 0) {
+          const ob = await sqlQuery<{ status: string; retryCount: string }>(
+            vaultA,
+            `SELECT status, retry_count AS retryCount FROM haex_invite_outbox WHERE space_id = ?1`,
+            [spaceId],
+          );
+          console.log(`[QUIC-DIAG] Custom poll #${pollCount}: invites=${invites.length}, outbox=${JSON.stringify(ob)}`);
+        }
         return invites.length > 0;
       },
       { timeout: 60_000, interval: 2_000, label: "invite delivery to Vault B" },
