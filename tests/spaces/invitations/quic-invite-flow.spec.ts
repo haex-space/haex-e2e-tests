@@ -878,6 +878,10 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
+    // Ensure leader is active for the Personal space (startLocalSpaceLeadersAsync
+    // iterates all local spaces but only the last one wins — single leader slot)
+    await vaultA.invokeTauriCommand("local_delivery_start", { spaceId: personalSpaceId });
+
     await sendInviteViaUI(vaultA, "Personal", contactLabel);
 
     await pollUntil(
@@ -991,6 +995,9 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
+    // Activate leader for this space (single leader slot — previous space's leader was overwritten)
+    await vaultA.invokeTauriCommand("local_delivery_start", { spaceId });
+
     await sendInviteViaUI(vaultA, spaceName, contactLabel);
 
     await pollUntil(
@@ -1087,6 +1094,9 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send second invite with write capability via UI", async () => {
+    // Ensure leader is active for this space (single leader slot workaround)
+    await vaultA.invokeTauriCommand("local_delivery_start", { spaceId });
+
     await sendInviteViaUI(vaultA, spaceName, contactLabel, true);
 
     // Wait for arrival on Vault B
