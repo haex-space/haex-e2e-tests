@@ -7,7 +7,8 @@
 # 1. Build from source: Set HAEX_VAULT_REF to a git ref (default)
 # 2. Use pre-built binary: Set USE_PREBUILT_VAULT=true and copy binary to prebuilt/haex-vault/
 
-FROM lscr.io/linuxserver/webtop:ubuntu-xfce
+# Pin to Ubuntu 24.04 (Noble) — ubuntu-xfce:latest moved to 26.04 which Playwright doesn't support yet
+FROM lscr.io/linuxserver/webtop:ubuntu-xfce-version-c6f3d68b
 
 # Build arguments for version control
 ARG NODE_VERSION=22
@@ -77,15 +78,7 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN /root/.cargo/bin/cargo install tauri-cli tauri-driver
 
 # Install WebKitWebDriver (required for tauri-driver)
-# webkit2gtk-driver was removed in WebKit 2.52+; the binary ships in libwebkit2gtk-4.1-0
-RUN apt-get update && \
-    apt-get install -y webkit2gtk-driver || true && \
-    rm -rf /var/lib/apt/lists/* && \
-    if ! command -v WebKitWebDriver >/dev/null 2>&1; then \
-      WKD=$(find /usr -name "WebKitWebDriver" -type f 2>/dev/null | head -1); \
-      if [ -n "$WKD" ]; then ln -sf "$WKD" /usr/local/bin/WebKitWebDriver; fi; \
-    fi && \
-    echo "WebKitWebDriver: $(command -v WebKitWebDriver || echo 'NOT FOUND')"
+RUN apt-get update && apt-get install -y webkit2gtk-driver && rm -rf /var/lib/apt/lists/*
 
 # Set Playwright browser path (browsers installed later after pnpm install)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
