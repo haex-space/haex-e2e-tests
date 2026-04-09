@@ -77,7 +77,15 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 RUN /root/.cargo/bin/cargo install tauri-cli tauri-driver
 
 # Install WebKitWebDriver (required for tauri-driver)
-RUN apt-get update && apt-get install -y webkit2gtk-driver && rm -rf /var/lib/apt/lists/*
+# webkit2gtk-driver was removed in WebKit 2.52+; the binary ships in libwebkit2gtk-4.1-0
+RUN apt-get update && \
+    apt-get install -y webkit2gtk-driver || true && \
+    rm -rf /var/lib/apt/lists/* && \
+    if ! command -v WebKitWebDriver >/dev/null 2>&1; then \
+      WKD=$(find /usr -name "WebKitWebDriver" -type f 2>/dev/null | head -1); \
+      if [ -n "$WKD" ]; then ln -sf "$WKD" /usr/local/bin/WebKitWebDriver; fi; \
+    fi && \
+    echo "WebKitWebDriver: $(command -v WebKitWebDriver || echo 'NOT FOUND')"
 
 # Set Playwright browser path (browsers installed later after pnpm install)
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
