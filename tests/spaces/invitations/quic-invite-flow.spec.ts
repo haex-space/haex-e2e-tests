@@ -483,6 +483,12 @@ async function sendInviteViaUI(
   await clickTestId(vault, "invite-contact-select");
   await wait(500);
 
+  // Diagnostic: list ALL dropdown items visible
+  const dropdownItems = await vault.executeScript<string[]>(`
+    return [...document.querySelectorAll('[data-slot="item"]')].map(el => el.textContent?.trim() ?? '');
+  `);
+  console.log(`[QUIC-DIAG] Dropdown items: ${JSON.stringify(dropdownItems)}`);
+
   const contactSelected = await vault.executeScript<boolean>(`
     const label = ${JSON.stringify(contactLabel)};
     const items = [...document.querySelectorAll('[data-slot="item"]')];
@@ -491,7 +497,17 @@ async function sendInviteViaUI(
     return false;
   `);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
-  await wait(300);
+  await wait(500);
+
+  // Diagnostic: check if the select now shows selected items
+  const selectState = await vault.executeScript<{ selectedCount: number; selectText: string }>(`
+    const selectEl = document.querySelector('[data-testid="invite-contact-select"]');
+    if (!selectEl) return { selectedCount: -1, selectText: 'select not found' };
+    // Check for selected indicators: badges, checked items, or text changes
+    const badges = selectEl.querySelectorAll('[data-slot="badge"]').length;
+    return { selectedCount: badges, selectText: selectEl.textContent?.trim().substring(0, 100) ?? '' };
+  `);
+  console.log(`[QUIC-DIAG] After contact click: ${JSON.stringify(selectState)}`);
 
   // Close the dropdown by clicking elsewhere
   await vault.executeScript(`document.body.click()`);
@@ -503,9 +519,41 @@ async function sendInviteViaUI(
     await wait(200);
   }
 
-  // 5. Click the submit button
+  // 5. Diagnostic: check submit button state and dialog reactive state before clicking
+  const preSubmitState = await vault.executeScript<{
+    buttonDisabled: boolean;
+    buttonExists: boolean;
+    selectedBadges: number;
+    expiryText: string;
+  }>(`
+    const btn = document.querySelector('[data-testid="invite-submit"]');
+    const dialog = document.querySelector('[role="dialog"]');
+    // Count selected contact badges/chips in the select component
+    const selectEl = document.querySelector('[data-testid="invite-contact-select"]');
+    const badges = selectEl ? selectEl.querySelectorAll('[data-slot="badge"], .badge, [class*="chip"]').length : -1;
+    // Read the expiry select's displayed text
+    const expiryBtns = dialog ? [...dialog.querySelectorAll('button')] : [];
+    const expiryBtn = expiryBtns.find(b => b.textContent?.match(/\\d+\\s*(Tag|day|Tage|days)/i));
+    return {
+      buttonDisabled: btn?.disabled ?? true,
+      buttonExists: !!btn,
+      selectedBadges: badges,
+      expiryText: expiryBtn?.textContent?.trim() ?? 'not found',
+    };
+  `);
+  console.log(`[QUIC-DIAG] Pre-submit state: ${JSON.stringify(preSubmitState)}`);
+
+  // Click the submit button
   await clickTestId(vault, "invite-submit");
   await wait(2000);
+
+  // Diagnostic: check if error toast appeared
+  const errorToast = await vault.executeScript<string | null>(`
+    const toasts = [...document.querySelectorAll('[role="alert"], [class*="toast"]')];
+    const err = toasts.find(t => t.textContent?.includes('fehlgeschlagen') || t.textContent?.includes('failed'));
+    return err?.textContent?.trim() ?? null;
+  `);
+  if (errorToast) console.log(`[QUIC-DIAG] Error toast after submit: ${errorToast}`);
 
   console.log(`[QUIC] Invite sent via UI dialog`);
 }
