@@ -465,14 +465,17 @@ async function sendInviteViaUI(
   await wait(500);
 
   // 2. Click "Invite contact" — use the LAST menuitem to avoid stale portals
-  //    from previously opened dropdowns still present in the DOM.
+  //    Scope to the currently open menu (data-state="open") to avoid stale portals.
   const menuClicked = await vault.executeScript<boolean>(`
-    const items = [...document.querySelectorAll('[role="menuitem"]')];
-    const matches = items.filter(el => {
+    const openMenu = document.querySelector('[data-state="open"][role="menu"]')
+      || document.querySelector('[data-state="open"] [role="menu"]');
+    const scope = openMenu || document;
+    const items = [...scope.querySelectorAll('[role="menuitem"]')];
+    const match = items.find(el => {
       const t = el.textContent?.trim();
       return t?.includes('Invite contact') || t?.includes('Kontakt einladen');
     });
-    if (matches.length > 0) { matches[matches.length - 1].click(); return true; }
+    if (match) { match.click(); return true; }
     return false;
   `);
   await wait(1000);
