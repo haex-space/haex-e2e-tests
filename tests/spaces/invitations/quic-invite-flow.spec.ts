@@ -450,16 +450,35 @@ async function sendInviteViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
+  // Dismiss the App Launcher welcome tour if visible — it overlays the entire UI
+  await vault.executeScript(`
+    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
+    for (const d of dialogs) {
+      if (d.textContent?.includes('App Launcher')) {
+        // Click all close/dismiss buttons in the dialog
+        const btns = [...d.querySelectorAll('button')];
+        const closeBtn = btns.find(b => b.textContent?.trim() === 'x' || b.textContent?.trim() === '×')
+          || d.querySelector('[class*="close"]')
+          || d.parentElement?.querySelector('[class*="close"]');
+        if (closeBtn) closeBtn.click();
+        else d.remove(); // Last resort: remove from DOM
+      }
+    }
+  `);
+  await wait(300);
+
   // 1. Screenshot: spaces list before clicking trigger
   await vault.takeScreenshot(`invite-1-spaces-list-${spaceName.replace(/\s+/g, '-')}`);
 
-  // 2. Click invite trigger for the correct space
+  // 2. Open invite dialog by finding the space's invite trigger (unique per space)
+  //    and clicking through the dropdown menu.
   const triggerClicked = await vault.executeScript<boolean>(`
     const name = ${JSON.stringify(spaceName)};
     const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
     for (const item of items) {
-      if (!item.textContent?.includes(name)) continue;
-      const trigger = item.querySelector('[data-testid="space-invite-trigger"]');
+      if (!item.querySelector('.font-medium')?.textContent?.trim()?.includes(name)
+          && !item.textContent?.includes(name)) continue;
+      const trigger = item.querySelector('[data-testid^="space-invite-trigger"]');
       if (trigger) { trigger.click(); return true; }
     }
     return false;
@@ -467,10 +486,7 @@ async function sendInviteViaUI(
   console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
   await wait(500);
 
-  // Screenshot: dropdown menu after trigger click
-  await vault.takeScreenshot(`invite-2-dropdown-${spaceName.replace(/\s+/g, '-')}`);
-
-  // 3. Click "Invite contact" in the open dropdown
+  // Click "Invite contact" in the dropdown menu
   const menuClicked = await vault.executeScript<boolean>(`
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     const match = items.find(el => {
@@ -488,20 +504,42 @@ async function sendInviteViaUI(
   // Screenshot: invite dialog after opening
   await vault.takeScreenshot(`invite-3-dialog-${spaceName.replace(/\s+/g, '-')}`);
 
-  // Diagnostic: read the spaceId the dialog received via its Vue props
+  // Diagnostic: read the dialog's space-id prop from the rendered DOM attribute
   const dialogSpaceId = await vault.executeScript<string>(`
     const dialog = document.querySelector('[role="dialog"]');
     if (!dialog) return 'no-dialog';
-    // Walk up from dialog to find the Vue component with spaceId prop
-    let el = dialog;
-    while (el) {
-      const vnode = el.__vueParentComponent;
-      if (vnode?.props?.spaceId) return vnode.props.spaceId;
-      // Also check setupState for the invite dialog
-      if (vnode?.setupState?.inviteSpaceId?.value) return 'ref:' + vnode.setupState.inviteSpaceId.value;
-      el = el.parentElement;
+    // The SpaceInviteDialog title might contain the space name
+    const title = dialog.querySelector('h2, [class*="title"]')?.textContent?.trim() || '';
+    // Try reading the Vue component tree to find inviteSpaceId
+    // Walk all Vue component instances from the #__nuxt app root
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    if (!app) return 'no-app, title=' + title;
+    // The settings component stores inviteSpaceId as a ref in setupState
+    // Walk through component tree
+    function findRef(instance, depth) {
+      if (depth > 20) return null;
+      const state = instance?.setupState;
+      if (state?.inviteSpaceId !== undefined) {
+        return typeof state.inviteSpaceId === 'string' ? state.inviteSpaceId : state.inviteSpaceId?.value || state.inviteSpaceId;
+      }
+      if (instance?.subTree?.component) {
+        const r = findRef(instance.subTree.component, depth + 1);
+        if (r) return r;
+      }
+      const children = instance?.subTree?.children;
+      if (Array.isArray(children)) {
+        for (const child of children) {
+          if (child?.component) {
+            const r = findRef(child.component, depth + 1);
+            if (r) return r;
+          }
+        }
+      }
+      return null;
     }
-    return 'not-found';
+    const rootInstance = app._instance;
+    const found = findRef(rootInstance, 0);
+    return found || 'not-found, title=' + title;
   `);
   console.log(`[QUIC-DIAG] Dialog spaceId: ${dialogSpaceId} (expected: space named "${spaceName}")`);
 
@@ -1277,8 +1315,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     try {
       const inviteLogs = await sqlQuery<{ level: string; source: string; message: string }>(
         vaultA,
-        `SELECT level, source, message FROM haex_logs WHERE (source LIKE '%INVITE%' OR source LIKE '%SPACES%' OR message LIKE '%invite%' OR message LIKE '%endpoint%') AND timestamp > ?1 ORDER BY timestamp DESC LIMIT 15`,
-        [new Date(Date.now() - 30_000).toISOString()],
+        `SELECT level, source, message FROM haex_logs WHERE (source LIKE '%INVITE%' OR source LIKE '%SPACES%' OR message LIKE '%invite%' OR message LIKE '%submit%' OR message LIKE '%space=%') ORDER BY timestamp DESC LIMIT 20`,
       );
       for (const l of inviteLogs) {
         console.log(`[QUIC-DIAG] Vault-A LOG [${l.source}] [${l.level}] ${l.message}`);
