@@ -465,8 +465,13 @@ async function sendInviteViaUI(
   await wait(500);
 
   // 2. Click "Invite contact" in the dropdown menu
+  //    IMPORTANT: scope to the LAST [data-slot="content"] portal to avoid
+  //    clicking stale menu items from a previously opened dropdown.
   const menuClicked = await vault.executeScript<boolean>(`
-    const items = [...document.querySelectorAll('[role="menuitem"]')];
+    const contents = document.querySelectorAll('[data-slot="content"]');
+    const lastContent = contents[contents.length - 1];
+    const scope = lastContent || document;
+    const items = [...scope.querySelectorAll('[role="menuitem"]')];
     const match = items.find(el => {
       const t = el.textContent?.trim();
       return t?.includes('Invite contact') || t?.includes('Kontakt einladen');
