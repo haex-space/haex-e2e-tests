@@ -450,20 +450,12 @@ async function sendInviteViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // Dismiss the App Launcher welcome tour if visible — it overlays the entire UI
+  // Dismiss the driver.js welcome tour if active — it overlays the entire UI
   await vault.executeScript(`
-    const dialogs = [...document.querySelectorAll('[role="dialog"]')];
-    for (const d of dialogs) {
-      if (d.textContent?.includes('App Launcher')) {
-        // Click all close/dismiss buttons in the dialog
-        const btns = [...d.querySelectorAll('button')];
-        const closeBtn = btns.find(b => b.textContent?.trim() === 'x' || b.textContent?.trim() === '×')
-          || d.querySelector('[class*="close"]')
-          || d.parentElement?.querySelector('[class*="close"]');
-        if (closeBtn) closeBtn.click();
-        else d.remove(); // Last resort: remove from DOM
-      }
-    }
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const tourStore = pinia?._s?.get('tourStore');
+    if (tourStore?.isActive) tourStore.complete();
   `);
   await wait(300);
 
