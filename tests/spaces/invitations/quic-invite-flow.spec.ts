@@ -866,10 +866,6 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       });
     }
 
-    // Start leader for Personal space — must happen after P2P endpoint is active
-    try {
-      await vaultA.invokeTauriCommand("local_delivery_start", { spaceId: personalSpaceId });
-    } catch { /* already running — ignore */ }
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
@@ -981,10 +977,6 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     );
     expect(updated.some((d) => d.device_endpoint_id === nodeIdA)).toBe(true);
 
-    // Ensure leader is active for this space
-    try {
-      await vaultA.invokeTauriCommand("local_delivery_start", { spaceId });
-    } catch { /* already running — ignore */ }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
