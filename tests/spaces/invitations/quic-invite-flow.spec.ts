@@ -450,13 +450,7 @@ async function sendInviteViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // 1. Remove stale dropdown portals left by previous UDropdownMenu interactions
-  await vault.executeScript(`
-    document.querySelectorAll('[data-slot="content"]').forEach(el => el.remove());
-  `);
-  await wait(200);
-
-  // 2. Find the correct space by name and click its invite trigger
+  // 1. Find the correct space by name and click its invite trigger
   const triggerClicked = await vault.executeScript<boolean>(`
     const name = ${JSON.stringify(spaceName)};
     const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
@@ -470,14 +464,15 @@ async function sendInviteViaUI(
   console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
   await wait(500);
 
-  // 3. Click "Invite contact" in the dropdown menu
+  // 2. Click "Invite contact" — use the LAST menuitem to avoid stale portals
+  //    from previously opened dropdowns still present in the DOM.
   const menuClicked = await vault.executeScript<boolean>(`
     const items = [...document.querySelectorAll('[role="menuitem"]')];
-    const match = items.find(el => {
+    const matches = items.filter(el => {
       const t = el.textContent?.trim();
       return t?.includes('Invite contact') || t?.includes('Kontakt einladen');
     });
-    if (match) { match.click(); return true; }
+    if (matches.length > 0) { matches[matches.length - 1].click(); return true; }
     return false;
   `);
   await wait(1000);
