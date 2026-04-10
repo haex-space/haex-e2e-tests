@@ -459,180 +459,43 @@ async function sendInviteViaUI(
   `);
   await wait(300);
 
-  // 1. Screenshot: spaces list before clicking trigger
-  await vault.takeScreenshot(`invite-1-spaces-list-${spaceName.replace(/\s+/g, '-')}`);
-
-  // 2. Open invite dialog via the test helper exposed on window.
-  //    The UDropdownMenu portal has a Reka UI bug where the onSelect closure
-  //    captures the wrong SpaceListItem instance's props, so we bypass it.
+  // Open invite dialog via test helper (bypasses UDropdownMenu portal bug)
   const spaceForInvite = await sqlQuery<{ id: string }>(
     vault,
     `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
     [spaceName],
   );
   const targetSpaceId = spaceForInvite[0]?.id;
-  const menuClicked = await vault.executeScript<boolean>(`
-    if (typeof window.__openInviteDialog === 'function') {
-      window.__openInviteDialog(${JSON.stringify(targetSpaceId || '')}, 'contact');
-      return true;
-    }
-    return false;
-  `);
-  console.log(`[QUIC] Invite dialog opened via __openInviteDialog: ${menuClicked} (spaceId: ${targetSpaceId})`);
+  await vault.executeScript(`window.__openInviteDialog(${JSON.stringify(targetSpaceId)}, 'contact')`);
   await wait(1000);
 
-  const dialogOpen = await elementExists(vault, '[role="dialog"]');
-  console.log(`[QUIC] Invite dialog opened: ${dialogOpen}, menu clicked: ${menuClicked}`);
-
-  // Screenshot: invite dialog after opening
-  await vault.takeScreenshot(`invite-3-dialog-${spaceName.replace(/\s+/g, '-')}`);
-
-  // Diagnostic: read the dialog's space-id prop from the rendered DOM attribute
-  const dialogSpaceId = await vault.executeScript<string>(`
-    const dialog = document.querySelector('[role="dialog"]');
-    if (!dialog) return 'no-dialog';
-    // The SpaceInviteDialog title might contain the space name
-    const title = dialog.querySelector('h2, [class*="title"]')?.textContent?.trim() || '';
-    // Try reading the Vue component tree to find inviteSpaceId
-    // Walk all Vue component instances from the #__nuxt app root
-    const app = document.getElementById('__nuxt')?.__vue_app__;
-    if (!app) return 'no-app, title=' + title;
-    // The settings component stores inviteSpaceId as a ref in setupState
-    // Walk through component tree
-    function findRef(instance, depth) {
-      if (depth > 20) return null;
-      const state = instance?.setupState;
-      if (state?.inviteSpaceId !== undefined) {
-        return typeof state.inviteSpaceId === 'string' ? state.inviteSpaceId : state.inviteSpaceId?.value || state.inviteSpaceId;
-      }
-      if (instance?.subTree?.component) {
-        const r = findRef(instance.subTree.component, depth + 1);
-        if (r) return r;
-      }
-      const children = instance?.subTree?.children;
-      if (Array.isArray(children)) {
-        for (const child of children) {
-          if (child?.component) {
-            const r = findRef(child.component, depth + 1);
-            if (r) return r;
-          }
-        }
-      }
-      return null;
-    }
-    const rootInstance = app._instance;
-    const found = findRef(rootInstance, 0);
-    return found || 'not-found, title=' + title;
-  `);
-  console.log(`[QUIC-DIAG] Dialog spaceId: ${dialogSpaceId} (expected: space named "${spaceName}")`);
-
-  // 3. Open the contact select dropdown and pick the contact by label
+  // Select contact
   await clickTestId(vault, "invite-contact-select");
   await wait(500);
 
-  // Select contact from the OPEN dropdown content (scoped to data-slot="content")
   const contactSelected = await vault.executeScript<boolean>(`
     const label = ${JSON.stringify(contactLabel)};
-    // Reka UI renders the open dropdown in a portal with data-slot="content"
-    const contents = [...document.querySelectorAll('[data-slot="content"]')];
-    for (const content of contents) {
-      const items = [...content.querySelectorAll('[data-slot="item"]')];
-      const match = items.find(el => el.textContent?.includes(label));
-      if (match) { match.click(); return true; }
-    }
-    // Fallback: global search
-    const allItems = [...document.querySelectorAll('[data-slot="item"]')];
-    const fallback = allItems.find(el => el.textContent?.includes(label));
-    if (fallback) { fallback.click(); return true; }
+    const items = [...document.querySelectorAll('[data-slot="item"]')];
+    const match = items.find(el => el.textContent?.includes(label));
+    if (match) { match.click(); return true; }
     return false;
   `);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
-  await wait(500);
-
-  // Verify selection took effect — check submit button is enabled
-  const submitEnabled = await vault.executeScript<boolean>(`
-    const btn = document.querySelector('[data-testid="invite-submit"]');
-    return btn ? !btn.disabled : false;
-  `);
-  console.log(`[QUIC-DIAG] Submit enabled after contact select: ${submitEnabled}`);
-
-  // Fallback: if submit is still disabled, retry by re-opening dropdown and clicking
-  if (!submitEnabled) {
-    console.log(`[QUIC-DIAG] Submit still disabled — retrying contact selection`);
-
-    // Close any open popover first
-    await vault.executeScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
-    await wait(300);
-
-    // Re-open the contact select
-    await clickTestId(vault, "invite-contact-select");
-    await wait(500);
-
-    // Try clicking the item again with more specific targeting
-    const retryResult = await vault.executeScript<boolean>(`
-      const label = ${JSON.stringify(contactLabel)};
-      const content = document.querySelector('[data-slot="content"]');
-      if (!content) return false;
-      const items = [...content.querySelectorAll('[data-slot="item"]')];
-      console.log('[QUIC-DIAG] Retry: found ' + items.length + ' items in content portal');
-      for (const item of items) {
-        console.log('[QUIC-DIAG] Retry item: ' + item.textContent?.trim());
-      }
-      const match = items.find(el => el.textContent?.includes(label));
-      if (match) { match.click(); return true; }
-      return false;
-    `);
-    console.log(`[QUIC-DIAG] Retry contact select: ${retryResult}`);
-    await wait(500);
-  }
-
-  // Close any open dropdown by pressing Escape
-  await vault.executeScript(`
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-  `);
   await wait(300);
 
-  // 4. Set capabilities if write is requested
+  // Close dropdown
+  await vault.executeScript(`document.body.click()`);
+  await wait(300);
+
+  // Set capabilities if write is requested
   if (withWrite) {
     await clickTestId(vault, "invite-cap-write");
     await wait(200);
   }
 
-  // 5. Diagnostic: check submit button state and dialog reactive state before clicking
-  const preSubmitState = await vault.executeScript<{
-    buttonDisabled: boolean;
-    buttonExists: boolean;
-    selectedBadges: number;
-    expiryText: string;
-  }>(`
-    const btn = document.querySelector('[data-testid="invite-submit"]');
-    const dialog = document.querySelector('[role="dialog"]');
-    // Count selected contact badges/chips in the select component
-    const selectEl = document.querySelector('[data-testid="invite-contact-select"]');
-    const badges = selectEl ? selectEl.querySelectorAll('[data-slot="badge"], .badge, [class*="chip"]').length : -1;
-    // Read the expiry select's displayed text
-    const expiryBtns = dialog ? [...dialog.querySelectorAll('button')] : [];
-    const expiryBtn = expiryBtns.find(b => b.textContent?.match(/\\d+\\s*(Tag|day|Tage|days)/i));
-    return {
-      buttonDisabled: btn?.disabled ?? true,
-      buttonExists: !!btn,
-      selectedBadges: badges,
-      expiryText: expiryBtn?.textContent?.trim() ?? 'not found',
-    };
-  `);
-  console.log(`[QUIC-DIAG] Pre-submit state: ${JSON.stringify(preSubmitState)}`);
-
-  // Click the submit button
+  // Submit
   await clickTestId(vault, "invite-submit");
   await wait(2000);
-
-  // Diagnostic: check if error toast appeared
-  const errorToast = await vault.executeScript<string | null>(`
-    const toasts = [...document.querySelectorAll('[role="alert"], [class*="toast"]')];
-    const err = toasts.find(t => t.textContent?.includes('fehlgeschlagen') || t.textContent?.includes('failed'));
-    return err?.textContent?.trim() ?? null;
-  `);
-  if (errorToast) console.log(`[QUIC-DIAG] Error toast after submit: ${errorToast}`);
 
   console.log(`[QUIC] Invite sent via UI dialog`);
 }
@@ -1007,109 +870,13 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("send invite to Personal space from Vault A to Vault B", async () => {
     await sendInviteViaUI(vaultA, "Personal", contactLabel);
 
-    // Diagnostic: check outbox state on Vault A immediately after sending
-    const outboxEntries = await sqlQuery<{
-      id: string; status: string; targetEndpointId: string;
-      retryCount: string; nextRetryAt: string; spaceId: string;
-    }>(
-      vaultA,
-      `SELECT id, status, target_endpoint_id AS targetEndpointId, retry_count AS retryCount, next_retry_at AS nextRetryAt, space_id AS spaceId FROM haex_invite_outbox WHERE space_id = ?1`,
-      [personalSpaceId],
-    );
-    console.log(`[QUIC-DIAG] Outbox entries for Personal space: ${JSON.stringify(outboxEntries)}`);
-
-    // Diagnostic: check invite tokens on Vault A
-    const tokens = await sqlQuery<{ id: string; spaceId: string; targetDid: string; capabilities: string }>(
-      vaultA,
-      `SELECT id, space_id AS spaceId, target_did AS targetDid, capabilities FROM haex_invite_tokens WHERE space_id = ?1`,
-      [personalSpaceId],
-    );
-    console.log(`[QUIC-DIAG] Invite tokens: ${JSON.stringify(tokens)}`);
-
-    // Diagnostic: check space devices on Vault A (needed for spaceEndpoints param)
-    const devices = await sqlQuery<{ deviceEndpointId: string }>(
-      vaultA,
-      `SELECT device_endpoint_id AS deviceEndpointId FROM haex_space_devices WHERE space_id = ?1`,
-      [personalSpaceId],
-    );
-    console.log(`[QUIC-DIAG] Space devices: ${JSON.stringify(devices)}`);
-
-    // Diagnostic: check UCAN tokens for identity resolution
-    const ucans = await sqlQuery<{ issuerDid: string }>(
-      vaultA,
-      `SELECT issuer_did AS issuerDid FROM haex_ucan_tokens WHERE space_id = ?1 LIMIT 1`,
-      [personalSpaceId],
-    );
-    console.log(`[QUIC-DIAG] UCAN tokens: ${JSON.stringify(ucans)}`);
-
-    // Diagnostic: try a direct local_delivery_push_invite to see if QUIC works
-    try {
-      const directResult = await vaultA.invokeTauriCommand<boolean>(
-        "local_delivery_push_invite",
-        {
-          targetEndpointId: nodeIdB,
-          spaceId: personalSpaceId,
-          spaceName: "Personal",
-          spaceType: "local",
-          tokenId: tokens[0]?.id ?? "diag-token",
-          capabilities: ["space/read"],
-          includeHistory: false,
-          inviterDid: identityA.did,
-          inviterLabel: null,
-          spaceEndpoints: devices.map(d => d.deviceEndpointId),
-          originUrl: null,
-          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        },
-      );
-      console.log(`[QUIC-DIAG] Direct push invite result: ${directResult}`);
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Direct push invite FAILED: ${error}`);
-    }
-
-    // Diagnostic: read DB logs from Vault A for PushInvite-Send and INVITE-OUTBOX
-    try {
-      const logs = await sqlQuery<{ level: string; source: string; message: string }>(
-        vaultA,
-        `SELECT level, source, message FROM haex_logs WHERE source IN ('PushInvite-Send', 'INVITE-OUTBOX', 'PushInvite') ORDER BY timestamp DESC LIMIT 20`,
-      );
-      for (const l of logs) {
-        console.log(`[QUIC-DIAG] DB-LOG [${l.source}] [${l.level}] ${l.message}`);
-      }
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Failed to read DB logs: ${error}`);
-    }
-
-    // Diagnostic: read DB logs from Vault B for incoming invites
-    try {
-      const logsB = await sqlQuery<{ level: string; source: string; message: string }>(
-        vaultB,
-        `SELECT level, source, message FROM haex_logs WHERE source IN ('MultiLeader', 'PushInvite') ORDER BY timestamp DESC LIMIT 10`,
-      );
-      for (const l of logsB) {
-        console.log(`[QUIC-DIAG] Vault-B DB-LOG [${l.source}] [${l.level}] ${l.message}`);
-      }
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Failed to read Vault B logs: ${error}`);
-    }
-
-    let pollCount = 0;
     await pollUntil(
       async () => {
-        pollCount++;
         const invites = await sqlQuery<{ id: string }>(
           vaultB,
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [personalSpaceId],
         );
-        // Log outbox state every 5th poll to track retry progress
-        if (pollCount % 5 === 0) {
-          const outbox = await sqlQuery<{ status: string; retryCount: string }>(
-            vaultA,
-            `SELECT status, retry_count AS retryCount FROM haex_invite_outbox WHERE space_id = ?1`,
-            [personalSpaceId],
-          );
-          console.log(`[QUIC-DIAG] Poll #${pollCount}: invites=${invites.length}, outbox=${JSON.stringify(outbox)}`);
-        }
         return invites.length > 0;
       },
       { timeout: 60_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
@@ -1154,47 +921,13 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("accept Personal space invite on Vault B", async () => {
-    // Diagnostic: check invite state before accept
-    const beforeAccept = await sqlQuery<{ id: string; status: string; spaceEndpoints: string; tokenId: string }>(
-      vaultB,
-      `SELECT id, status, space_endpoints AS spaceEndpoints, token_id AS tokenId FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
-      [personalSpaceId],
-    );
-    console.log(`[QUIC-DIAG] Invite before accept: ${JSON.stringify(beforeAccept)}`);
-
-    // Diagnostic: check if leader is active on Vault A for this space
-    try {
-      const leaderStatus = await vaultA.invokeTauriCommand<{ is_leader: boolean; active_spaces?: string[] }>(
-        "local_delivery_status",
-        {},
-      );
-      console.log(`[QUIC-DIAG] Vault A leader status: ${JSON.stringify(leaderStatus)}`);
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Vault A leader status FAILED: ${error}`);
-    }
-
     await acceptInviteViaUI(vaultB, "Personal", personalSpaceId);
 
-    // Diagnostic: check invite state AFTER accept attempt (including error: prefix)
     const invites = await sqlQuery<{ status: string }>(
       vaultB,
       `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
       [personalSpaceId],
     );
-    console.log(`[QUIC-DIAG] Invite after accept: ${JSON.stringify(invites)}`);
-
-    // Diagnostic: check Vault B logs for ClaimInvite errors
-    try {
-      const logsB = await sqlQuery<{ level: string; source: string; message: string }>(
-        vaultB,
-        `SELECT level, source, message FROM haex_logs WHERE message LIKE '%Claim%' OR message LIKE '%accept%' OR source = 'SPACES' ORDER BY timestamp DESC LIMIT 10`,
-      );
-      for (const l of logsB) {
-        console.log(`[QUIC-DIAG] Vault-B [${l.source}] [${l.level}] ${l.message}`);
-      }
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Failed to read Vault B claim logs: ${error}`);
-    }
 
     expect(invites.length).toBeGreaterThan(0);
     expect(invites[0].status).toBe("accepted");
@@ -1219,20 +952,6 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
     expect(spaceId).toBeTruthy();
     console.log(`[QUIC] Space created: ${spaceId.slice(0, 8)}…`);
-
-    // Diagnostic: check UCANs and capabilities for this space
-    const ucans = await sqlQuery<{ capability: string; issuerDid: string; audienceDid: string }>(
-      vaultA,
-      `SELECT capability, issuer_did AS issuerDid, audience_did AS audienceDid FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
-    );
-    console.log(`[QUIC-DIAG] UCANs for new space: ${JSON.stringify(ucans)}`);
-
-    const ownIdentities = await sqlQuery<{ did: string; label: string; privateKey: string }>(
-      vaultA,
-      `SELECT did, label, CASE WHEN private_key IS NOT NULL THEN 'yes' ELSE 'no' END AS privateKey FROM haex_identities WHERE private_key IS NOT NULL`,
-    );
-    console.log(`[QUIC-DIAG] Own identities: ${JSON.stringify(ownIdentities)}`);
   });
 
   test("ensure Vault A device is registered in space", async () => {
@@ -1263,74 +982,15 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("send invite from Vault A to Vault B via UI", async () => {
-    // Diagnostic: check ALL outbox entries and tokens BEFORE sending
-    const outboxBefore = await sqlQuery<{ spaceId: string; status: string }>(
-      vaultA,
-      `SELECT space_id AS spaceId, status FROM haex_invite_outbox`,
-    );
-    console.log(`[QUIC-DIAG] All outbox BEFORE send: ${JSON.stringify(outboxBefore)}`);
-
-    // Diagnostic: verify the custom space exists in haex_spaces
-    const spaceCheck = await sqlQuery<{ id: string; name: string; type: string; status: string }>(
-      vaultA,
-      `SELECT id, name, type, status FROM haex_spaces WHERE id = ?1`,
-      [spaceId],
-    );
-    console.log(`[QUIC-DIAG] Custom space in DB: ${JSON.stringify(spaceCheck)}`);
-
     await sendInviteViaUI(vaultA, spaceName, contactLabel);
 
-    // Diagnostic: check ALL outbox entries AFTER sending (not just custom space)
-    const outboxAfter = await sqlQuery<{ spaceId: string; status: string; targetEndpointId: string }>(
-      vaultA,
-      `SELECT space_id AS spaceId, status, target_endpoint_id AS targetEndpointId FROM haex_invite_outbox`,
-    );
-    console.log(`[QUIC-DIAG] All outbox AFTER send: ${JSON.stringify(outboxAfter)}`);
-
-    // Diagnostic: check ALL invite tokens (not filtered by spaceId)
-    const allTokens = await sqlQuery<{ id: string; spaceId: string }>(
-      vaultA,
-      `SELECT id, space_id AS spaceId FROM haex_invite_tokens`,
-    );
-    console.log(`[QUIC-DIAG] All tokens AFTER send: ${JSON.stringify(allTokens)}`);
-
-    // Diagnostic: read frontend logs about the invite submission
-    try {
-      const inviteLogs = await sqlQuery<{ level: string; source: string; message: string }>(
-        vaultA,
-        `SELECT level, source, message FROM haex_logs WHERE (source LIKE '%INVITE%' OR source LIKE '%SPACES%' OR message LIKE '%invite%' OR message LIKE '%submit%' OR message LIKE '%space=%') ORDER BY timestamp DESC LIMIT 20`,
-      );
-      for (const l of inviteLogs) {
-        console.log(`[QUIC-DIAG] Vault-A LOG [${l.source}] [${l.level}] ${l.message}`);
-      }
-    } catch (error) {
-      console.log(`[QUIC-DIAG] Failed to read invite logs: ${error}`);
-    }
-
-    const devs = await sqlQuery<{ deviceEndpointId: string }>(
-      vaultA,
-      `SELECT device_endpoint_id AS deviceEndpointId FROM haex_space_devices WHERE space_id = ?1`,
-      [spaceId],
-    );
-    console.log(`[QUIC-DIAG] Custom space devices: ${JSON.stringify(devs)}`);
-
-    let pollCount = 0;
     await pollUntil(
       async () => {
-        pollCount++;
         const invites = await sqlQuery<{ id: string }>(
           vaultB,
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [spaceId],
         );
-        if (pollCount % 5 === 0) {
-          const ob = await sqlQuery<{ status: string; retryCount: string }>(
-            vaultA,
-            `SELECT status, retry_count AS retryCount FROM haex_invite_outbox WHERE space_id = ?1`,
-            [spaceId],
-          );
-          console.log(`[QUIC-DIAG] Custom poll #${pollCount}: invites=${invites.length}, outbox=${JSON.stringify(ob)}`);
-        }
         return invites.length > 0;
       },
       { timeout: 60_000, interval: 2_000, label: "invite delivery to Vault B" },
