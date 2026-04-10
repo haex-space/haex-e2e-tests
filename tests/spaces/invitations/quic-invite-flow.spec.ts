@@ -450,8 +450,10 @@ async function sendInviteViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // 1. Close any stale dropdown portals before opening a new one
-  await vault.executeScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  // 1. Remove stale dropdown portals left by previous UDropdownMenu interactions
+  await vault.executeScript(`
+    document.querySelectorAll('[data-slot="content"]').forEach(el => el.remove());
+  `);
   await wait(200);
 
   // 2. Find the correct space by name and click its invite trigger
