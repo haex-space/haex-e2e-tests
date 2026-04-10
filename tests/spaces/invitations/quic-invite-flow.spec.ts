@@ -450,7 +450,10 @@ async function sendInviteViaUI(
   await openSettingsCategory(vault, "spaces");
   await wait(1000);
 
-  // 1. Find the correct space by name and click its invite trigger
+  // 1. Screenshot: spaces list before clicking trigger
+  await vault.takeScreenshot(`invite-1-spaces-list-${spaceName.replace(/\s+/g, '-')}`);
+
+  // 2. Click invite trigger for the correct space
   const triggerClicked = await vault.executeScript<boolean>(`
     const name = ${JSON.stringify(spaceName)};
     const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
@@ -464,35 +467,12 @@ async function sendInviteViaUI(
   console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
   await wait(500);
 
-  // 2. Diagnostic: dump all menu portals in the DOM to understand stale state
-  const portalDiag = await vault.executeScript<{
-    menuCount: number;
-    menuitemCount: number;
-    openMenus: number;
-    contentPortals: number;
-    dataStates: string[];
-  }>(`
-    const menus = document.querySelectorAll('[role="menu"]');
-    const menuitems = document.querySelectorAll('[role="menuitem"]');
-    const openMenus = document.querySelectorAll('[data-state="open"][role="menu"]');
-    const contentPortals = document.querySelectorAll('[data-slot="content"]');
-    const dataStates = [...contentPortals].map(el => el.getAttribute('data-state') || 'none');
-    return {
-      menuCount: menus.length,
-      menuitemCount: menuitems.length,
-      openMenus: openMenus.length,
-      contentPortals: contentPortals.length,
-      dataStates,
-    };
-  `);
-  console.log(`[QUIC-DIAG] Portal state after trigger: ${JSON.stringify(portalDiag)}`);
+  // Screenshot: dropdown menu after trigger click
+  await vault.takeScreenshot(`invite-2-dropdown-${spaceName.replace(/\s+/g, '-')}`);
 
-  // Click "Invite contact" — scope to the currently open menu
+  // 3. Click "Invite contact" in the open dropdown
   const menuClicked = await vault.executeScript<boolean>(`
-    const openMenu = document.querySelector('[data-state="open"][role="menu"]')
-      || document.querySelector('[data-state="open"] [role="menu"]');
-    const scope = openMenu || document;
-    const items = [...scope.querySelectorAll('[role="menuitem"]')];
+    const items = [...document.querySelectorAll('[role="menuitem"]')];
     const match = items.find(el => {
       const t = el.textContent?.trim();
       return t?.includes('Invite contact') || t?.includes('Kontakt einladen');
@@ -504,6 +484,26 @@ async function sendInviteViaUI(
 
   const dialogOpen = await elementExists(vault, '[role="dialog"]');
   console.log(`[QUIC] Invite dialog opened: ${dialogOpen}, menu clicked: ${menuClicked}`);
+
+  // Screenshot: invite dialog after opening
+  await vault.takeScreenshot(`invite-3-dialog-${spaceName.replace(/\s+/g, '-')}`);
+
+  // Diagnostic: read the spaceId the dialog received via its Vue props
+  const dialogSpaceId = await vault.executeScript<string>(`
+    const dialog = document.querySelector('[role="dialog"]');
+    if (!dialog) return 'no-dialog';
+    // Walk up from dialog to find the Vue component with spaceId prop
+    let el = dialog;
+    while (el) {
+      const vnode = el.__vueParentComponent;
+      if (vnode?.props?.spaceId) return vnode.props.spaceId;
+      // Also check setupState for the invite dialog
+      if (vnode?.setupState?.inviteSpaceId?.value) return 'ref:' + vnode.setupState.inviteSpaceId.value;
+      el = el.parentElement;
+    }
+    return 'not-found';
+  `);
+  console.log(`[QUIC-DIAG] Dialog spaceId: ${dialogSpaceId} (expected: space named "${spaceName}")`);
 
   // 3. Open the contact select dropdown and pick the contact by label
   await clickTestId(vault, "invite-contact-select");
@@ -1198,6 +1198,20 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
     expect(spaceId).toBeTruthy();
     console.log(`[QUIC] Space created: ${spaceId.slice(0, 8)}…`);
+
+    // Diagnostic: check UCANs and capabilities for this space
+    const ucans = await sqlQuery<{ capability: string; issuerDid: string; audienceDid: string }>(
+      vaultA,
+      `SELECT capability, issuer_did AS issuerDid, audience_did AS audienceDid FROM haex_ucan_tokens WHERE space_id = ?1`,
+      [spaceId],
+    );
+    console.log(`[QUIC-DIAG] UCANs for new space: ${JSON.stringify(ucans)}`);
+
+    const ownIdentities = await sqlQuery<{ did: string; label: string; privateKey: string }>(
+      vaultA,
+      `SELECT did, label, CASE WHEN private_key IS NOT NULL THEN 'yes' ELSE 'no' END AS privateKey FROM haex_identities WHERE private_key IS NOT NULL`,
+    );
+    console.log(`[QUIC-DIAG] Own identities: ${JSON.stringify(ownIdentities)}`);
   });
 
   test("ensure Vault A device is registered in space", async () => {
