@@ -462,32 +462,23 @@ async function sendInviteViaUI(
   // 1. Screenshot: spaces list before clicking trigger
   await vault.takeScreenshot(`invite-1-spaces-list-${spaceName.replace(/\s+/g, '-')}`);
 
-  // 2. Open invite dialog by finding the space's invite trigger (unique per space)
-  //    and clicking through the dropdown menu.
-  const triggerClicked = await vault.executeScript<boolean>(`
-    const name = ${JSON.stringify(spaceName)};
-    const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
-    for (const item of items) {
-      if (!item.querySelector('.font-medium')?.textContent?.trim()?.includes(name)
-          && !item.textContent?.includes(name)) continue;
-      const trigger = item.querySelector('[data-testid^="space-invite-trigger"]');
-      if (trigger) { trigger.click(); return true; }
+  // 2. Open invite dialog via the test helper exposed on window.
+  //    The UDropdownMenu portal has a Reka UI bug where the onSelect closure
+  //    captures the wrong SpaceListItem instance's props, so we bypass it.
+  const spaceForInvite = await sqlQuery<{ id: string }>(
+    vault,
+    `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
+    [spaceName],
+  );
+  const targetSpaceId = spaceForInvite[0]?.id;
+  const menuClicked = await vault.executeScript<boolean>(`
+    if (typeof window.__openInviteDialog === 'function') {
+      window.__openInviteDialog(${JSON.stringify(targetSpaceId || '')}, 'contact');
+      return true;
     }
     return false;
   `);
-  console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
-  await wait(500);
-
-  // Click "Invite contact" in the dropdown menu
-  const menuClicked = await vault.executeScript<boolean>(`
-    const items = [...document.querySelectorAll('[role="menuitem"]')];
-    const match = items.find(el => {
-      const t = el.textContent?.trim();
-      return t?.includes('Invite contact') || t?.includes('Kontakt einladen');
-    });
-    if (match) { match.click(); return true; }
-    return false;
-  `);
+  console.log(`[QUIC] Invite dialog opened via __openInviteDialog: ${menuClicked} (spaceId: ${targetSpaceId})`);
   await wait(1000);
 
   const dialogOpen = await elementExists(vault, '[role="dialog"]');
