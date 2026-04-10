@@ -464,8 +464,30 @@ async function sendInviteViaUI(
   console.log(`[QUIC] Invite trigger on "${spaceName}": ${triggerClicked}`);
   await wait(500);
 
-  // 2. Click "Invite contact" — use the LAST menuitem to avoid stale portals
-  //    Scope to the currently open menu (data-state="open") to avoid stale portals.
+  // 2. Diagnostic: dump all menu portals in the DOM to understand stale state
+  const portalDiag = await vault.executeScript<{
+    menuCount: number;
+    menuitemCount: number;
+    openMenus: number;
+    contentPortals: number;
+    dataStates: string[];
+  }>(`
+    const menus = document.querySelectorAll('[role="menu"]');
+    const menuitems = document.querySelectorAll('[role="menuitem"]');
+    const openMenus = document.querySelectorAll('[data-state="open"][role="menu"]');
+    const contentPortals = document.querySelectorAll('[data-slot="content"]');
+    const dataStates = [...contentPortals].map(el => el.getAttribute('data-state') || 'none');
+    return {
+      menuCount: menus.length,
+      menuitemCount: menuitems.length,
+      openMenus: openMenus.length,
+      contentPortals: contentPortals.length,
+      dataStates,
+    };
+  `);
+  console.log(`[QUIC-DIAG] Portal state after trigger: ${JSON.stringify(portalDiag)}`);
+
+  // Click "Invite contact" — scope to the currently open menu
   const menuClicked = await vault.executeScript<boolean>(`
     const openMenu = document.querySelector('[data-state="open"][role="menu"]')
       || document.querySelector('[data-state="open"] [role="menu"]');
