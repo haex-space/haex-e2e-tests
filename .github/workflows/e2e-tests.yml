@@ -1,6 +1,9 @@
 name: E2E Tests
 
 on:
+  push:
+    branches: [main]
+
   # Callable from other repositories (haex-vault, haextension, etc.)
   workflow_call:
     inputs:
@@ -326,7 +329,7 @@ jobs:
     outputs:
       success: ${{ steps.test.outcome == 'success' }}
       test_result: ${{ steps.test.outcome }}
-      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}-${{ matrix.shard }}
+      artifact_name: e2e-artifacts-${{ inputs.build_type || 'build' }}-${{ github.run_id }}-${{ matrix.shard }}
       run_id: ${{ github.run_id }}
 
     steps:
@@ -515,7 +518,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}-${{ matrix.shard }}
+          name: e2e-artifacts-${{ inputs.build_type || 'build' }}-${{ github.run_id }}-${{ matrix.shard }}
           path: |
             test-results/artifacts/
             test-results/html-report/
@@ -538,7 +541,7 @@ jobs:
     outputs:
       success: ${{ steps.check.outputs.success }}
       test_result: ${{ steps.check.outputs.result }}
-      artifact_name: e2e-artifacts-${{ inputs.build_type }}-${{ github.run_id }}
+      artifact_name: e2e-artifacts-${{ inputs.build_type || 'build' }}-${{ github.run_id }}
       run_id: ${{ github.run_id }}
 
     steps:
