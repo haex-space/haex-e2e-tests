@@ -38,7 +38,8 @@ test.describe("storage: P2P connectivity between vaults", () => {
   let nodeIdA: string;
   let nodeIdB: string;
   let relayUrlA: string | null;
-  const spaceId = `e2e-p2p-space-${Date.now()}`;
+  let spaceId: string;
+  let ucanToken: string;
   const testDir = `/tmp/e2e-p2p-test-${Date.now()}`;
 
   test.beforeAll(async () => {
@@ -100,14 +101,28 @@ test.describe("storage: P2P connectivity between vaults", () => {
       data: nestedBase64,
     });
 
-    // Create the space record on both vaults so FK constraints on
-    // haex_peer_shares and haex_space_devices are satisfied
-    for (const vault of [vaultA, vaultB]) {
-      await vault.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name) VALUES (?1, ?2, ?3)`,
-        params: [spaceId, "local", "E2E P2P Space"],
-      });
-    }
+    // Create a local space via the app (generates UCAN + MLS group automatically)
+    const created = await vaultA.executeScript<{ id: string }>(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const spacesStore = pinia?._s?.get('spaces');
+      const result = await spacesStore.createLocalSpaceAsync('E2E P2P Space');
+      return result;
+    `);
+    spaceId = created.id;
+
+    // Read the UCAN token for this space
+    const rows = await vaultA.invokeTauriCommand<[string][]>("sql_select_with_crdt", {
+      sql: `SELECT token FROM haex_ucan_tokens WHERE space_id = ?1 LIMIT 1`,
+      params: [spaceId],
+    });
+    ucanToken = rows[0]?.[0] ?? "";
+
+    // Create the space on Vault B too (for FK constraints on haex_space_devices)
+    await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name) VALUES (?1, ?2, ?3)`,
+      params: [spaceId, "local", "E2E P2P Space"],
+    });
   });
 
   test.afterAll(async () => {
@@ -215,6 +230,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/",
       }
     );
@@ -231,6 +247,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/TestShare",
       }
     );
@@ -254,6 +271,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/TestShare/subfolder",
       }
     );
@@ -346,6 +364,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       vaultB.invokeTauriCommand<FileEntry[]>("peer_storage_remote_list", {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/NonExistentShare",
       })
     ).rejects.toThrow();
@@ -356,6 +375,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       vaultB.invokeTauriCommand<FileEntry[]>("peer_storage_remote_list", {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/TestShare/../../etc",
       })
     ).rejects.toThrow();
@@ -384,6 +404,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       vaultB.invokeTauriCommand<FileEntry[]>("peer_storage_remote_list", {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/",
       })
     ).rejects.toThrow();
@@ -432,6 +453,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
+        ucanToken,
         path: "/",
       }
     );
