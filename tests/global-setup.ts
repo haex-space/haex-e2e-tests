@@ -237,7 +237,7 @@ async function invokeTauriCommand<T = unknown>(
     const { invoke } = window.__TAURI_INTERNALS__;
     invoke('${command}', ${JSON.stringify(args)})
       .then(result => callback({ success: true, data: result }))
-      .catch(error => callback({ success: false, error: error.message || String(error) }));
+      .catch(error => callback({ success: false, error: JSON.stringify(error) }));
   `;
 
   const response = await fetch(
@@ -262,8 +262,11 @@ async function invokeTauriCommand<T = unknown>(
 
   if (result && typeof result === "object" && "success" in result) {
     if (!result.success) {
-      const errorMsg = typeof result.error === "object" ? JSON.stringify(result.error, null, 2) : result.error;
-      throw new Error(`Tauri command '${command}' failed: ${errorMsg}`);
+      console.error(`[E2E] Tauri command '${command}' error — full result:`, JSON.stringify(result));
+      const errorDetails = typeof result.error === "object"
+        ? JSON.stringify(result.error, null, 2)
+        : String(result.error);
+      throw new Error(`Tauri command '${command}' failed: ${errorDetails}`);
     }
     return result.data as T;
   }
@@ -679,11 +682,18 @@ async function initializeTestVault(sessionId: string): Promise<void> {
   if (!existingVault) {
     // Create vault if it doesn't exist. create_encrypted_database creates AND opens it.
     console.log("[Setup] Creating new test vault...");
-    await invokeTauriCommand(sessionId, "create_encrypted_database", {
-      vaultName: TEST_VAULT_NAME,
-      key: TEST_VAULT_PASSWORD,
-      spaceId: null,
-    });
+    try {
+      await invokeTauriCommand(sessionId, "create_encrypted_database", {
+        vaultName: TEST_VAULT_NAME,
+        key: TEST_VAULT_PASSWORD,
+        spaceId: null,
+      });
+    } catch (e: any) {
+      console.error("[Setup] create_encrypted_database error:", e?.message || e);
+      console.error("[Setup] Error type:", typeof e, "keys:", e ? Object.keys(e) : "null");
+      console.error("[Setup] Full error:", JSON.stringify(e, null, 2));
+      throw e;
+    }
     // Close it again so the UI flow can open it properly (with Pinia store + extensions)
     await invokeTauriCommand(sessionId, "close_database", {}).catch(() => {});
     console.log("[Setup] Test vault created (will be opened via UI)");
