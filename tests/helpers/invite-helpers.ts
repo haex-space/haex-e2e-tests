@@ -317,7 +317,7 @@ export function generateEndpointId(): string {
  * Build a minimal UCAN token for testing.
  * The server stores this as-is; it doesn't fully verify crypto in development mode.
  */
-function buildTestUcan(
+export function buildTestUcan(
   issuerDid: string,
   audienceDid: string,
   spaceId: string,
