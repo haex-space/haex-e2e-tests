@@ -1,5 +1,14 @@
 import * as crypto from "crypto";
 import { test, expect, VaultAutomation } from "../fixtures";
+import {
+  createUcan,
+  createWebCryptoSigner,
+  publicKeyToDid,
+  spaceResource,
+  SpaceCapabilities,
+} from "@haex-space/ucan";
+
+const { subtle } = crypto.webcrypto as unknown as Crypto;
 
 /**
  * P2P Connectivity E2E Tests
@@ -40,6 +49,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
   let relayUrlA: string | null;
   const spaceId = `e2e-p2p-space-${Date.now()}`;
   const testDir = `/tmp/e2e-p2p-test-${Date.now()}`;
+  let ucanToken: string;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -108,6 +118,21 @@ test.describe("storage: P2P connectivity between vaults", () => {
         params: [spaceId, "local", "E2E P2P Space"],
       });
     }
+
+    // Generate a signed UCAN token for P2P authorization
+    const keyPair = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const rawPublicKey = new Uint8Array(await subtle.exportKey("raw", keyPair.publicKey));
+    const issuerDid = publicKeyToDid(rawPublicKey);
+    const signer = createWebCryptoSigner(keyPair.privateKey);
+    ucanToken = await createUcan(
+      {
+        issuer: issuerDid,
+        audience: issuerDid,
+        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        expiration: Math.floor(Date.now() / 1000) + 86400,
+      },
+      signer,
+    );
   });
 
   test.afterAll(async () => {
@@ -216,6 +241,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/",
+        ucanToken,
       }
     );
 
@@ -232,6 +258,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/TestShare",
+        ucanToken,
       }
     );
 
@@ -255,6 +282,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/TestShare/subfolder",
+        ucanToken,
       }
     );
 
@@ -272,6 +300,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       nodeId: nodeIdA,
       relayUrl: relayUrlA,
       path: "/TestShare/hello.txt",
+      ucanToken,
     });
 
     expect(localPath).toBeTruthy();
@@ -291,6 +320,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       nodeId: nodeIdA,
       relayUrl: relayUrlA,
       path: "/TestShare/large.bin",
+      ucanToken,
     });
 
     // Verify size
@@ -307,6 +337,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       nodeId: nodeIdA,
       relayUrl: relayUrlA,
       path: "/TestShare/subfolder/nested.txt",
+      ucanToken,
     });
 
     const content = await vaultB.invokeTauriCommand<string>(
@@ -325,6 +356,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       relayUrl: relayUrlA,
       path: "/TestShare/hello.txt",
       saveTo,
+      ucanToken,
     });
 
     expect(localPath).toBe(saveTo);
@@ -347,6 +379,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/NonExistentShare",
+        ucanToken,
       })
     ).rejects.toThrow();
   });
@@ -357,6 +390,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/TestShare/../../etc",
+        ucanToken,
       })
     ).rejects.toThrow();
   });
@@ -385,6 +419,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/",
+        ucanToken,
       })
     ).rejects.toThrow();
 
@@ -433,6 +468,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         nodeId: nodeIdA,
         relayUrl: relayUrlA,
         path: "/",
+        ucanToken,
       }
     );
 
@@ -467,6 +503,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       relayUrl: relayUrlA,
       path: "/TestShare/large.bin",
       transferId,
+      ucanToken,
     });
 
     // Cancel after a short delay

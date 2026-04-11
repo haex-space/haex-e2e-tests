@@ -1310,6 +1310,7 @@ export class VaultAutomation {
     path: string;
     saveTo?: string;
     transferId?: string;
+    ucanToken?: string;
   }): Promise<string> {
     if (!this.sessionId) {
       throw new Error("No WebDriver session");
