@@ -15,6 +15,7 @@ import {
   fetchMlsMessages,
   requestRejoin,
   submitExternalCommit,
+  buildSignedUcan,
 } from "../helpers/mls-helpers";
 
 /**
@@ -180,13 +181,14 @@ test.describe("MLS: KeyPackage management via server", () => {
 
   test("empty key package array is rejected", async () => {
     const bodyStr = JSON.stringify({ keyPackages: [] });
+    const token = await buildSignedUcan(userAuth, spaceId, "space/read");
     const res = await fetch(
       `${process.env.SYNC_SERVER_DIRECT_URL || "http://sync-server:3002"}/spaces/${spaceId}/mls/key-packages`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `UCAN ${buildDummyUcan(userAuth.did, spaceId)}`,
+          Authorization: `UCAN ${token}`,
         },
         body: bodyStr,
       },
@@ -196,20 +198,3 @@ test.describe("MLS: KeyPackage management via server", () => {
   });
 });
 
-// =============================================================================
-// Helper
-// =============================================================================
-
-function buildDummyUcan(did: string, spaceId: string): string {
-  const header = { alg: "EdDSA", typ: "JWT" };
-  const payload = {
-    iss: did,
-    aud: did,
-    att: [{ with: `space:${spaceId}`, can: "space/read" }],
-    exp: Math.floor(Date.now() / 1000) + 86400,
-    iat: Math.floor(Date.now() / 1000),
-  };
-  const encode = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString("base64url");
-  const sig = crypto.randomBytes(64).toString("base64url");
-  return `${encode(header)}.${encode(payload)}.${sig}`;
-}

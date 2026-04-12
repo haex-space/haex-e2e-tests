@@ -22,14 +22,14 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 // =============================================================================
 
 /**
- * Build a cryptographically signed UCAN Authorization header for space-scoped MLS operations.
+ * Build a cryptographically signed UCAN token for space-scoped MLS operations.
  */
-async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
+export async function buildSignedUcan(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
   const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
   const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
   const sign = createWebCryptoSigner(privateKey);
 
-  const token = await createUcan(
+  return createUcan(
     {
       issuer: auth.did,
       audience: auth.did,
@@ -38,7 +38,10 @@ async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capabilit
     },
     sign,
   );
+}
 
+async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
+  const token = await buildSignedUcan(auth, spaceId, capability);
   return `UCAN ${token}`;
 }
 

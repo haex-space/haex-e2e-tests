@@ -15,6 +15,12 @@ import {
   DidAuthAction,
   type AuthContext,
 } from "./sync-server-helpers";
+import {
+  createUcan,
+  createWebCryptoSigner,
+  spaceResource,
+  type Capability,
+} from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -24,8 +30,7 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 
 /**
  * Create a server-side invite for a specific DID.
- * The server requires a UCAN delegation token. For tests we pass a dummy UCAN
- * since the server validates structure but the E2E flow doesn't verify crypto.
+ * The server requires a UCAN delegation token signed by the inviter.
  */
 export async function createServerInvite(
   auth: AuthContext,
@@ -34,12 +39,11 @@ export async function createServerInvite(
   capability: string,
   includeHistory = false,
 ): Promise<Response> {
-  // Build a minimal test UCAN (the server stores it, doesn't fully validate crypto in dev)
-  const dummyUcan = buildTestUcan(auth.did, inviteeDid, spaceId, capability);
+  const ucan = await buildSignedUcanForInvite(auth, inviteeDid, spaceId, capability as Capability);
 
   const bodyObj = {
     inviteeDid,
-    ucan: dummyUcan,
+    ucan,
     includeHistory,
   };
   const bodyStr = JSON.stringify(bodyObj);
@@ -314,29 +318,27 @@ export function generateEndpointId(): string {
 }
 
 /**
- * Build a minimal UCAN token for testing.
- * The server stores this as-is; it doesn't fully verify crypto in development mode.
+ * Build a cryptographically signed UCAN delegation token for invites.
  */
-export function buildTestUcan(
-  issuerDid: string,
+async function buildSignedUcanForInvite(
+  auth: AuthContext,
   audienceDid: string,
   spaceId: string,
-  capability: string,
-): string {
-  const header = { alg: "EdDSA", typ: "JWT" };
-  const payload = {
-    iss: issuerDid,
-    aud: audienceDid,
-    att: [{ with: `space:${spaceId}`, can: capability }],
-    exp: Math.floor(Date.now() / 1000) + 86400 * 365,
-    iat: Math.floor(Date.now() / 1000),
-  };
+  capability: Capability,
+): Promise<string> {
+  const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
+  const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
+  const sign = createWebCryptoSigner(privateKey);
 
-  const encode = (obj: unknown) =>
-    Buffer.from(JSON.stringify(obj)).toString("base64url");
-  const sig = crypto.randomBytes(64).toString("base64url");
-
-  return `${encode(header)}.${encode(payload)}.${sig}`;
+  return createUcan(
+    {
+      issuer: auth.did,
+      audience: audienceDid,
+      capabilities: { [spaceResource(spaceId)]: capability },
+      expiration: Math.floor(Date.now() / 1000) + 86400 * 365,
+    },
+    sign,
+  );
 }
 
 /**
