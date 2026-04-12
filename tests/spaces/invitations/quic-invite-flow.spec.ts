@@ -869,19 +869,38 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
-    await sendInviteViaUI(vaultA, "Personal", contactLabel);
+    // Debug: check QUIC connectivity before invite
+    console.log(`[QUIC-DEBUG] Personal space invite — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
+    for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
+      try {
+        const st = await vault.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
+        console.log(`[QUIC-DEBUG] Vault ${label} local_delivery: running=${st.running}, nodeId=${st.nodeId?.slice(0, 12)}…`);
+      } catch (e) {
+        console.log(`[QUIC-DEBUG] Vault ${label} local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
+      }
+    }
 
+    const t0 = Date.now();
+    await sendInviteViaUI(vaultA, "Personal", contactLabel);
+    console.log(`[QUIC-DEBUG] sendInviteViaUI took ${Date.now() - t0}ms`);
+
+    let pollCount = 0;
     await pollUntil(
       async () => {
+        pollCount++;
         const invites = await sqlQuery<{ id: string }>(
           vaultB,
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [personalSpaceId],
         );
+        if (pollCount % 5 === 1) {
+          console.log(`[QUIC-DEBUG] Poll #${pollCount} (${Date.now() - t0}ms): invites=${invites.length}`);
+        }
         return invites.length > 0;
       },
       { timeout: 60_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
     );
+    console.log(`[QUIC-DEBUG] Invite delivered after ${Date.now() - t0}ms (${pollCount} polls)`);
   });
 
   test("decline Personal space invite on Vault B", async () => {
@@ -1182,8 +1201,26 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("set policy to 'nobody' via UI and verify invite is rejected", async () => {
+    // ── Debug: check QUIC connectivity state before the critical operation ──
+    console.log(`[QUIC-DEBUG] Step 11 start — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
+    try {
+      const statusA = await vaultA.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
+      console.log(`[QUIC-DEBUG] Vault A local_delivery_status: running=${statusA.running}, nodeId=${statusA.nodeId?.slice(0, 12)}…`);
+    } catch (e) {
+      console.log(`[QUIC-DEBUG] Vault A local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
+    }
+    try {
+      const statusB = await vaultB.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
+      console.log(`[QUIC-DEBUG] Vault B local_delivery_status: running=${statusB.running}, nodeId=${statusB.nodeId?.slice(0, 12)}…`);
+    } catch (e) {
+      console.log(`[QUIC-DEBUG] Vault B local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
+    }
+
     // Change policy on Vault B through the Spaces settings dropdown
+    console.log(`[QUIC-DEBUG] Setting invite policy to 'nobody' on Vault B...`);
+    const t0Policy = Date.now();
     await setInvitePolicyViaUI(vaultB, "nobody");
+    console.log(`[QUIC-DEBUG] setInvitePolicyViaUI took ${Date.now() - t0Policy}ms`);
 
     // Verify policy was applied
     const policy = await sqlQuery<{ policy: string }>(
@@ -1192,9 +1229,12 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     );
     expect(policy.length).toBe(1);
     expect(policy[0].policy).toBe("nobody");
+    console.log(`[QUIC-DEBUG] Policy confirmed: ${policy[0].policy}`);
 
     // Attempt to send an invite — should be rejected
     const newSpaceId = crypto.randomUUID();
+    console.log(`[QUIC-DEBUG] Sending blocked invite from A→B (spaceId=${newSpaceId.slice(0, 8)}…, target=${nodeIdB?.slice(0, 12)}…)`);
+    const t0Invite = Date.now();
     const accepted = await vaultA.invokeTauriCommand<boolean>(
       "local_delivery_push_invite",
       {
@@ -1212,6 +1252,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         expiresAt: new Date(Date.now() + 3600_000).toISOString(),
       },
     );
+    console.log(`[QUIC-DEBUG] local_delivery_push_invite returned: ${accepted} (took ${Date.now() - t0Invite}ms)`);
     expect(accepted).toBe(false);
 
     // No pending invite should have been created

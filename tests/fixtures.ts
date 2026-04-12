@@ -1262,14 +1262,17 @@ export class VaultAutomation {
       throw new Error("No WebDriver session");
     }
 
+    const t0 = Date.now();
+
     // Tauri v2 uses __TAURI_INTERNALS__ for the invoke function
     // WebDriver execute/async expects the script to call a callback (last argument)
     const script = `
       const callback = arguments[arguments.length - 1];
+      const t0 = Date.now();
       const { invoke } = window.__TAURI_INTERNALS__;
       invoke('${command}', ${JSON.stringify(args)})
-        .then(result => callback({ success: true, data: result }))
-        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)) }));
+        .then(result => callback({ success: true, data: result, _ms: Date.now() - t0 }))
+        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)), _ms: Date.now() - t0 }));
     `;
 
     const config = VAULT_CONFIG[this.instance];
@@ -1290,15 +1293,24 @@ export class VaultAutomation {
       );
 
       if (!response.ok) {
+        const elapsed = Date.now() - t0;
         const errorText = await response.text();
-        console.error(`[E2E] Tauri command '${command}' on Vault ${this.instance} failed:`, errorText);
+        console.error(`[E2E] Tauri command '${command}' on Vault ${this.instance} failed after ${elapsed}ms:`, errorText);
         throw new Error(`Failed to execute Tauri command '${command}': ${response.status} - ${errorText}`);
       }
 
       data = await response.json();
     }
 
+    const elapsed = Date.now() - t0;
     const result = data.value;
+    const innerMs = (result as any)?._ms;
+
+    // Log slow commands (>5s) or QUIC/P2P commands always
+    const isNetworkCmd = /local_delivery|peer_storage|quic/i.test(command);
+    if (elapsed > 5000 || isNetworkCmd) {
+      console.log(`[E2E] Vault ${this.instance} '${command}' took ${elapsed}ms (invoke: ${innerMs ?? '?'}ms)`);
+    }
 
     // Handle our wrapper format from async script
     if (result && typeof result === "object" && "success" in result) {
@@ -1340,6 +1352,9 @@ export class VaultAutomation {
       throw new Error("No WebDriver session");
     }
 
+    const t0 = Date.now();
+    console.log(`[E2E] Vault ${this.instance} peerStorageDownloadFile: ${args.path} from node ${args.nodeId?.slice(0, 12)}…`);
+
     // This script runs in the Tauri WebView and:
     // 1. Creates a real Tauri Channel (same as the production app)
     // 2. Invokes peer_storage_remote_read with it
@@ -1347,17 +1362,20 @@ export class VaultAutomation {
     const script = `
       const callback = arguments[arguments.length - 1];
       const internals = window.__TAURI_INTERNALS__;
+      const t0 = Date.now();
+      let lastEvent = null;
 
       // Create a real Tauri Channel with an onmessage handler
       const channelCallbackId = internals.transformCallback((rawMessage) => {
         const msg = rawMessage.message;
+        lastEvent = { type: Object.keys(msg || {}), ms: Date.now() - t0 };
         if (!msg) return;
         if (msg.event === 'complete' || msg.Complete) {
           const data = msg.Complete || msg;
-          callback({ success: true, data: data.localPath || data.local_path });
+          callback({ success: true, data: data.localPath || data.local_path, _ms: Date.now() - t0, _events: lastEvent });
         } else if (msg.event === 'error' || msg.Error) {
           const data = msg.Error || msg;
-          callback({ success: false, error: data.error || 'Download failed' });
+          callback({ success: false, error: data.error || 'Download failed', _ms: Date.now() - t0, _events: lastEvent });
         }
       });
       const channelToken = '__CHANNEL__:' + channelCallbackId;
@@ -1366,7 +1384,7 @@ export class VaultAutomation {
       args.onEvent = channelToken;
 
       internals.invoke('peer_storage_remote_read', args)
-        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)) }));
+        .catch(error => callback({ success: false, error: typeof error === 'object' ? JSON.stringify(error) : (error.message || String(error)), _ms: Date.now() - t0 }));
     `;
 
     const config = VAULT_CONFIG[this.instance];
@@ -1393,10 +1411,15 @@ export class VaultAutomation {
       data = await response.json();
     }
 
+    const elapsed = Date.now() - t0;
     const result = data.value;
+    const innerMs = (result as any)?._ms;
+    console.log(`[E2E] Vault ${this.instance} peerStorageDownloadFile '${args.path}' took ${elapsed}ms (invoke: ${innerMs ?? '?'}ms)`);
+
     if (result && typeof result === "object" && "success" in result) {
       const typedResult = result as { success: boolean; data?: unknown; error?: unknown };
       if (!typedResult.success) {
+        console.error(`[E2E] Vault ${this.instance} peerStorageDownloadFile '${args.path}' FAILED after ${elapsed}ms:`, typedResult.error);
         throw new Error(`peerStorageDownloadFile failed: ${typedResult.error}`);
       }
       return typedResult.data as string;

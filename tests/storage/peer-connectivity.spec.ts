@@ -252,6 +252,18 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("Vault B can list files inside a share", async () => {
+    // Debug: check P2P endpoint status before the flaky operation
+    console.log(`[P2P-DEBUG] Listing /TestShare — nodeIdA=${nodeIdA?.slice(0, 12)}…, relayUrl=${relayUrlA}`);
+    for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
+      try {
+        const st = await vault.invokeTauriCommand<PeerStorageStatus>("peer_storage_status", {});
+        console.log(`[P2P-DEBUG] Vault ${label} peer_storage_status: running=${st.running}, nodeId=${st.nodeId?.slice(0, 12)}…`);
+      } catch (e) {
+        console.log(`[P2P-DEBUG] Vault ${label} peer_storage_status failed:`, (e as Error).message?.slice(0, 120));
+      }
+    }
+
+    const t0 = Date.now();
     const entries = await vaultB.invokeTauriCommand<FileEntry[]>(
       "peer_storage_remote_list",
       {
@@ -261,6 +273,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
         ucanToken,
       }
     );
+    console.log(`[P2P-DEBUG] peer_storage_remote_list /TestShare took ${Date.now() - t0}ms, entries=${entries.length}`);
 
     expect(entries.length).toBe(3); // hello.txt, large.bin, subfolder
     const names = entries.map((e) => e.name).sort();
@@ -333,6 +346,29 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("Vault B can download from nested directories", async () => {
+    // Debug: check P2P status before the consistently failing download
+    console.log(`[P2P-DEBUG] Nested download — checking P2P health before attempt`);
+    for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
+      try {
+        const st = await vault.invokeTauriCommand<PeerStorageStatus>("peer_storage_status", {});
+        console.log(`[P2P-DEBUG] Vault ${label}: running=${st.running}, nodeId=${st.nodeId?.slice(0, 12)}…`);
+      } catch (e) {
+        console.log(`[P2P-DEBUG] Vault ${label} status FAILED:`, (e as Error).message?.slice(0, 120));
+      }
+    }
+
+    // Quick connectivity probe: list the subfolder first (lighter than download)
+    const t0Probe = Date.now();
+    try {
+      const probe = await vaultB.invokeTauriCommand<FileEntry[]>(
+        "peer_storage_remote_list",
+        { nodeId: nodeIdA, relayUrl: relayUrlA, path: "/TestShare/subfolder", ucanToken }
+      );
+      console.log(`[P2P-DEBUG] Subfolder probe OK in ${Date.now() - t0Probe}ms, entries=${probe.length}`);
+    } catch (e) {
+      console.log(`[P2P-DEBUG] Subfolder probe FAILED in ${Date.now() - t0Probe}ms:`, (e as Error).message?.slice(0, 120));
+    }
+
     const localPath = await vaultB.peerStorageDownloadFile({
       nodeId: nodeIdA,
       relayUrl: relayUrlA,
