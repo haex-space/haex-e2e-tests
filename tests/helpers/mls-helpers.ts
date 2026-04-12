@@ -6,11 +6,14 @@
 import * as crypto from "crypto";
 import {
   getSyncServerUrl,
-  createDidAuthHeader,
-  DidAuthAction,
   type AuthContext,
 } from "./sync-server-helpers";
-import { buildTestUcan } from "./invite-helpers";
+import {
+  createUcan,
+  createWebCryptoSigner,
+  spaceResource,
+  type Capability,
+} from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -19,12 +22,24 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 // =============================================================================
 
 /**
- * Build a UCAN Authorization header for space-scoped MLS operations.
- * Uses a test UCAN (server validates structure, not full crypto in dev).
+ * Build a cryptographically signed UCAN Authorization header for space-scoped MLS operations.
  */
-function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: string): string {
-  const ucan = buildTestUcan(auth.did, auth.did, spaceId, capability);
-  return `UCAN ${ucan}`;
+async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
+  const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
+  const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
+  const sign = createWebCryptoSigner(privateKey);
+
+  const token = await createUcan(
+    {
+      issuer: auth.did,
+      audience: auth.did,
+      capabilities: { [spaceResource(spaceId)]: capability },
+      expiration: Math.floor(Date.now() / 1000) + 3600,
+    },
+    sign,
+  );
+
+  return `UCAN ${token}`;
 }
 
 // =============================================================================
@@ -44,12 +59,13 @@ export async function uploadKeyPackages(
   );
 
   const bodyStr = JSON.stringify({ keyPackages });
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
 
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: buildUcanAuthHeader(auth, spaceId, "space/read"),
+      Authorization: authorization,
     },
     body: bodyStr,
   });
@@ -77,12 +93,13 @@ export async function sendMlsMessage(
   if (options?.groupInfo) bodyObj.groupInfo = options.groupInfo;
 
   const bodyStr = JSON.stringify(bodyObj);
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/write");
 
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: buildUcanAuthHeader(auth, spaceId, "space/write"),
+      Authorization: authorization,
     },
     body: bodyStr,
   });
@@ -96,11 +113,13 @@ export async function fetchMlsMessages(
   spaceId: string,
   afterId: number = 0,
 ): Promise<Response> {
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
+
   return fetch(
     `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages?after=${afterId}`,
     {
       headers: {
-        Authorization: buildUcanAuthHeader(auth, spaceId, "space/read"),
+        Authorization: authorization,
       },
     },
   );
@@ -117,10 +136,12 @@ export async function requestRejoin(
   auth: AuthContext,
   spaceId: string,
 ): Promise<Response> {
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
+
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/rejoin`, {
     method: "POST",
     headers: {
-      Authorization: buildUcanAuthHeader(auth, spaceId, "space/read"),
+      Authorization: authorization,
     },
   });
 }
@@ -134,12 +155,13 @@ export async function submitExternalCommit(
   commitBase64: string,
 ): Promise<Response> {
   const bodyStr = JSON.stringify({ commit: commitBase64 });
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
 
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/external-commit`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: buildUcanAuthHeader(auth, spaceId, "space/read"),
+      Authorization: authorization,
     },
     body: bodyStr,
   });
