@@ -365,17 +365,16 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
   const status = await vault.invokeTauriCommand<PeerStorageStatus>("peer_storage_status", {});
   if (status.running) return status.nodeId;
 
-  // Start via the Pinia store (same code path as the UI button)
+  // Start via the Pinia peerStorageStore — the same code path as the UI button.
+  // Awaiting startAsync() ensures the full initialization chain completes:
+  // peer_storage_start → autoRegisterInSpaces → startLocalSpaceLeaders → startFileSyncRules
   await vault.executeScript(`
     const app = document.getElementById('__nuxt')?.__vue_app__;
     const pinia = app?.config?.globalProperties?.$pinia;
     const store = pinia?._s?.get('peerStorageStore');
-    if (store?.startAsync) store.startAsync();
-    else if (store?.start) store.start();
+    if (store?.startAsync) await store.startAsync();
   `);
-  await wait(3000);
 
-  // Verify it's running
   const info = await pollUntil(
     async () => {
       const s = await vault.invokeTauriCommand<PeerStorageStatus>("peer_storage_status", {});
