@@ -868,6 +868,14 @@ async function globalSetup() {
   console.log("[Setup] Starting haex-vault via tauri-driver...");
   const sessionId = await createWebDriverSession();
 
+  // Increase WebDriver async script timeout from default 30s to 120s.
+  // QUIC peer operations (invites, P2P file transfers) can exceed 30s in CI.
+  await fetch(`${TAURI_DRIVER_URL}/session/${sessionId}/timeouts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ script: 120_000 }),
+  });
+
   // Save session ID for tests to reuse
   fs.writeFileSync(SESSION_FILE, JSON.stringify({ sessionId }));
   console.log("[Setup] Session ID saved to", SESSION_FILE);

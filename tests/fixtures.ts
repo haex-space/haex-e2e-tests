@@ -1028,6 +1028,9 @@ export class VaultAutomation {
       this.sessionId = sessionData.sessionId;
       console.log(`[E2E] Using existing WebDriver session for Vault ${this.instance}:`, this.sessionId);
 
+      // Ensure script timeout is set (may not be if session was created by global-setup)
+      await this.setWebDriverTimeouts({ script: 120_000 }).catch(() => {});
+
       // For existing sessions, just do a quick check that the app responds
       // The app should already be ready from global setup
       try {
@@ -1092,6 +1095,10 @@ export class VaultAutomation {
 
     console.log(`[E2E] Created new WebDriver session for Vault ${this.instance}:`, this.sessionId);
 
+    // Increase WebDriver async script timeout from default 30s to 120s.
+    // QUIC peer operations (invites, P2P downloads) can exceed 30s in CI.
+    await this.setWebDriverTimeouts({ script: 120_000 });
+
     // Save session to file for potential reuse
     const nodeFs = await import("node:fs");
     const sessionFile = this.instance === "A"
@@ -1154,6 +1161,23 @@ export class VaultAutomation {
     throw new Error(`App not ready within ${timeout}ms`);
   }
 
+  private async setWebDriverTimeouts(timeouts: { script?: number; pageLoad?: number; implicit?: number }): Promise<void> {
+    const config = VAULT_CONFIG[this.instance];
+    const body = JSON.stringify(timeouts);
+
+    if (config.needsHostOverride) {
+      await this.httpRequest("POST", `/session/${this.sessionId}/timeouts`, body);
+    } else {
+      const response = await fetch(
+        `${this.tauriDriverUrl}/session/${this.sessionId}/timeouts`,
+        { method: "POST", headers: this.buildHeaders(), body }
+      );
+      if (!response.ok) {
+        console.warn(`[E2E] Failed to set WebDriver timeouts: ${response.status}`);
+      }
+    }
+  }
+
   /**
    * Make HTTP request using Node.js http module
    * This is necessary for cross-container requests where Host header override is needed
@@ -1178,7 +1202,7 @@ export class VaultAutomation {
           ...(config.needsHostOverride ? { Host: config.tauriDriverHostHeader } : {}),
           ...(body ? { "Content-Length": Buffer.byteLength(body) } : {}),
         },
-        timeout: 30000,
+        timeout: 120_000,
       };
 
       const req = http.request(options, (res) => {
