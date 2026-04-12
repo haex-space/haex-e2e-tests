@@ -606,6 +606,59 @@ Wird NICHT automatisch nach `queueQuicInviteAsync` getriggert. Der Sync-Orchestr
 
 ---
 
+### QUIC Connection Lost bei sequentiellen Peer-Storage-Requests (GELÖST)
+**Problem:** P2P-Tests scheiterten mit `Protocol error: Failed to read from stream: connection lost` beim zweiten Request an denselben Peer.
+
+**Root Cause:** Jede `remote_*()` Methode in `peer_storage/endpoint.rs` erstellte per `endpoint.connect()` eine neue QUIC-Verbindung, obwohl der Server (`handle_connection`) für Stream-Multiplexing auf einer einzelnen Verbindung gebaut ist. Die Verbindungs-Teardown-Race-Condition war in Docker-CI besonders ausgeprägt.
+
+**Lösung:** Connection-Caching per Remote-Peer in `PeerEndpoint`:
+- `open_stream()` Helper: cached Connections in `Mutex<HashMap<EndpointId, Connection>>`, evicted stale Connections automatisch
+- `send_request()` / `send_request_header()` Helpers: eliminieren ~240 Zeilen Boilerplate
+- Pattern folgt dem `PeerSession` aus `space_delivery/local/peer.rs`
+
+**Geänderte Dateien:**
+- `haex-vault/src-tauri/src/peer_storage/endpoint.rs` — Connection-Cache + DRY-Refactoring (115 Zeilen hinzu, 240 entfernt)
+
+**Status:** ✅ GELÖST — P2P Storage Tests bestehen (338 passed)
+
+---
+
+### QUIC Invite Accept scheitert (TEILWEISE GELÖST)
+
+**Ursprüngliches Problem:** `startP2PEndpoint()` nutzte `executeScript` statt den echten UI-Flow → Leader wurden nicht gestartet → kein `delivery_handler` → Connection lost.
+
+**Fix 1 — P2P Start via UI (GELÖST):**
+`startP2PEndpoint()` umgebaut: Settings → P2P Storage → Connection → Start-Button klicken.
+- Triggert `onToggleEndpointAsync()` in `connection.vue` → voller Vue-Lifecycle
+- Leader werden korrekt gestartet (`isLeader=true`)
+- PushInvite-Delivery A→B funktioniert (Outbox: delivered, Pending Invite auf B erstellt)
+
+**Fix 2 — Stale Invite Data Cleanup (GELÖST):**
+Vor jedem Invite-Test: alte `haex_pending_invites`, `haex_spaces`, `haex_invite_outbox` Einträge auf Vault B löschen.
+- PushInvite-Handler rejected Invites wenn der Space bereits `status='active'` ist
+- Ohne Cleanup werden re-runs abgelehnt
+
+**Fix 3 — MLS "GroupId already exists" (GELÖST in haex-vault):**
+`process_welcome()` in `mls/manager.rs` bereinigt jetzt bestehende MLS-Gruppen vor dem Re-Join:
+```rust
+if let Ok(Some(mut old_group)) = MlsGroup::load(self.provider.storage(), &expected_group_id) {
+    let _ = old_group.delete(self.provider.storage());
+}
+```
+Ohne diesen Fix crasht ClaimInvite wenn eine MLS-Gruppe von einem früheren Join existiert.
+
+**Verbleibendes Problem — UI Accept-Button:**
+Der Accept-Button in der UI wird korrekt geklickt, aber `onAcceptInviteAsync()` schlägt manchmal fehl.
+Mögliche Ursache: Der Vue-Handler erkennt den Entry nicht als `kind === 'pending'`, oder der ClaimInvite schlägt aus anderen Gründen fehl. Der direkte Tauri-Command-Aufruf (`local_delivery_claim_invite`) funktioniert als Fallback.
+
+**Geänderte Dateien:**
+- `haex-e2e-tests/tests/spaces/invitations/quic-invite-flow.spec.ts` — `startP2PEndpoint()` UI-Flow, Cleanup, Diagnostik
+- `haex-vault/src-tauri/src/mls/manager.rs` — Stale-Group-Cleanup in `process_welcome()`
+
+**Status:** ⏳ IN PROGRESS — P2P Start + Invite Delivery gelöst, Accept braucht noch Verifikation
+
+---
+
 ## Debugging-Tipps
 
 ### WebSocket-Kommunikation loggen

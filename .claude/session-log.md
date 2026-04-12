@@ -1,5 +1,38 @@
 # Session Log
 
+## 2026-04-12 - CI Failures: QUIC Connection Lost + Invite Accept
+
+### Durchgeführt
+1. **P2P Storage "connection lost" gefixt** (haex-vault `4477d3f`):
+   - Root Cause: Jeder `remote_*()` Call erstellte neue QUIC-Connection statt Stream-Multiplexing
+   - Fix: Connection-Cache per Peer in `PeerEndpoint`, DRY-Refactoring (-240/+115 Zeilen)
+   - 38 Rust-Tests bestehen, P2P E2E-Tests grün
+
+2. **WebDriver Script Timeout erhöht** (e2e-tests `29fc5ad`):
+   - 30s→120s für async Script-Timeout + httpRequest-Timeout
+   - War nicht die Hauptursache, aber nötig für langsame CI-Operationen
+
+3. **Debug-Logging eingebaut** (e2e-tests `8beec03`):
+   - Timing in `invokeTauriCommand` und `peerStorageDownloadFile`
+   - QUIC/P2P Status-Checks vor kritischen Operationen
+   - `local_delivery_status` Felder gefixt (war `running/nodeId`, richtig: `is_leader/active_spaces`)
+
+4. **Invite Accept analysiert** — Root Cause gefunden:
+   - `startP2PEndpoint()` rief `store.startAsync()` ohne `await` auf
+   - Auch mit `await`: Leaders starten nicht zuverlässig via `executeScript`
+   - Eigentliches Problem: Test umgeht den UI-Flow → kein `delivery_handler` registriert
+
+### Offen
+- **startP2PEndpoint() auf echten UI-Flow umbauen** (Settings → P2P → Toggle)
+- Debug-Logging entfernen wenn CI grün ist
+
+### CI-Status
+- **338 passed, 1 failed** (vorher: 333 passed, 2 failed, 2 flaky)
+- P2P Storage: ✅ gefixt
+- QUIC Invite Accept: ❌ offen (Leader-Start-Problem)
+
+---
+
 ## 2026-01-09 - Initiale Knowledge Database
 
 ### Durchgeführt
