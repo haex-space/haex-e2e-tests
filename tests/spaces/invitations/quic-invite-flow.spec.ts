@@ -363,17 +363,37 @@ async function clickMenuItem(
  */
 async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
   const status = await vault.invokeTauriCommand<PeerStorageStatus>("peer_storage_status", {});
-  if (status.running) return status.nodeId;
+  if (status.running) {
+    // Endpoint already up — but leaders may not be running yet.
+    // Re-trigger startLocalSpaceLeadersAsync to ensure ClaimInvite handling.
+    await vault.executeScript(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const spacesStore = pinia?._s?.get('spacesStore');
+      if (spacesStore?.startLocalSpaceLeadersAsync) await spacesStore.startLocalSpaceLeadersAsync();
+    `);
+    const ds = await vault.invokeTauriCommand<{ is_leader: boolean; active_spaces: string[] }>("local_delivery_status", {});
+    console.log(`[QUIC] P2P already running, leaders: is_leader=${ds.is_leader}, spaces=${ds.active_spaces?.length ?? 0}`);
+    return status.nodeId;
+  }
 
   // Start via the Pinia peerStorageStore — the same code path as the UI button.
   // Awaiting startAsync() ensures the full initialization chain completes:
   // peer_storage_start → autoRegisterInSpaces → startLocalSpaceLeaders → startFileSyncRules
-  await vault.executeScript(`
+  const startResult = await vault.executeScript<string>(`
     const app = document.getElementById('__nuxt')?.__vue_app__;
     const pinia = app?.config?.globalProperties?.$pinia;
     const store = pinia?._s?.get('peerStorageStore');
-    if (store?.startAsync) await store.startAsync();
+    if (!store) return 'no-store';
+    if (!store.startAsync) return 'no-startAsync';
+    try {
+      await store.startAsync();
+      return 'ok';
+    } catch (e) {
+      return 'error:' + e.message;
+    }
   `);
+  console.log(`[QUIC] peerStorageStore.startAsync() result: ${startResult}`);
 
   const info = await pollUntil(
     async () => {
@@ -382,6 +402,11 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
     },
     { timeout: 15_000, label: "P2P running" },
   );
+
+  // Verify leaders are running
+  const ds = await vault.invokeTauriCommand<{ is_leader: boolean; active_spaces: string[] }>("local_delivery_status", {});
+  console.log(`[QUIC] After P2P start: is_leader=${ds.is_leader}, active_spaces=[${ds.active_spaces?.join(', ')}]`);
+
   return info!.nodeId;
 }
 
@@ -872,8 +897,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     console.log(`[QUIC-DEBUG] Personal space invite — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
     for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
       try {
-        const st = await vault.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
-        console.log(`[QUIC-DEBUG] Vault ${label} local_delivery: running=${st.running}, nodeId=${st.nodeId?.slice(0, 12)}…`);
+        const st = await vault.invokeTauriCommand<{ is_leader: boolean; active_spaces: string[] }>("local_delivery_status", {});
+        console.log(`[QUIC-DEBUG] Vault ${label} local_delivery: is_leader=${st.is_leader}, spaces=${st.active_spaces?.length ?? 0}`);
       } catch (e) {
         console.log(`[QUIC-DEBUG] Vault ${label} local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
       }
@@ -1203,14 +1228,14 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     // ── Debug: check QUIC connectivity state before the critical operation ──
     console.log(`[QUIC-DEBUG] Step 11 start — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
     try {
-      const statusA = await vaultA.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
-      console.log(`[QUIC-DEBUG] Vault A local_delivery_status: running=${statusA.running}, nodeId=${statusA.nodeId?.slice(0, 12)}…`);
+      const statusA = await vaultA.invokeTauriCommand<{ is_leader: boolean; active_spaces: string[] }>("local_delivery_status", {});
+      console.log(`[QUIC-DEBUG] Vault A local_delivery_status: is_leader=${statusA.is_leader}, spaces=${statusA.active_spaces?.length ?? 0}`);
     } catch (e) {
       console.log(`[QUIC-DEBUG] Vault A local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
     }
     try {
-      const statusB = await vaultB.invokeTauriCommand<{ running: boolean; nodeId: string }>("local_delivery_status", {});
-      console.log(`[QUIC-DEBUG] Vault B local_delivery_status: running=${statusB.running}, nodeId=${statusB.nodeId?.slice(0, 12)}…`);
+      const statusB = await vaultB.invokeTauriCommand<{ is_leader: boolean; active_spaces: string[] }>("local_delivery_status", {});
+      console.log(`[QUIC-DEBUG] Vault B local_delivery_status: is_leader=${statusB.is_leader}, spaces=${statusB.active_spaces?.length ?? 0}`);
     } catch (e) {
       console.log(`[QUIC-DEBUG] Vault B local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
     }
