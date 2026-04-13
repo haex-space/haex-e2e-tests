@@ -913,12 +913,9 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       });
     }
 
-    // Clean up stale data on Vault B from previous test runs:
-    // If Vault B already has Vault A's Personal space (from a prior accepted invite),
-    // No cleanup needed — the test expects fresh containers with no prior invite state.
-    // If Vault B already has this space active from a prior run, the PushInvite handler
-    // correctly skips it (accepted: true, no pending invite created). This is by design.
-    console.log(`[QUIC] Cleaned up stale invite data for Personal space`);
+    // No cleanup — test expects fresh vault containers. If Vault B already has
+    // this space active from a prior run, the PushInvite handler correctly skips
+    // it (accepted: true, no pending invite created) which is by design.
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
@@ -1302,13 +1299,13 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     console.log(`[QUIC-DEBUG] Step 11 start — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
     try {
       const statusA = await vaultA.invokeTauriCommand<{ isLeader: boolean; activeSpaces: string[] }>("local_delivery_status", {});
-      console.log(`[QUIC-DEBUG] Vault A local_delivery_status: is_leader=${statusA.is_leader}, spaces=${statusA.active_spaces?.length ?? 0}`);
+      console.log(`[QUIC-DEBUG] Vault A local_delivery_status: isLeader=${statusA.isLeader}, spaces=${statusA.activeSpaces?.length ?? 0}`);
     } catch (e) {
       console.log(`[QUIC-DEBUG] Vault A local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
     }
     try {
       const statusB = await vaultB.invokeTauriCommand<{ isLeader: boolean; activeSpaces: string[] }>("local_delivery_status", {});
-      console.log(`[QUIC-DEBUG] Vault B local_delivery_status: is_leader=${statusB.is_leader}, spaces=${statusB.active_spaces?.length ?? 0}`);
+      console.log(`[QUIC-DEBUG] Vault B local_delivery_status: isLeader=${statusB.isLeader}, spaces=${statusB.activeSpaces?.length ?? 0}`);
     } catch (e) {
       console.log(`[QUIC-DEBUG] Vault B local_delivery_status failed:`, (e as Error).message?.slice(0, 120));
     }
