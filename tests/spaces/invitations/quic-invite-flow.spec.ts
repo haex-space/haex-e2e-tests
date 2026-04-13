@@ -508,14 +508,24 @@ async function sendInviteViaUI(
   `);
   await wait(300);
 
-  // Open invite dialog via test helper (bypasses UDropdownMenu portal bug)
+  // Open invite dialog through the real UI: click the per-space dropdown
+  // trigger, then click the "invite contact" option. Each option carries a
+  // stable `data-testid` keyed by space ID so the right card's dropdown is
+  // unambiguous (previously this required a window.__openInviteDialog hook
+  // because the menu items had no testable handles).
   const spaceForInvite = await sqlQuery<{ id: string }>(
     vault,
     `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
     [spaceName],
   );
   const targetSpaceId = spaceForInvite[0]?.id;
-  await vault.executeScript(`window.__openInviteDialog(${JSON.stringify(targetSpaceId)}, 'contact')`);
+  if (!targetSpaceId) {
+    throw new Error(`[QUIC] Space "${spaceName}" not found in haex_spaces`);
+  }
+
+  await clickTestId(vault, `space-invite-trigger-${targetSpaceId}`);
+  await wait(300);
+  await clickTestId(vault, `space-invite-option-contact-${targetSpaceId}`);
   await wait(1000);
 
   // Select contact
