@@ -243,7 +243,7 @@ test.describe("UI: Identity Creation & Sync Setup", () => {
   test.skip("should verify identity exists in vault database", async () => {
     // Use sql_select_with_crdt to read through the CRDT layer
     const rows = await vault.invokeTauriCommand<unknown[][]>("sql_select_with_crdt", {
-      sql: "SELECT public_key, label, did FROM haex_identities WHERE label = ?",
+      sql: "SELECT name, did FROM haex_identities WHERE name = ?",
       params: [TEST_IDENTITY_LABEL],
     });
 
@@ -252,13 +252,13 @@ test.describe("UI: Identity Creation & Sync Setup", () => {
     if (rows.length === 0) {
       // Debug: check raw table and all identities
       const rawRows = await vault.invokeTauriCommand<unknown[][]>("sql_select", {
-        sql: "SELECT label, did FROM haex_identities",
+        sql: "SELECT name, did FROM haex_identities",
         params: [],
       });
       console.log("[UI Test] All identities (raw):", JSON.stringify(rawRows));
 
       const crdtRows = await vault.invokeTauriCommand<unknown[][]>("sql_select_with_crdt", {
-        sql: "SELECT label, did FROM haex_identities",
+        sql: "SELECT name, did FROM haex_identities",
         params: [],
       });
       console.log("[UI Test] All identities (CRDT):", JSON.stringify(crdtRows));
@@ -266,10 +266,8 @@ test.describe("UI: Identity Creation & Sync Setup", () => {
 
     expect(rows.length).toBeGreaterThanOrEqual(1);
 
-    const [publicKey, label, did] = rows[0] as [string, string, string];
-    expect(label).toBe(TEST_IDENTITY_LABEL);
-    expect(typeof publicKey).toBe("string");
-    expect(publicKey.length).toBeGreaterThan(10);
+    const [name, did] = rows[0] as [string, string];
+    expect(name).toBe(TEST_IDENTITY_LABEL);
     expect(did).toMatch(/^did:key:z/);
   });
 

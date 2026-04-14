@@ -710,8 +710,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   let vaultB: VaultAutomation;
   let nodeIdA: string;
   let nodeIdB: string;
-  let identityA: { id: string; did: string; publicKey: string };
-  let identityB: { id: string; did: string; publicKey: string };
+  let identityA: { id: string; did: string };
+  let identityB: { id: string; did: string };
   let personalSpaceId: string;
   let spaceId: string;
   const spaceName = "QUIC Invite Test";
@@ -778,16 +778,16 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     const rows = await pollUntil(
       async () => {
         try {
-          const r = await sqlQuery<{ id: string; did: string; public_key: string }>(
+          const r = await sqlQuery<{ id: string; did: string }>(
             vaultA,
-            "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+            "SELECT id, did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
           );
           return r.length > 0 ? r : null;
         } catch { return null; }
       },
       { timeout: 30_000, interval: 2_000, label: "identity on Vault A" },
     );
-    identityA = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
+    identityA = { id: rows![0].id, did: rows![0].did };
     expect(identityA.did).toContain("did:key:");
     console.log(`[QUIC] Identity A: ${identityA.did.slice(0, 30)}…`);
   });
@@ -796,16 +796,16 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     const rows = await pollUntil(
       async () => {
         try {
-          const r = await sqlQuery<{ id: string; did: string; public_key: string }>(
+          const r = await sqlQuery<{ id: string; did: string }>(
             vaultB,
-            "SELECT id, did, public_key FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+            "SELECT id, did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
           );
           return r.length > 0 ? r : null;
         } catch { return null; }
       },
       { timeout: 30_000, interval: 2_000, label: "identity on Vault B" },
     );
-    identityB = { id: rows![0].id, did: rows![0].did, publicKey: rows![0].public_key };
+    identityB = { id: rows![0].id, did: rows![0].did };
     expect(identityB.did).toContain("did:key:");
     console.log(`[QUIC] Identity B: ${identityB.did.slice(0, 30)}…`);
   });
@@ -818,9 +818,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test("register Vault B as contact on Vault A via JSON import", async () => {
     // Build the identity JSON payload (same format as ShareIdentityDialog / QR export)
     const identityPayload = JSON.stringify({
-      v: 2,
-      publicKey: identityB.publicKey,
-      label: contactLabel,
+      did: identityB.did,
+      name: contactLabel,
       claims: [{ type: "endpointId", value: nodeIdB }],
     });
 
@@ -879,8 +878,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     // Verify contact exists in DB
     const contacts = await sqlQuery<{ id: string }>(
       vaultA,
-      `SELECT id FROM haex_identities WHERE public_key = ?1 AND private_key IS NULL`,
-      [identityB.publicKey],
+      `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
+      [identityB.did],
     );
     expect(contacts.length).toBe(1);
 

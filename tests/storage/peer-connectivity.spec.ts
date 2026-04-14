@@ -50,6 +50,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
   const spaceId = `e2e-p2p-space-${Date.now()}`;
   const testDir = `/tmp/e2e-p2p-test-${Date.now()}`;
   let ucanToken: string;
+  let ownerIdentityId: string;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -111,11 +112,18 @@ test.describe("storage: P2P connectivity between vaults", () => {
     });
 
     // Create the space record on both vaults so FK constraints on
-    // haex_peer_shares and haex_space_devices are satisfied
+    // haex_peer_shares and haex_space_devices are satisfied.
+    // haex_spaces requires owner_identity_id — use the vault's own identity.
     for (const vault of [vaultA, vaultB]) {
+      const [[identityId]] = await vault.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+        sql: "SELECT id FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+        params: [],
+      });
+      if (vault === vaultA) ownerIdentityId = identityId;
+
       await vault.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name) VALUES (?1, ?2, ?3)`,
-        params: [spaceId, "local", "E2E P2P Space"],
+        sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
+        params: [spaceId, "local", "E2E P2P Space", identityId],
       });
     }
 
@@ -479,8 +487,8 @@ test.describe("storage: P2P connectivity between vaults", () => {
 
     // Create the space record for the other space
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name) VALUES (?1, ?2, ?3)`,
-      params: [otherSpaceId, "local", "E2E P2P Other Space"],
+      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
+      params: [otherSpaceId, "local", "E2E P2P Other Space", ownerIdentityId],
     });
 
     // Create a share in a different space
