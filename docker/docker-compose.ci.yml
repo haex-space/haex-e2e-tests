@@ -1,0 +1,27 @@
+# CI-only overrides: enable GitHub Actions Docker layer cache
+# Usage: docker compose -f docker/docker-compose.yml -f docker/docker-compose.ci.yml build ...
+#
+# This avoids re-downloading ~200 apt packages and rebuilding Rust tooling
+# on every run. The vault-a image is the main bottleneck (~40 min uncached).
+
+services:
+  vault-a:
+    build:
+      cache_from:
+        - type=gha,scope=vault-e2e
+      cache_to:
+        - type=gha,scope=vault-e2e,mode=max
+
+  sync-server:
+    build:
+      cache_from:
+        - type=gha,scope=sync-server
+      cache_to:
+        - type=gha,scope=sync-server,mode=max
+
+  marketplace:
+    build:
+      cache_from:
+        - type=gha,scope=marketplace
+      cache_to:
+        - type=gha,scope=marketplace,mode=max
