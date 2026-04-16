@@ -1,17 +1,14 @@
 # E2E Test Environment for haex-vault + haex-pass + Browser Extension
 #
-# Based on webtop for GUI support (needed for Tauri apps)
-# Includes: Rust, Node.js, tauri-driver, Playwright browsers
+# Uses pre-built base image with all system deps (webtop, Node.js, Rust,
+# tauri-driver, Playwright deps). See Dockerfile.base for the base image.
 #
 # Supports two modes:
 # 1. Build from source: Set HAEX_VAULT_REF to a git ref (default)
 # 2. Use pre-built binary: Set USE_PREBUILT_VAULT=true and copy binary to prebuilt/haex-vault/
 
-# Pin to Ubuntu 24.04 (Noble) — ubuntu-xfce:latest moved to 26.04 which Playwright doesn't support yet
-FROM lscr.io/linuxserver/webtop:ubuntu-xfce-version-c6f3d68b
+FROM ghcr.io/haex-space/haex-e2e-base:latest
 
-# Build arguments for version control
-ARG NODE_VERSION=22
 ARG HAEX_VAULT_REF=main
 ARG HAEXTENSION_REF=main
 ARG VAULT_SDK_REF=main
@@ -22,69 +19,6 @@ ENV HAEX_VAULT_REF=${HAEX_VAULT_REF}
 ENV HAEXTENSION_REF=${HAEXTENSION_REF}
 ENV VAULT_SDK_REF=${VAULT_SDK_REF}
 ENV USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT}
-
-# Install system dependencies for Tauri
-RUN apt-get update && apt-get install -y \
-    # Tauri/WebKit dependencies
-    libwebkit2gtk-4.1-dev \
-    build-essential \
-    curl \
-    wget \
-    file \
-    libssl-dev \
-    libgtk-3-dev \
-    libayatana-appindicator3-dev \
-    librsvg2-dev \
-    libsoup-3.0-dev \
-    # Additional deps
-    git \
-    jq \
-    unzip \
-    # Playwright browser deps
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libasound2t64 \
-    # socat for cross-container communication (dual-vault tests)
-    socat \
-    # ffmpeg for desktop screen recording during tests
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Node.js via NodeSource
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Enable pnpm via corepack
-RUN corepack enable pnpm
-
-# Install Rust (force install to /root/.cargo since webtop uses /config as HOME)
-ENV CARGO_HOME=/root/.cargo
-ENV RUSTUP_HOME=/root/.rustup
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-# Install tauri-cli and tauri-driver for E2E testing
-RUN /root/.cargo/bin/cargo install tauri-cli tauri-driver
-
-# Install WebKitWebDriver (required for tauri-driver)
-RUN apt-get update && apt-get install -y webkit2gtk-driver && rm -rf /var/lib/apt/lists/*
-
-# Set Playwright browser path (browsers installed later after pnpm install)
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
-
-# Create directories
-RUN mkdir -p /app /app/test-results /repos /prebuilt
 
 WORKDIR /repos
 
@@ -224,10 +158,6 @@ RUN chmod +x /custom-cont-init.d/*.sh
 
 # Install test dependencies
 RUN pnpm install
-
-# Clear stale apt lists and configure retries to avoid transient mirror hash mismatches
-RUN apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    echo 'Acquire::Retries "3";' > /etc/apt/apt.conf.d/80-retries
 
 # Install Playwright browsers AFTER pnpm install (avoids "install dependencies first" warning)
 # This ensures @playwright/test is installed before downloading browsers
