@@ -237,7 +237,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
-          driver-opts: network=host
+          # Use docker driver so builds can access locally cached images
+          # (docker-container driver runs in an isolated container without
+          # access to the host's Docker image cache)
+          driver: docker
 
       - name: Build and export Docker images
         env:
@@ -271,9 +274,8 @@ jobs:
           mkdir -p prebuilt
 
           # Build vault-a, sync-server, and marketplace (vault-b uses same image as vault-a)
-          # CI override adds GHA layer cache so apt-get/cargo/playwright layers are reused
           echo "Building Docker images..."
-          docker compose -f docker/docker-compose.yml -f docker/docker-compose.ci.yml build vault-a sync-server marketplace
+          docker compose -f docker/docker-compose.yml build vault-a sync-server marketplace
 
           # Export vault, sync-server, and marketplace images for parallel test jobs
           # docker-compose uses project name from directory (docker/)
