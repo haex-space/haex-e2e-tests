@@ -8,7 +8,7 @@ import { test, expect, VaultAutomation } from "../../fixtures";
  * driving all user-facing actions through the actual UI:
  *
  *  - Vault creation/opening via the vault picker UI
- *  - P2P endpoint start via Settings → P2P Storage → Connection
+ *  - P2P endpoint start via Settings → P2P Network
  *  - Space creation via Settings → Spaces → Create dialog
  *  - Invite sending via SpaceInviteDialog (contact mode)
  *  - Invite accept/decline via pending invite UI buttons
@@ -331,35 +331,15 @@ async function openSettingsCategory(
   await wait(500);
 }
 
-/**
- * In a settings sub-page that shows menu items (e.g. P2P Storage main page),
- * click the menu item whose text contains one of `labels`.
- */
-async function clickMenuItem(
-  vault: VaultAutomation,
-  ...labels: string[]
-): Promise<boolean> {
-  return vault.executeScript<boolean>(`
-    const labels = ${JSON.stringify(labels)};
-    // HaexSystemSettingsLayoutMenuItem renders a cursor-pointer div
-    const candidates = [...document.querySelectorAll('[class*="cursor-pointer"], [role="button"], button')];
-    for (const label of labels) {
-      const match = candidates.find(el => el.textContent?.includes(label));
-      if (match) { match.click(); return true; }
-    }
-    return false;
-  `);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // UI Helpers — feature-specific
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Start the P2P endpoint through the real UI:
- *   Settings → P2P Storage → Connection → click "Start" button.
+ *   Settings → P2P Network → click "Start" button.
  *
- * This triggers the full Vue component lifecycle in connection.vue's
+ * This triggers the full Vue component lifecycle in peer-storage.vue's
  * onToggleEndpointAsync(), which calls store.startAsync() within the
  * reactive context — ensuring startLocalSpaceLeadersAsync() and
  * local_delivery_start both complete (registers the delivery_handler
@@ -380,8 +360,8 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
     await wait(1000);
   }
 
-  // 1. Close any leftover Settings window, then open fresh at peerStorage.
-  //    This ensures we land on the index (menu) view, not a stale subview.
+  // 1. Close any leftover Settings window, then open fresh at peerNetwork.
+  //    The Start/Stop button is directly on the P2P Network index view.
   await vault.executeScript(`
     const app = document.getElementById('__nuxt')?.__vue_app__;
     const pinia = app?.config?.globalProperties?.$pinia;
@@ -394,22 +374,10 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
     }
   `);
   await wait(500);
-  await openSettingsCategory(vault, "peerStorage");
+  await openSettingsCategory(vault, "peerNetwork");
   await wait(800);
 
-  // 2. Click "Connection" / "Verbindung" menu item (drill-down into connection.vue).
-  //    If the menu item isn't visible (e.g. already in a subview), click back first.
-  let menuClicked = await clickMenuItem(vault, "Connection", "Verbindung");
-  if (!menuClicked) {
-    console.log(`[QUIC] Menu item not found, clicking back to reset drill-down…`);
-    await clickButton(vault, "Back", "Zurück");
-    await wait(800);
-    menuClicked = await clickMenuItem(vault, "Connection", "Verbindung");
-  }
-  console.log(`[QUIC] Connection menu clicked: ${menuClicked}`);
-  await wait(1000); // slide-forward transition
-
-  // 3. Click the "Start" / "Starten" button (not "Stop"/"Stoppen" — P2P should be stopped)
+  // 2. Click the "Start" / "Starten" button (not "Stop"/"Stoppen" — P2P should be stopped)
   const startClicked = await pollUntil(
     () => clickButton(vault, "Start", "Starten"),
     { timeout: 10_000, label: "P2P Start button" },
