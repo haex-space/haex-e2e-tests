@@ -11,6 +11,11 @@ FROM lscr.io/linuxserver/webtop:ubuntu-xfce-version-c6f3d68b
 
 ARG NODE_VERSION=22
 
+# Use German mirror — archive.ubuntu.com is unreliable from CI runners and many networks
+RUN sed -i 's|http://archive.ubuntu.com|http://de.archive.ubuntu.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null; \
+    sed -i 's|http://archive.ubuntu.com|http://de.archive.ubuntu.com|g' /etc/apt/sources.list 2>/dev/null; \
+    true
+
 # Install system dependencies for Tauri
 RUN apt-get update && apt-get install -y \
     # Tauri/WebKit dependencies
