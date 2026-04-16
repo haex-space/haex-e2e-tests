@@ -91,7 +91,7 @@ jobs:
   # Build Docker image and save it for parallel test jobs
   build-env:
     name: Build Test Environment
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, e2e-runner]
     timeout-minutes: 60
 
     outputs:
