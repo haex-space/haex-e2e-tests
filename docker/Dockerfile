@@ -61,6 +61,17 @@ RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-vau
       mkdir -p /repos/haex-vault/src-tauri/target/release; \
       cp /prebuilt/haex-vault/haex-vault /repos/haex-vault/src-tauri/target/release/haex-vault; \
       chmod +x /repos/haex-vault/src-tauri/target/release/haex-vault; \
+      if [ -d "/prebuilt/haex-vault/database" ]; then \
+        echo "Using pre-built database migrations resources"; \
+        cp -r /prebuilt/haex-vault/database /repos/haex-vault/src-tauri/target/release/; \
+      else \
+        echo "WARNING: no database/ in /prebuilt/haex-vault/ — migrations may fail"; \
+      fi; \
+      # Tauri's resource_dir() checks for .cargo-lock next to the exe to detect \
+      # cargo output directories and returns exe_dir instead of /usr/lib/<name>/. \
+      # Without this marker, BaseDirectory::Resource resolves to /usr/lib/haex-vault/ \
+      # and migrations fail to load. \
+      touch /repos/haex-vault/src-tauri/target/release/.cargo-lock; \
     else \
       echo "Building haex-vault from source (USE_PREBUILT_VAULT=$USE_PREBUILT_VAULT)"; \
       /root/.cargo/bin/cargo tauri build --no-bundle; \
