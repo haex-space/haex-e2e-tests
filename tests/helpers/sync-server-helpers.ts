@@ -482,7 +482,7 @@ export async function createSpace(
   };
   const bodyStr = JSON.stringify(bodyObj);
 
-  return fetch(`${SYNC_SERVER_URL}/spaces`, {
+  const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -490,6 +490,20 @@ export async function createSpace(
     },
     body: bodyStr,
   });
+
+  // Debug: dump 400-body so we can see what the server rejected.
+  // TODO: remove once CI root cause is identified.
+  if (!res.ok) {
+    const clone = res.clone();
+    try {
+      const body = await clone.text();
+      console.log(`[createSpace DEBUG] status=${res.status} body=${body}`);
+    } catch {
+      // ignore
+    }
+  }
+
+  return res;
 }
 
 /**
