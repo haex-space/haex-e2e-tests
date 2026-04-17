@@ -1228,6 +1228,62 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Step 9b — Inviter attribution after accept (regression: owner_identity_id
+  // previously pointed to the claimant's own identity, making shared spaces
+  // appear self-owned in the UI)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test("Vault B space.owner_identity_id points to inviter's identity row, not claimant's", async () => {
+    const spaces = await sqlQuery<{ owner_identity_id: string }>(
+      vaultB,
+      `SELECT owner_identity_id FROM haex_spaces WHERE id = ?1`,
+      [spaceId],
+    );
+    expect(spaces.length).toBe(1);
+    const ownerId = spaces[0].owner_identity_id;
+    expect(ownerId).toBeTruthy();
+
+    // The owner identity row must exist on Vault B and carry Vault A's DID —
+    // not Vault B's own DID. This is exactly the Rust-side
+    // resolve_owner_identity_id regression.
+    const owner = await sqlQuery<{ id: string; did: string; private_key: string | null }>(
+      vaultB,
+      `SELECT id, did, private_key FROM haex_identities WHERE id = ?1`,
+      [ownerId],
+    );
+    expect(owner.length).toBe(1);
+    expect(owner[0].did).toBe(identityA.did);
+    expect(owner[0].did).not.toBe(identityB.did);
+
+    // The mirrored inviter identity on Vault B has no private key — it's a
+    // remote party, not a local own-identity.
+    expect(owner[0].private_key).toBeNull();
+    console.log(`[QUIC] Owner attribution: space.owner=${owner[0].did.slice(0, 24)}… (inviter) ✓`);
+  });
+
+  test("Vault B's UCAN for the shared space has issuer=inviter, audience=claimant", async () => {
+    // Regression: the old local-claim path stored issuer_did = claimant DID
+    // ("self-issued for local claims"), which misrepresented the delegation
+    // chain signed by the inviter and confused CRDT fan-out on the admin side.
+    const rows = await sqlQuery<{ issuer_did: string; audience_did: string; capability: string }>(
+      vaultB,
+      `SELECT issuer_did, audience_did, capability
+       FROM haex_ucan_tokens
+       WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityB.did],
+    );
+    expect(rows.length).toBeGreaterThan(0);
+
+    // Every row delegated to Vault B must be issued by Vault A.
+    for (const row of rows) {
+      expect(row.audience_did).toBe(identityB.did);
+      expect(row.issuer_did).toBe(identityA.did);
+      expect(row.issuer_did).not.toBe(identityB.did);
+    }
+    console.log(`[QUIC] UCAN delegation shape: ${rows.length} row(s) with issuer=A, audience=B ✓`);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Step 10 — Self-invite prevention (backend edge case — no UI for this)
   // ═══════════════════════════════════════════════════════════════════════════
 
