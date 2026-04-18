@@ -129,19 +129,16 @@ if (!connectionString) {
   const ADMIN_USER_ID = '00000000-0000-0000-0000-000000000a01'
   const OWNER_USER_ID = '00000000-0000-0000-0000-000000000a02'
   const MEMBER_USER_ID = '00000000-0000-0000-0000-000000000a03'
-  const OUTSIDER_USER_ID = '00000000-0000-0000-0000-000000000a04'
   const INVITEE_USER_ID = '00000000-0000-0000-0000-000000000a05'
 
   const ADMIN_PK = `__test_mls_admin_pk_${TEST_RUN}`
   const OWNER_PK = `__test_mls_owner_pk_${TEST_RUN}`
   const MEMBER_PK = `__test_mls_member_pk_${TEST_RUN}`
-  const OUTSIDER_PK = `__test_mls_outsider_pk_${TEST_RUN}`
   const INVITEE_PK = `__test_mls_invitee_pk_${TEST_RUN}`
 
   const ADMIN_DID = `did:key:__test_admin_${TEST_RUN}`
   const OWNER_DID = `did:key:__test_owner_${TEST_RUN}`
   const MEMBER_DID = `did:key:__test_member_${TEST_RUN}`
-  const OUTSIDER_DID = `did:key:__test_outsider_${TEST_RUN}`
   const INVITEE_DID = `did:key:__test_invitee_${TEST_RUN}`
 
   const SPACE_ID = '10000000-0000-0000-0000-000000000001'
@@ -156,17 +153,17 @@ if (!connectionString) {
     await db.delete(spaceInvites).where(eq(spaceInvites.spaceId, SPACE_ID))
     await db.delete(spaceMembers).where(eq(spaceMembers.spaceId, SPACE_ID))
     await db.delete(spaces).where(eq(spaces.id, SPACE_ID))
-    for (const did of [ADMIN_DID, OWNER_DID, MEMBER_DID, OUTSIDER_DID, INVITEE_DID]) {
+    for (const did of [ADMIN_DID, OWNER_DID, MEMBER_DID, INVITEE_DID]) {
       await db.delete(identities).where(eq(identities.did, did))
     }
-    for (const userId of [ADMIN_USER_ID, OWNER_USER_ID, MEMBER_USER_ID, OUTSIDER_USER_ID, INVITEE_USER_ID]) {
+    for (const userId of [ADMIN_USER_ID, OWNER_USER_ID, MEMBER_USER_ID, INVITEE_USER_ID]) {
       await client`DELETE FROM auth.users WHERE id = ${userId}`
     }
   }
 
   async function setupTestData() {
     // Create test users in auth.users
-    for (const userId of [ADMIN_USER_ID, OWNER_USER_ID, MEMBER_USER_ID, OUTSIDER_USER_ID, INVITEE_USER_ID]) {
+    for (const userId of [ADMIN_USER_ID, OWNER_USER_ID, MEMBER_USER_ID, INVITEE_USER_ID]) {
       await client`INSERT INTO auth.users (id, instance_id, aud, role, email, created_at, updated_at)
         VALUES (${userId}, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', ${userId + '@test.com'}, NOW(), NOW())
         ON CONFLICT (id) DO NOTHING`
@@ -177,7 +174,6 @@ if (!connectionString) {
       { did: ADMIN_DID, pk: ADMIN_PK, userId: ADMIN_USER_ID },
       { did: OWNER_DID, pk: OWNER_PK, userId: OWNER_USER_ID },
       { did: MEMBER_DID, pk: MEMBER_PK, userId: MEMBER_USER_ID },
-      { did: OUTSIDER_DID, pk: OUTSIDER_PK, userId: OUTSIDER_USER_ID },
       { did: INVITEE_DID, pk: INVITEE_PK, userId: INVITEE_USER_ID },
     ]
     for (const { did, pk, userId } of idPairs) {
@@ -440,142 +436,6 @@ if (!connectionString) {
   })
 
   // ============================================
-  // KEY PACKAGES - SECURITY (DoS Protection)
-  // ============================================
-
-  describe('SECURITY: KeyPackage Protection', () => {
-    beforeEach(async () => {
-      await db.delete(mlsKeyPackages).where(eq(mlsKeyPackages.spaceId, SPACE_ID))
-      await db.delete(spaceInvites).where(eq(spaceInvites.spaceId, SPACE_ID))
-    })
-
-    test('SECURITY: KeyPackage retrieval requires accepted invite', async () => {
-      // Upload KeyPackages for invitee
-      await db.insert(mlsKeyPackages).values({
-        spaceId: SPACE_ID, identityPublicKey: INVITEE_PK, keyPackage: FAKE_KEY_PACKAGE,
-      })
-
-      // Without invite: should find no accepted invite
-      const [acceptedInvite] = await db.select().from(spaceInvites)
-        .where(and(
-          eq(spaceInvites.spaceId, SPACE_ID),
-          eq(spaceInvites.inviteeDid, INVITEE_DID),
-          eq(spaceInvites.status, 'accepted'),
-        ))
-        .limit(1)
-
-      expect(acceptedInvite).toBeUndefined()
-    })
-
-    test('SECURITY: pending invite does NOT allow KeyPackage retrieval', async () => {
-      // Create pending invite (not accepted)
-      await db.insert(spaceInvites).values({
-        spaceId: SPACE_ID,
-        inviterPublicKey: ADMIN_PK,
-        inviteeDid: INVITEE_DID,
-      })
-
-      // Check: accepted invite should not exist
-      const [accepted] = await db.select().from(spaceInvites)
-        .where(and(
-          eq(spaceInvites.spaceId, SPACE_ID),
-          eq(spaceInvites.inviteeDid, INVITEE_DID),
-          eq(spaceInvites.status, 'accepted'),
-        ))
-        .limit(1)
-
-      expect(accepted).toBeUndefined()
-    })
-
-    test('SECURITY: declined invite does NOT allow KeyPackage retrieval', async () => {
-      await db.insert(spaceInvites).values({
-        spaceId: SPACE_ID,
-        inviterPublicKey: ADMIN_PK,
-        inviteeDid: INVITEE_DID,
-        status: 'declined',
-        respondedAt: new Date(),
-      })
-
-      const [accepted] = await db.select().from(spaceInvites)
-        .where(and(
-          eq(spaceInvites.spaceId, SPACE_ID),
-          eq(spaceInvites.inviteeDid, INVITEE_DID),
-          eq(spaceInvites.status, 'accepted'),
-        ))
-        .limit(1)
-
-      expect(accepted).toBeUndefined()
-    })
-
-    test('SECURITY: only accepted invite allows KeyPackage retrieval', async () => {
-      // Create and accept invite
-      await db.insert(spaceInvites).values({
-        spaceId: SPACE_ID,
-        inviterPublicKey: ADMIN_PK,
-        inviteeDid: INVITEE_DID,
-        status: 'accepted',
-        respondedAt: new Date(),
-      })
-
-      await db.insert(mlsKeyPackages).values({
-        spaceId: SPACE_ID, identityPublicKey: INVITEE_PK, keyPackage: FAKE_KEY_PACKAGE,
-      })
-
-      // Now accepted invite exists
-      const [accepted] = await db.select().from(spaceInvites)
-        .where(and(
-          eq(spaceInvites.spaceId, SPACE_ID),
-          eq(spaceInvites.inviteeDid, INVITEE_DID),
-          eq(spaceInvites.status, 'accepted'),
-        ))
-        .limit(1)
-
-      expect(accepted).toBeDefined()
-      expect(accepted!.status).toBe('accepted')
-
-      // KeyPackage should be retrievable
-      const [kp] = await db.select().from(mlsKeyPackages)
-        .where(and(
-          eq(mlsKeyPackages.spaceId, SPACE_ID),
-          eq(mlsKeyPackages.identityPublicKey, INVITEE_PK),
-          eq(mlsKeyPackages.consumed, false),
-        ))
-        .limit(1)
-
-      expect(kp).toBeDefined()
-    })
-
-    test('SECURITY: KeyPackage DoS attack is mitigated by invite requirement', async () => {
-      // Attacker scenario: try to consume all KeyPackages without accepted invite
-      await db.insert(mlsKeyPackages).values(
-        Array.from({ length: 10 }, () => ({
-          spaceId: SPACE_ID, identityPublicKey: INVITEE_PK, keyPackage: FAKE_KEY_PACKAGE,
-        }))
-      )
-
-      // Without accepted invite, the route logic would reject before consuming
-      const [accepted] = await db.select().from(spaceInvites)
-        .where(and(
-          eq(spaceInvites.spaceId, SPACE_ID),
-          eq(spaceInvites.inviteeDid, INVITEE_DID),
-          eq(spaceInvites.status, 'accepted'),
-        ))
-        .limit(1)
-
-      expect(accepted).toBeUndefined()
-
-      // All 10 KeyPackages should remain unconsumed
-      const unconsumed = await db.select().from(mlsKeyPackages)
-        .where(and(
-          eq(mlsKeyPackages.spaceId, SPACE_ID),
-          eq(mlsKeyPackages.identityPublicKey, INVITEE_PK),
-          eq(mlsKeyPackages.consumed, false),
-        ))
-      expect(unconsumed.length).toBe(10)
-    })
-  })
-
-  // ============================================
   // MLS MESSAGES - ORDERING
   // ============================================
 
@@ -728,23 +588,6 @@ if (!connectionString) {
         ))
       expect(remaining.length).toBe(0)
     })
-
-    test('SECURITY: welcome messages are recipient-isolated', async () => {
-      await db.insert(mlsWelcomeMessages).values({
-        spaceId: SPACE_ID,
-        recipientPublicKey: INVITEE_PK,
-        payload: Buffer.from('secret-welcome'),
-      })
-
-      // Other user should not see it
-      const otherWelcomes = await db.select().from(mlsWelcomeMessages)
-        .where(and(
-          eq(mlsWelcomeMessages.spaceId, SPACE_ID),
-          eq(mlsWelcomeMessages.recipientPublicKey, OUTSIDER_PK),
-          eq(mlsWelcomeMessages.consumed, false),
-        ))
-      expect(otherWelcomes.length).toBe(0)
-    })
   })
 
   // ============================================
@@ -848,43 +691,6 @@ if (!connectionString) {
           eq(mlsKeyPackages.consumed, false),
         ))
       expect(remainingKps.length).toBe(4)
-    })
-  })
-
-  // ============================================
-  // SECURITY: ROLE-BASED ACCESS
-  // ============================================
-
-  describe('SECURITY: Role-Based Access Control', () => {
-    test('SECURITY: membership check correctly identifies members', async () => {
-      const [adminMember] = await db.select({ role: spaceMembers.role })
-        .from(spaceMembers)
-        .where(and(eq(spaceMembers.spaceId, SPACE_ID), eq(spaceMembers.publicKey, ADMIN_PK)))
-      const [outsider] = await db.select({ role: spaceMembers.role })
-        .from(spaceMembers)
-        .where(and(eq(spaceMembers.spaceId, SPACE_ID), eq(spaceMembers.publicKey, OUTSIDER_PK)))
-
-      expect(adminMember).toBeDefined()
-      expect(adminMember!.role).toBe('admin')
-      expect(outsider).toBeUndefined()
-    })
-
-    test('SECURITY: outsider cannot access space messages', async () => {
-      await db.insert(mlsMessages).values({
-        spaceId: SPACE_ID,
-        senderPublicKey: ADMIN_PK,
-        messageType: 'application',
-        payload: Buffer.from('secret-data'),
-      })
-
-      // Outsider membership check fails
-      const [outsiderMembership] = await db.select().from(spaceMembers)
-        .where(and(eq(spaceMembers.spaceId, SPACE_ID), eq(spaceMembers.publicKey, OUTSIDER_PK)))
-
-      expect(outsiderMembership).toBeUndefined()
-
-      // Cleanup
-      await db.delete(mlsMessages).where(eq(mlsMessages.spaceId, SPACE_ID))
     })
   })
 

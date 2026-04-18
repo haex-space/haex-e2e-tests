@@ -50,6 +50,27 @@ async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capabilit
 // =============================================================================
 
 /**
+ * Fetch (and consume) one unconsumed KeyPackage for a target DID.
+ * Requires `space/invite` capability AND an accepted invite for the target.
+ */
+export async function fetchKeyPackage(
+  auth: AuthContext,
+  spaceId: string,
+  targetDid: string,
+): Promise<Response> {
+  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/invite");
+
+  return fetch(
+    `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages/${encodeURIComponent(targetDid)}`,
+    {
+      headers: {
+        Authorization: authorization,
+      },
+    },
+  );
+}
+
+/**
  * Upload dummy MLS KeyPackages for a member.
  */
 export async function uploadKeyPackages(
