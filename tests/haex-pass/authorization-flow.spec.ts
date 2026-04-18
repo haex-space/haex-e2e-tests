@@ -2,11 +2,11 @@ import {
   test,
   expect,
   VaultBridgeClient,
-  VaultAutomation,
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
   HAEX_PASS_METHODS,
+  type KeyPair,
 } from "../fixtures";
 
 test.describe("haex-pass: authorization-flow", () => {
@@ -89,39 +89,50 @@ test.describe("haex-pass: authorization-flow", () => {
   });
 
   test("reconnect with same keys auto-authorizes remembered client", async () => {
-    // First connection: authorize and remember
-    const client = new VaultBridgeClient();
-    try {
-      await waitForBridgeConnection(client);
-      const authorized = await authorizeClient(client, "unused");
-      expect(authorized).toBe(true);
+    // Capture the first client's keyPair + clientId so we can simulate a
+    // second connection from the SAME device (same identity).
+    let sharedKeyPair: KeyPair | null = null;
+    let firstClientId: string | null = null;
 
-      const clientId = client.getClientId();
-      expect(typeof clientId).toBe("string");
-      expect(clientId).toMatch(/^[0-9a-f]{32}$/);
-    } finally {
-      client.disconnect();
+    // First connection: fresh keys, go through the approval flow, remember.
+    {
+      const client = new VaultBridgeClient();
+      try {
+        await waitForBridgeConnection(client);
+        const authorized = await authorizeClient(client, "unused");
+        expect(authorized).toBe(true);
+        expect(client.getState().state).toBe("paired");
+
+        sharedKeyPair = client.getKeyPair();
+        firstClientId = client.getClientId();
+        expect(sharedKeyPair).not.toBeNull();
+        expect(firstClientId).toMatch(/^[0-9a-f]{32}$/);
+      } finally {
+        client.disconnect();
+      }
     }
 
-    // Second connection with a fresh VaultBridgeClient generates new keys,
-    // so it won't be auto-authorized. But if we could reuse keys, it would be.
-    // Since VaultBridgeClient always generates fresh keys, we verify the first
-    // client was properly authorized and can make requests before disconnecting.
-    // The auto-authorization is tested by the fact that authorizeClient uses
-    // remember=true, and subsequent connections with the same client instance
-    // would be auto-paired via the handshake response.
-    const client2 = new VaultBridgeClient();
-    try {
-      await waitForBridgeConnection(client2);
-      // This is a new keypair, so it will be pending_approval again
-      // Authorize it as well to confirm the flow works repeatedly
-      const authorized2 = await authorizeClient(client2, "unused");
-      expect(authorized2).toBe(true);
+    // Second connection: reuse the previous keyPair. The server recognizes
+    // the clientId and must auto-pair via the handshake response — no
+    // second approval round is required. This is the actual "reconnect
+    // with same keys" path the test's name claims to cover.
+    {
+      const client = new VaultBridgeClient({ keyPair: sharedKeyPair! });
+      try {
+        await waitForBridgeConnection(client);
 
-      const { state } = client2.getState();
-      expect(state).toBe("paired");
-    } finally {
-      client2.disconnect();
+        // Same keyPair derives the same clientId
+        expect(client.getClientId()).toBe(firstClientId);
+
+        // Auto-pairing must complete without calling authorizeClient again.
+        // waitForAuthorization resolves true if state is already paired or
+        // transitions to paired via the handshake response.
+        const paired = await client.waitForAuthorization(10000);
+        expect(paired).toBe(true);
+        expect(client.getState().state).toBe("paired");
+      } finally {
+        client.disconnect();
+      }
     }
   });
 });

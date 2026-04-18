@@ -130,7 +130,7 @@ function getHaexPassPublicKey(): string {
 /**
  * ECDH key pair for encryption
  */
-interface KeyPair {
+export interface KeyPair {
   publicKey: crypto.KeyObject;
   privateKey: crypto.KeyObject;
 }
@@ -198,13 +198,16 @@ export class VaultBridgeClient {
     new Set();
   private initPromise: Promise<void>;
 
-  constructor() {
-    this.initPromise = this.initialize();
+  constructor(options?: { keyPair?: KeyPair }) {
+    this.initPromise = this.initialize(options?.keyPair);
   }
 
-  private async initialize(): Promise<void> {
-    // Generate X25519 key pair (matching vault's Rust X25519 implementation)
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("x25519");
+  private async initialize(providedKeyPair?: KeyPair): Promise<void> {
+    // Use the provided X25519 key pair if the caller wants to reconnect with
+    // the same identity; otherwise generate a fresh one (matching vault's
+    // Rust X25519 implementation).
+    const { publicKey, privateKey } = providedKeyPair
+      ?? crypto.generateKeyPairSync("x25519");
 
     this.keyPair = { publicKey, privateKey };
 
@@ -215,6 +218,15 @@ export class VaultBridgeClient {
     // Generate client ID from public key hash (first 16 bytes of SHA-256)
     const hash = crypto.createHash("sha256").update(publicKeyRaw).digest();
     this.clientId = hash.subarray(0, 16).toString("hex");
+  }
+
+  /**
+   * Expose the underlying key pair so callers can reconnect a simulated
+   * device with the same identity. Returns null if the client has not yet
+   * finished initializing.
+   */
+  getKeyPair(): KeyPair | null {
+    return this.keyPair;
   }
 
   private notifyStateChange() {
