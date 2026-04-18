@@ -1,5 +1,29 @@
 # Bekannte Probleme & Lösungen
 
+## Test-Coverage Lücken (Code Review 2026-04-18)
+
+Nach einem Code Review blieben folgende Coverage-Lücken offen, weil sie echte
+Test-Erweiterungen erfordern (nicht nur Mechanik). Details und Priorisierung:
+[docs/plans/2026-04-18-code-review-followups.md](../docs/plans/2026-04-18-code-review-followups.md).
+
+| Bereich | Problem | Priorität |
+|---------|---------|-----------|
+| MLS Security | Tests in `tests-db/mls.test.ts` prüfen nur DB-State, keine Access-Control an API-Endpoints | Sehr hoch |
+| CRDT LWW | Kein echter Konflikt-Test für Last-Writer-Wins mit zwei konkurrenten Edits | Hoch |
+| Unauth Assertions | `authorization-flow.spec.ts` und `client-management.spec.ts` skippen Security-Assertions bedingt | Mittel |
+| Pagination | `hasMore` Off-by-one, LIKE-Wildcards, invalide ISO-Timestamps | Mittel |
+| HLC-Format | `haex_column_hlcs`-Test prüft nur "changed", nicht Format oder Scope | Mittel |
+| Pull-Boundary | `afterUpdatedAt` Inclusive/Exclusive nicht dokumentiert oder getestet | Mittel |
+| Reconnect mit Keys | Test tut nicht, was sein Name sagt — VaultBridgeClient braucht Key-Injection | Niedrig |
+| UCAN Enum | `@haex-space/ucan` hat keine Enum-Werte für AddMember/DeleteSpace/CreateInvite | Upstream-Issue |
+
+**Wichtig für neue CRDT-Tests:** HLC-Timestamps NIE im Test selbst konstruieren.
+Der Haupt-Entwickler hat klargestellt (2026-04-18), dass die HLC-Logik komplett
+in haex-vault bleibt, weil nur dort der Counter korrekt hochgezählt werden kann.
+Tests müssen HLCs über einen Tauri-Command vom Vault anfordern.
+
+---
+
 ## Aktuelle Einschränkungen
 
 ### Multi-Container Dual-Vault Testing

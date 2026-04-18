@@ -702,4 +702,36 @@ class RealtimeTestClient {
 16. Policy auf "nobody" setzen (UI), Rejection prüfen
 17. Logs prüfen (SQL)
 
+## 2026-04-18 — Code Review Follow-ups umgesetzt
+
+### Durchgeführt
+- Review mit ~30 Punkten zu Test-Helpers, Assertions und Coverage analysiert
+- 14 Tasks umgesetzt (Commit `9f88abe`), 2 bewusst abgelehnt, 10 als Follow-up dokumentiert
+
+### Wichtigste Fixes
+- `VaultBridgeClient.updateItem` rief `CREATE_ITEM` statt `UPDATE_ITEM` auf (echter Bug)
+- `VaultBridgeClient.connect()` Promise konnte hängen, wenn WS weder OPEN noch ERROR reichte
+- `RealtimeTestClient`: Innere `setTimeout`-Handles wurden bei frühem `close`/`error` nicht geräumt; `disconnect()` rejected jetzt pending `waitForMessage` Promises; `waitForMessageCount` wirft bei Timeout
+- `confirmEmailViaAdmin` ignorierte non-2xx PUT-Responses — jetzt Throw
+- Null-Coverage Tests gelöscht: backoff-Konstanten-Tautologie, Endpoint-ID Helper-Checks, Client-Logik-Simulationen in Dual-Channel, Policy-Strings, String-inclusion "SECURITY" Checks
+- Vault Lifecycle: 6× `not.toBeNull()` → `toBeDefined()` (weil `Array.find()` `undefined` liefert)
+- Evil-Scenarios: 3 Assertions auf echte 4xx-Range statt "nicht 500"
+- Batch-Validation: Duplicate-Test prüft jetzt auch `data.error`
+
+### Bewusst abgelehnt
+- `waitForAuthorization`: `"connected"` ist hier terminaler Denial-Zustand, kein Übergang (siehe `handleAuthorizationUpdate` in fixtures.ts)
+- `waitForAppReady` Timeout-Baseline: Beide Loops teilen bereits `start`; `commandStart` ist nur Logging
+
+### Vom Haupt-Entwickler klargestellt
+- `makeSyncChange` HLC-Default wird NICHT gefixt: HLC-Logik gehört zu haex-vault, weil nur dort der Counter korrekt hochgezählt werden kann. Neue Tests müssen HLCs über Tauri-Commands anfordern, nicht selbst konstruieren.
+
+### Offen (dokumentiert)
+Siehe [docs/plans/2026-04-18-code-review-followups.md](../docs/plans/2026-04-18-code-review-followups.md) — priorisierte Liste mit 10 verbleibenden Punkten (MLS Security, LWW-Konflikttest, Pagination-Fixes, Upstream UCAN Enum, …).
+
+### Geänderte Dateien (17)
+`tests/fixtures.ts`, `tests/helpers/realtime-helpers.ts`, `tests/helpers/sync-server-helpers.ts`, `tests/helpers/invite-helpers.ts`,
+`tests/vault-lifecycle/*.spec.ts` (4), `tests/sync/{evil-scenarios,batch-validation}.spec.ts`,
+`tests/spaces/invitations/{invite-outbox-processing,invite-dual-channel,invite-policy-enforcement}.spec.ts`,
+`tests/ui/{start-page,identity-and-sync-setup}.spec.ts`, `tests/database/migrations.spec.ts`, `tests-db/mls.test.ts`.
+
 <!-- Neue Sessions hier eintragen -->
