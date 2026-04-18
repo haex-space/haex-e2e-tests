@@ -89,6 +89,29 @@ test.describe("storage: P2P connectivity between vaults", () => {
       }
     }
 
+    // Wipe any leftover download artefacts on Vault B so dedup doesn't
+    // rename them (hello.txt → "hello (1).txt") on a Playwright retry. Tauri's
+    // peer_storage_remote_read saves into app.path().download_dir(), which
+    // falls back to cache_dir() when Downloads isn't set — inside our webtop
+    // container that's /config/.cache vs /config/Downloads. We clean both.
+    const downloadNames = ["hello.txt", "large.bin", "nested.txt"];
+    for (const dir of ["/config/.cache", "/config/Downloads"]) {
+      for (const name of downloadNames) {
+        for (const variant of [name, ...Array.from({ length: 5 }, (_, i) => {
+          const dot = name.lastIndexOf(".");
+          return `${name.slice(0, dot)} (${i + 1})${name.slice(dot)}`;
+        })]) {
+          try {
+            await vaultB.invokeTauriCommand("filesystem_remove", {
+              path: `${dir}/${variant}`,
+            });
+          } catch {
+            // File doesn't exist — nothing to clean.
+          }
+        }
+      }
+    }
+
     // Create test directory and files on Vault A
     await vaultA.invokeTauriCommand("filesystem_mkdir", { path: testDir });
     await vaultA.invokeTauriCommand("filesystem_mkdir", { path: `${testDir}/subfolder` });
