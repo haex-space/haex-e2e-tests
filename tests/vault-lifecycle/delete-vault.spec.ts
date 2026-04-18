@@ -75,7 +75,7 @@ test.describe("vault-lifecycle: delete-vault", () => {
       Array<{ name: string; lastAccess: number; path: string }>
     >("list_vaults", {});
     const targetVault = vaults.find((v) => v.name === testVaultName);
-    expect(targetVault).not.toBeNull();
+    expect(targetVault).toBeDefined();
     expect(targetVault!.name).toEqual(testVaultName);
   });
 

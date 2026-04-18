@@ -160,10 +160,10 @@ test.describe("UI: Identity Creation & Sync Setup", () => {
 
   // ─── Step 3: Create a new Identity via UI ───
 
-  test.skip("should create identity through UI form", async () => {
-    // Skip: The haex-pass extension iframe (opened in global-setup) may overlay
-    // the Settings window, making the Create button unreachable.
-    // This test passes when run in isolation but fails in the full suite.
+  test.skip("should create identity through UI form [haex-pass iframe overlays Settings in full suite]", async () => {
+    // Passes in isolation but fails in the full suite because the haex-pass
+    // extension iframe (opened in global-setup) overlays the Settings window,
+    // making the Create button unreachable.
     // Click the Create button (wait for it in case of async rendering)
     const createBtn = await waitFor(async () => {
       return vault.findElement('[data-tour="settings-identities-create"]');
@@ -240,7 +240,7 @@ test.describe("UI: Identity Creation & Sync Setup", () => {
 
   // ─── Step 4: Verify identity in database (CRDT-aware) ───
 
-  test.skip("should verify identity exists in vault database", async () => {
+  test.skip("should verify identity exists in vault database [depends on create-identity test, which is skipped]", async () => {
     // Use sql_select_with_crdt to read through the CRDT layer
     const rows = await vault.invokeTauriCommand<unknown[][]>("sql_select_with_crdt", {
       sql: "SELECT name, did FROM haex_identities WHERE name = ?",

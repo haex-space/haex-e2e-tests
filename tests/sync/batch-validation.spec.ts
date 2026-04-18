@@ -184,5 +184,9 @@ test.describe("sync: batch-validation", () => {
     });
 
     expect(res.status).toBe(400);
+
+    const data = await res.json();
+    expect(data.error).toMatch(/duplicate/i);
+    expect(data.batchId).toBe(batchId);
   });
 });

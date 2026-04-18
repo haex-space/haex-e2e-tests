@@ -28,7 +28,6 @@ import {
   createInviteToken,
   claimInviteToken,
   generateSpaceId,
-  generateEndpointId,
 } from "../../helpers/invite-helpers";
 import { SpaceCapabilities } from "@haex-space/ucan";
 
@@ -83,32 +82,14 @@ test.describe("invitations: outbox processing", () => {
       SpaceCapabilities.WRITE,
     );
 
-    // Server should handle gracefully (either succeed idempotently or reject)
-    // The duplicate create should have been handled gracefully
-    expect(dupRes.status).toBeDefined();
+    // Server rejects duplicate invite for the same invitee with 409 Conflict.
+    expect(dupRes.status).toBe(409);
 
     // Accept the original invite to verify no duplicate side effects
     const acceptRes = await acceptServerInvite(inviteeAuth, spaceId, inviteId);
     expect(acceptRes.status).toBe(200);
     const acceptBody = await acceptRes.json();
     expect(acceptBody.success).toBe(true);
-  });
-
-  // =========================================================================
-  // Outbox: own-endpoint detection
-  // =========================================================================
-
-  test("endpoint ID generation produces unique values", () => {
-    const ids = new Set<string>();
-    for (let i = 0; i < 100; i++) {
-      ids.add(generateEndpointId());
-    }
-    expect(ids.size).toBe(100);
-  });
-
-  test("endpoint ID has correct format (64 hex chars)", () => {
-    const id = generateEndpointId();
-    expect(id).toMatch(/^[0-9a-f]{64}$/);
   });
 
   // =========================================================================
@@ -216,24 +197,4 @@ test.describe("invitations: outbox processing", () => {
     }
   });
 
-  // =========================================================================
-  // Outbox: backoff constants documentation
-  // =========================================================================
-
-  test("backoff schedule constants are correct", () => {
-    // Verifies the backoff schedule used by processOutboxAsync:
-    // [0, 60, 300, 900, 3600] seconds = immediate, 1m, 5m, 15m, 1h
-    const BACKOFF_SECONDS = [0, 60, 300, 900, 3600];
-
-    expect(BACKOFF_SECONDS[0]).toBe(0);       // Immediate retry
-    expect(BACKOFF_SECONDS[1]).toBe(60);      // 1 minute
-    expect(BACKOFF_SECONDS[2]).toBe(300);     // 5 minutes
-    expect(BACKOFF_SECONDS[3]).toBe(900);     // 15 minutes
-    expect(BACKOFF_SECONDS[4]).toBe(3600);    // 1 hour (max)
-
-    // Verify monotonic increase
-    for (let i = 1; i < BACKOFF_SECONDS.length; i++) {
-      expect(BACKOFF_SECONDS[i]).toBeGreaterThan(BACKOFF_SECONDS[i - 1]);
-    }
-  });
 });

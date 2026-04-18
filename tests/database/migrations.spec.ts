@@ -78,7 +78,7 @@ test.describe("Migrations", () => {
     expect((firstField as string).length).toBeGreaterThan(0);
   });
 
-  test("each migration has a unique identifier", async () => {
+  test("each migration has a unique, non-empty identifier", async () => {
     const migrations = await sql.rawSelect(
       `SELECT * FROM ${MIGRATIONS_TABLE}`,
       []
@@ -116,15 +116,4 @@ test.describe("Migrations", () => {
     expect(tableNames.length).toBeGreaterThanOrEqual(2);
   });
 
-  test("no duplicate migration names in the tracking table", async () => {
-    // Fetch all rows and check uniqueness of the first column (identifier)
-    const migrations = await sql.rawSelect(
-      `SELECT * FROM ${MIGRATIONS_TABLE}`,
-      []
-    );
-
-    const names = migrations.map((row) => row[0] as string);
-    const uniqueNames = new Set(names);
-    expect(uniqueNames.size).toEqual(names.length);
-  });
 });

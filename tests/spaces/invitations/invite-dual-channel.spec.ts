@@ -32,7 +32,6 @@ import {
   claimInviteToken,
   getSpaceDetails,
   generateSpaceId,
-  generateEndpointId,
 } from "../../helpers/invite-helpers";
 import { SpaceCapabilities } from "@haex-space/ucan";
 
@@ -162,67 +161,11 @@ test.describe("invitations: dual-channel delivery", () => {
   });
 
   // =========================================================================
-  // Multi-device endpoint scenarios
+  // NOTE: Previously three tests here exercised only local JavaScript logic
+  // (endpoint filtering, array construction) without any system interaction.
+  // They were removed because they provided zero coverage of actual behavior
+  // and belong in unit tests next to processOutboxAsync in the client code.
   // =========================================================================
-
-  test("space with multiple device endpoints: all endpoints included in invite", () => {
-    // Simulate the processOutboxAsync behavior:
-    // Load all haexSpaceDevices → map to endpoint IDs → include in PushInvite
-    const devices = [
-      { id: "device-1", endpointId: generateEndpointId(), name: "Desktop" },
-      { id: "device-2", endpointId: generateEndpointId(), name: "Android" },
-      { id: "device-3", endpointId: generateEndpointId(), name: "Laptop" },
-    ];
-
-    const spaceEndpoints = devices.map((d) => d.endpointId);
-
-    // All endpoints should be unique
-    expect(new Set(spaceEndpoints).size).toBe(3);
-
-    // All should be included in the invite (receiver tries each to claim)
-    expect(spaceEndpoints.length).toBe(3);
-  });
-
-  test("own endpoint must be filtered from outbox targets", () => {
-    // Simulate the own-endpoint check in processOutboxAsync:
-    const ownEndpointId = generateEndpointId();
-    const outboxEntries = [
-      { targetEndpointId: generateEndpointId(), targetDid: "did:key:z6MkA" },
-      { targetEndpointId: ownEndpointId, targetDid: "did:key:z6MkSelf" },
-      { targetEndpointId: generateEndpointId(), targetDid: "did:key:z6MkB" },
-    ];
-
-    // Filter: skip entries where target is own endpoint
-    const toProcess = outboxEntries.filter(
-      (e) => e.targetEndpointId !== ownEndpointId,
-    );
-
-    expect(toProcess.length).toBe(2);
-    expect(toProcess.every((e) => e.targetEndpointId !== ownEndpointId)).toBe(true);
-  });
-
-  // =========================================================================
-  // Space endpoint registration for invite delivery
-  // =========================================================================
-
-  test("invite includes space endpoints for QUIC claim path", () => {
-    // When sending a PushInvite, the sender includes:
-    // - targetEndpointId: the recipient's endpoint (from contact claims)
-    // - spaceEndpoints: all devices in the space (for the receiver to try ClaimInvite)
-    // These are different: targetEndpointId = who to send TO, spaceEndpoints = who to claim FROM
-
-    const targetEndpoint = generateEndpointId();
-    const spaceEndpoints = [
-      generateEndpointId(), // Desktop
-      generateEndpointId(), // Android
-    ];
-
-    // Target should NOT be in space endpoints (it's the receiver, not the sender)
-    expect(spaceEndpoints.includes(targetEndpoint)).toBe(false);
-
-    // Space endpoints are the sender's devices
-    expect(spaceEndpoints.length).toBe(2);
-  });
 
   // =========================================================================
   // Concurrent dual-channel acceptance

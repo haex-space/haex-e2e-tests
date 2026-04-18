@@ -35,6 +35,7 @@ export class RealtimeTestClient {
   private ws: WebSocket | null = null;
   private messages: WsMessage[] = [];
   private messageListeners: Array<(msg: WsMessage) => void> = [];
+  private pendingRejects: Set<(err: Error) => void> = new Set();
   private closeCode: number | null = null;
   private closeReason: string | null = null;
 
@@ -102,6 +103,7 @@ export class RealtimeTestClient {
       `/ws?token=${encodeURIComponent(token)}`;
 
     return new Promise((resolve) => {
+      let innerTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         this.ws?.close();
         resolve(false);
@@ -112,25 +114,22 @@ export class RealtimeTestClient {
       this.ws.on("open", () => {
         // Connection opened — wait briefly to see if the server closes it
         // The server calls ws.close(4001) in onOpen when auth fails
-        setTimeout(() => {
-          if (this.closeCode === 4001) {
-            clearTimeout(timer);
-            resolve(true);
-          } else {
-            clearTimeout(timer);
-            resolve(false);
-          }
+        innerTimer = setTimeout(() => {
+          clearTimeout(timer);
+          resolve(this.closeCode === 4001);
         }, 1000);
       });
 
       this.ws.on("close", (code) => {
         this.closeCode = code;
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve(code === 4001);
       });
 
       this.ws.on("error", () => {
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve(true); // Connection error counts as rejection
       });
     });
@@ -149,6 +148,7 @@ export class RealtimeTestClient {
       `/ws?token=${encodeURIComponent(token)}`;
 
     return new Promise((resolve) => {
+      let innerTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         this.ws?.close();
         resolve({ rejected: false, closeCode: this.closeCode });
@@ -158,12 +158,11 @@ export class RealtimeTestClient {
 
       this.ws.on("open", () => {
         // Wait to see if server closes it
-        setTimeout(() => {
+        innerTimer = setTimeout(() => {
+          clearTimeout(timer);
           if (this.closeCode != null) {
-            clearTimeout(timer);
             resolve({ rejected: true, closeCode: this.closeCode });
           } else {
-            clearTimeout(timer);
             resolve({ rejected: false, closeCode: null });
           }
         }, 1000);
@@ -172,11 +171,13 @@ export class RealtimeTestClient {
       this.ws.on("close", (code) => {
         this.closeCode = code;
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve({ rejected: true, closeCode: code });
       });
 
       this.ws.on("error", () => {
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve({ rejected: true, closeCode: this.closeCode });
       });
     });
@@ -191,6 +192,7 @@ export class RealtimeTestClient {
     const wsUrl = this.serverUrl.replace(/^http/, "ws") + `/ws`;
 
     return new Promise((resolve) => {
+      let innerTimer: ReturnType<typeof setTimeout> | null = null;
       const timer = setTimeout(() => {
         this.ws?.close();
         resolve({ rejected: false, closeCode: this.closeCode });
@@ -199,12 +201,11 @@ export class RealtimeTestClient {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.on("open", () => {
-        setTimeout(() => {
+        innerTimer = setTimeout(() => {
+          clearTimeout(timer);
           if (this.closeCode != null) {
-            clearTimeout(timer);
             resolve({ rejected: true, closeCode: this.closeCode });
           } else {
-            clearTimeout(timer);
             resolve({ rejected: false, closeCode: null });
           }
         }, 1000);
@@ -213,11 +214,13 @@ export class RealtimeTestClient {
       this.ws.on("close", (code) => {
         this.closeCode = code;
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve({ rejected: true, closeCode: code });
       });
 
       this.ws.on("error", () => {
         clearTimeout(timer);
+        if (innerTimer) clearTimeout(innerTimer);
         resolve({ rejected: true, closeCode: this.closeCode });
       });
     });
@@ -235,11 +238,13 @@ export class RealtimeTestClient {
     if (existing) return existing;
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      const rejectWrapper = (err: Error) => {
         cleanup();
-        reject(
-          new Error(`Timeout waiting for message (${timeoutMs}ms)`),
-        );
+        reject(err);
+      };
+
+      const timeout = setTimeout(() => {
+        rejectWrapper(new Error(`Timeout waiting for message (${timeoutMs}ms)`));
       }, timeoutMs);
 
       const listener = (msg: WsMessage) => {
@@ -251,10 +256,12 @@ export class RealtimeTestClient {
 
       const cleanup = () => {
         clearTimeout(timeout);
+        this.pendingRejects.delete(rejectWrapper);
         const idx = this.messageListeners.indexOf(listener);
         if (idx >= 0) this.messageListeners.splice(idx, 1);
       };
 
+      this.pendingRejects.add(rejectWrapper);
       this.messageListeners.push(listener);
     });
   }
@@ -301,7 +308,13 @@ export class RealtimeTestClient {
     ) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    return this.messages.filter(predicate);
+    const matched = this.messages.filter(predicate);
+    if (matched.length < count) {
+      throw new Error(
+        `Timeout waiting for ${count} messages (got ${matched.length}) after ${timeoutMs}ms`,
+      );
+    }
+    return matched;
   }
 
   /**
@@ -333,6 +346,11 @@ export class RealtimeTestClient {
     this.ws = null;
     this.messages = [];
     this.messageListeners = [];
+    const pending = [...this.pendingRejects];
+    this.pendingRejects.clear();
+    for (const reject of pending) {
+      reject(new Error("RealtimeTestClient disconnected"));
+    }
   }
 
   /**

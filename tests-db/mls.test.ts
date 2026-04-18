@@ -869,16 +869,6 @@ if (!connectionString) {
       expect(outsider).toBeUndefined()
     })
 
-    test('SECURITY: only admin/owner roles can send welcomes', async () => {
-      const adminRole = 'admin'
-      const ownerRole = 'owner'
-      const memberRole = 'member'
-
-      expect(['admin', 'owner'].includes(adminRole)).toBe(true)
-      expect(['admin', 'owner'].includes(ownerRole)).toBe(true)
-      expect(['admin', 'owner'].includes(memberRole)).toBe(false)
-    })
-
     test('SECURITY: outsider cannot access space messages', async () => {
       await db.insert(mlsMessages).values({
         spaceId: SPACE_ID,

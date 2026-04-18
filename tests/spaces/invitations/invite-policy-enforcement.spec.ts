@@ -174,23 +174,6 @@ test.describe("invitations: policy enforcement", () => {
   });
 
   // =========================================================================
-  // Policy configuration values
-  // =========================================================================
-
-  test("valid policy values are: all, contacts_only, nobody", () => {
-    const validPolicies = ["all", "contacts_only", "nobody"];
-
-    // Verify each is a valid string
-    for (const policy of validPolicies) {
-      expect(typeof policy).toBe("string");
-      expect(policy.length).toBeGreaterThan(0);
-    }
-
-    // Verify no duplicates
-    expect(new Set(validPolicies).size).toBe(3);
-  });
-
-  // =========================================================================
   // Blocked DIDs
   // =========================================================================
 

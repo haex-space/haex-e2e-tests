@@ -86,7 +86,7 @@ export async function acceptServerInvite(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.CreateSpace,
+          DidAuthAction.AcceptInvite,
           bodyStr,
         ),
       },
@@ -112,7 +112,7 @@ export async function declineServerInvite(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.CreateSpace,
+          DidAuthAction.DeclineInvite,
         ),
       },
     },
@@ -201,7 +201,7 @@ export async function claimInviteToken(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.CreateSpace,
+          DidAuthAction.AcceptInvite,
           bodyStr,
         ),
       },

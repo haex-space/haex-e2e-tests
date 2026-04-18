@@ -229,6 +229,9 @@ export async function ensureFreeTierExists(): Promise<void> {
       _tierSeeded = true;
       return;
     }
+    console.warn(
+      `[E2E] seed-tiers endpoint returned ${res.status}; assuming tier was seeded by infra`,
+    );
   } catch {
     // Endpoint may not exist — that's fine
   }
@@ -373,15 +376,24 @@ async function confirmEmailViaAdmin(email: string): Promise<void> {
       (u) => u.email === email,
     );
     if (user) {
-      await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${user.id}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${serviceKey}`,
-          apikey: anonKey,
+      const updateRes = await fetch(
+        `${SUPABASE_URL}/auth/v1/admin/users/${user.id}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${serviceKey}`,
+            apikey: anonKey,
+          },
+          body: JSON.stringify({ email_confirm: true }),
         },
-        body: JSON.stringify({ email_confirm: true }),
-      });
+      );
+      if (!updateRes.ok) {
+        const body = await updateRes.text().catch(() => "");
+        throw new Error(
+          `Failed to confirm email for ${email}: ${updateRes.status} ${body}`,
+        );
+      }
     }
   }
 }
@@ -392,7 +404,7 @@ async function confirmEmailViaAdmin(email: string): Promise<void> {
  */
 export async function createAdminUser(): Promise<{
   accessToken: string;
-  userId: string;
+  identityId: string;
   email: string;
   did: string;
   privateKeyBase64: string;
@@ -406,7 +418,7 @@ export async function createAdminUser(): Promise<{
 
   return {
     accessToken: tokens.access_token,
-    userId: regResult.identityId,
+    identityId: regResult.identityId,
     email: identity.email,
     did: identity.did,
     privateKeyBase64: identity.privateKeyBase64,
@@ -419,7 +431,7 @@ export async function createAdminUser(): Promise<{
  */
 export async function createAdminUserWithIdentity(): Promise<{
   accessToken: string;
-  userId: string;
+  identityId: string;
   email: string;
   publicKey: string;
   privateKeyBase64: string;
@@ -434,7 +446,7 @@ export async function createAdminUserWithIdentity(): Promise<{
 
   return {
     accessToken: tokens.access_token,
-    userId: regResult.identityId,
+    identityId: regResult.identityId,
     email: identity.email,
     publicKey: identity.publicKeyBase64,
     privateKeyBase64: identity.privateKeyBase64,

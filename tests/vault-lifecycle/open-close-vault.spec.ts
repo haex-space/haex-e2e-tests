@@ -113,7 +113,7 @@ test.describe("vault-lifecycle: open-close-vault", () => {
       Array<{ name: string; path: string }>
     >("list_vaults", {});
     const targetVault = vaults.find((v) => v.name === testVaultName);
-    expect(targetVault).not.toBeNull();
+    expect(targetVault).toBeDefined();
 
     await vault.invokeTauriCommand("open_encrypted_database", {
       vaultPath: targetVault!.path,

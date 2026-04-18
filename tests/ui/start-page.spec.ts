@@ -45,13 +45,15 @@ test.describe("ui: start page and database info", () => {
   });
 
   test("database_vacuum runs without error and returns a result", async () => {
+    // Reaching this point proves the Tauri command did not throw.
+    // Return type varies across vault versions (string, null, or void),
+    // so we only assert the shape is one of those.
     const result = await vault.invokeTauriCommand<unknown>(
       "database_vacuum",
       {}
     );
 
-    // Some vault versions return a string, others may return null/void
-    expect(result !== undefined || result === undefined).toBe(true);
+    expect(result === null || result === undefined || typeof result === "string").toBe(true);
   });
 
   test("database size after vacuum is still greater than zero", async () => {

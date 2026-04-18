@@ -300,6 +300,8 @@ export class VaultBridgeClient {
       setTimeout(() => {
         if (this.ws?.readyState === WS.OPEN) {
           resolve();
+        } else {
+          reject(new Error("Connection did not open in time"));
         }
       }, 100);
     });
@@ -616,7 +618,7 @@ export class VaultBridgeClient {
    * Update an existing item entry
    */
   async updateItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, entry);
+    return this.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, entry);
   }
 
   /**

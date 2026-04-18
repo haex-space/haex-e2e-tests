@@ -98,7 +98,7 @@ test.describe("vault-lifecycle: create-vault", () => {
       Array<{ name: string; path: string }>
     >("list_vaults", {});
     const targetVault = vaults.find((v) => v.name === testVaultName);
-    expect(targetVault).not.toBeNull();
+    expect(targetVault).toBeDefined();
 
     const openedVaultId = await vault.invokeTauriCommand<string>("open_encrypted_database", {
       vaultPath: targetVault!.path,
@@ -118,7 +118,7 @@ test.describe("vault-lifecycle: create-vault", () => {
       Array<{ name: string; path: string }>
     >("list_vaults", {});
     const targetVault = vaults.find((v) => v.name === testVaultName);
-    expect(targetVault).not.toBeNull();
+    expect(targetVault).toBeDefined();
 
     await expect(
       vault.invokeTauriCommand("open_encrypted_database", {

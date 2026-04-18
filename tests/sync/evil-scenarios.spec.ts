@@ -200,9 +200,10 @@ test.describe("sync: evil scenarios", () => {
       body: bodyStr,
     });
 
-    // Should either reject the table name or handle it safely
-    // NOT cause a 500 (which would indicate SQL injection worked)
-    expect(res.status).not.toBe(500);
+    // Server must reject the malformed table name with a client error.
+    // A 2xx or 500 would both indicate the injection payload was not properly rejected.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
 
     // Verify sync_changes still exists by pulling
     const pullRes = await pullChanges(victimAuth, victimSpaceId);
@@ -235,11 +236,10 @@ test.describe("sync: evil scenarios", () => {
       body: bodyStr,
     });
 
-    // Should be rejected (413 or 400) or accepted with size limits
-    // Must NOT cause a server crash (500)
-    if (res.status >= 500) {
-      throw new Error(`Server error on large payload: ${res.status}`);
-    }
+    // Server must reject the oversized payload with a client error (e.g. 413, 400).
+    // Must NOT crash (500) and must NOT silently accept.
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
   });
 
   test("negative batchSeq is handled", async () => {
@@ -270,7 +270,8 @@ test.describe("sync: evil scenarios", () => {
       body: bodyStr,
     });
 
-    // Should not crash
+    // Negative batchSeq must be rejected with a client error, not silently accepted.
+    expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
   });
 
