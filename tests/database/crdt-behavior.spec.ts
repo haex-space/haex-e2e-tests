@@ -107,6 +107,7 @@ test.describe("CRDT Behavior", () => {
     );
     expect(beforeRows).toHaveLength(1);
     const hlcsBefore = beforeRows[0]![0] as string;
+    const parsedBefore = JSON.parse(hlcsBefore) as Record<string, string>;
 
     // Update only the title column
     await sql.update(crdtTable, { title: "Updated Entry" }, "id = ?", ["crdt-1"]);
@@ -120,9 +121,22 @@ test.describe("CRDT Behavior", () => {
     expect(afterRows).toHaveLength(1);
     const hlcsAfter = afterRows[0]![0] as string;
     const timestampAfter = afterRows[0]![1] as string;
+    const parsedAfter = JSON.parse(hlcsAfter) as Record<string, string>;
 
     // Column HLCs should have changed after the update
     expect(hlcsAfter).not.toEqual(hlcsBefore);
+
+    // Per-column tracking: only the updated column's HLC changes,
+    // unchanged columns keep their prior HLC.
+    expect(parsedAfter.title).not.toEqual(parsedBefore.title);
+    expect(parsedAfter.value).toEqual(parsedBefore.value);
+
+    // Format validation: "<u64-nanoseconds>/<hex-device-id>" per
+    // src-tauri/src/crdt/hlc.rs:compare_hlc_strings.
+    const HLC_FORMAT = /^\d+\/[0-9a-fA-F]+$/;
+    for (const [column, hlc] of Object.entries(parsedAfter)) {
+      expect(hlc, `HLC for column "${column}" must match <nanos>/<nodeId>`).toMatch(HLC_FORMAT);
+    }
 
     // Timestamp should be a valid non-empty string
     expect(typeof timestampAfter).toEqual("string");
