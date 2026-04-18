@@ -172,4 +172,108 @@ test.describe("CRDT Behavior", () => {
     expect(crdtTables).toContain(crdtTable);
     expect(crdtTables).not.toContain(noCrdtTable);
   });
+
+  test("LWW: newer HLC wins, older HLC loses, per-column tracking holds", async () => {
+    // All HLCs used in this test are produced by the vault's CRDT triggers —
+    // the test never constructs an HLC string manually. This mirrors the real
+    // sync flow where remote timestamps always originate from another device's
+    // vault.
+
+    // Read the per-column HLC map for a given row.
+    const readColumnHlcs = async (rowId: string): Promise<Record<string, string>> => {
+      const rows = await sql.selectRaw(
+        crdtTable,
+        [CRDT_COLUMNS.COLUMN_HLCS],
+        { where: "id = ?", params: [rowId] }
+      );
+      expect(rows).toHaveLength(1);
+      return JSON.parse(rows[0]![0] as string) as Record<string, string>;
+    };
+
+    // HLC strings look like "<u64-nanoseconds>/<node-id-hex>".
+    // Compare the numeric time prefix with BigInt to avoid lexicographic
+    // ordering glitches when the prefix length changes.
+    const hlcIsNewer = (a: string, b: string): boolean => {
+      const [aT = "0"] = a.split("/");
+      const [bT = "0"] = b.split("/");
+      return BigInt(aT) > BigInt(bT);
+    };
+
+    // Step 1: seed the target row and capture its insert-time HLC via the
+    // `value` column (which stays untouched through the rest of the test).
+    await sql.insert(crdtTable, { id: "lww-a", title: "initial", value: 10 });
+    const hlcsAfterInsert = await readColumnHlcs("lww-a");
+    const valueInsertHlc = hlcsAfterInsert.value!;
+    expect(typeof valueInsertHlc).toBe("string");
+    expect(valueInsertHlc.length).toBeGreaterThan(0);
+
+    // Step 2: update only the title locally — title HLC must advance past the
+    // insert HLC, while value HLC stays the same.
+    await sql.update(crdtTable, { title: "local-winner" }, "id = ?", ["lww-a"]);
+    const hlcsAfterLocalUpdate = await readColumnHlcs("lww-a");
+    const localTitleHlc = hlcsAfterLocalUpdate.title!;
+    expect(hlcIsNewer(localTitleHlc, valueInsertHlc)).toBe(true);
+    expect(hlcsAfterLocalUpdate.value).toEqual(valueInsertHlc);
+
+    // Step 3: source a fresh, strictly-newer HLC from an unrelated insert.
+    await sql.insert(crdtTable, { id: "lww-b", title: "seed", value: 0 });
+    const hlcsForFreshRow = await readColumnHlcs("lww-b");
+    const freshHlc = hlcsForFreshRow.title!;
+    expect(hlcIsNewer(freshHlc, localTitleHlc)).toBe(true);
+
+    // Step 4: apply a remote change with an HLC older than title's local HLC.
+    // LWW must reject it: the row's title stays "local-winner".
+    await vault.invokeTauriCommand("apply_remote_changes_in_transaction", {
+      changes: [
+        {
+          tableName: crdtTable,
+          rowPks: JSON.stringify({ id: "lww-a" }),
+          columnName: "title",
+          hlcTimestamp: valueInsertHlc,
+          batchId: "lww-older-batch",
+          batchSeq: 1,
+          batchTotal: 1,
+          decryptedValue: "should-not-win",
+        },
+      ],
+      backendId: "lww-test-backend",
+      maxHlc: valueInsertHlc,
+    });
+    const afterOlderRemote = await sql.selectFirst(crdtTable, ["title"], {
+      where: "id = ?",
+      params: ["lww-a"],
+    });
+    expect(afterOlderRemote).toEqual(["local-winner"]);
+
+    // Step 5: apply a remote change with an HLC newer than title's local HLC.
+    // LWW must accept it: the row's title becomes "remote-winner".
+    await vault.invokeTauriCommand("apply_remote_changes_in_transaction", {
+      changes: [
+        {
+          tableName: crdtTable,
+          rowPks: JSON.stringify({ id: "lww-a" }),
+          columnName: "title",
+          hlcTimestamp: freshHlc,
+          batchId: "lww-newer-batch",
+          batchSeq: 1,
+          batchTotal: 1,
+          decryptedValue: "remote-winner",
+        },
+      ],
+      backendId: "lww-test-backend",
+      maxHlc: freshHlc,
+    });
+    const afterNewerRemote = await sql.selectFirst(crdtTable, ["title"], {
+      where: "id = ?",
+      params: ["lww-a"],
+    });
+    expect(afterNewerRemote).toEqual(["remote-winner"]);
+
+    // Step 6: per-column tracking — title's HLC advanced to the remote HLC,
+    // but the value column HLC is still the original insert HLC because no
+    // change ever touched it.
+    const finalHlcs = await readColumnHlcs("lww-a");
+    expect(finalHlcs.title).toEqual(freshHlc);
+    expect(finalHlcs.value).toEqual(valueInsertHlc);
+  });
 });
