@@ -113,10 +113,12 @@ async function cleanupTestData() {
  * Cleans up any leftover data from failed test runs
  */
 async function cleanupAllTestData() {
-  // Delete all sync_changes with test vault IDs (prefix __test__)
-  await client`DELETE FROM sync_changes WHERE vault_id LIKE '__test__%'`
-  // Delete all vault_keys with test vault IDs
-  await client`DELETE FROM vault_keys WHERE vault_id LIKE '__test__%'`
+  // Delete all sync_changes with test vault IDs (prefix __test__).
+  // Underscores must be escaped in LIKE patterns — otherwise `_` matches any
+  // single character and we would delete unrelated rows that happen to share
+  // the `test` infix.
+  await client`DELETE FROM sync_changes WHERE vault_id LIKE '\_\_test\_\_%' ESCAPE '\\'`
+  await client`DELETE FROM vault_keys WHERE vault_id LIKE '\_\_test\_\_%' ESCAPE '\\'`
 }
 
 /**
@@ -200,7 +202,12 @@ async function pullChangesWithPagination(
         : undefined
     )
     .orderBy(asc(max(syncChanges.updatedAt)), asc(syncChanges.tableName), asc(syncChanges.rowPks))
-    .limit(limit)
+    // Fetch one extra row so we can tell whether more pages follow without
+    // doing a second round-trip that returns zero rows.
+    .limit(limit + 1)
+
+  const hasMore = modifiedRowsQuery.length > limit
+  if (hasMore) modifiedRowsQuery.pop()
 
   if (modifiedRowsQuery.length === 0) {
     return {
@@ -227,8 +234,6 @@ async function pullChangesWithPagination(
     ),
     orderBy: syncChanges.updatedAt,
   })
-
-  const hasMore = modifiedRowsQuery.length >= limit
 
   const lastRow = modifiedRowsQuery[modifiedRowsQuery.length - 1]
   const serverTimestamp = lastRow?.maxUpdatedAtIso ?? new Date().toISOString()
@@ -349,12 +354,16 @@ describe('Pagination Tests', () => {
     }> = []
 
     for (let row = 0; row < NUM_ROWS; row++) {
+      // Split row into minutes + seconds so the ISO timestamp stays valid
+      // for any NUM_ROWS. With NUM_ROWS = 200 this spans 00:00:00 – 00:03:19.
+      const minute = Math.floor(row / 60)
+      const second = row % 60
       for (let col = 0; col < COLUMNS_PER_ROW; col++) {
         changes.push({
           tableName: 'entries',
           rowPks: `{"id":"multicolrow-${row}"}`,
           columnName: `field_${col}`,
-          hlcTimestamp: `2026-01-01T00:00:${String(row).padStart(2, '0')}.${String(col).padStart(3, '0')}Z`,
+          hlcTimestamp: `2026-01-01T00:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}.${String(col).padStart(3, '0')}Z`,
         })
       }
     }
