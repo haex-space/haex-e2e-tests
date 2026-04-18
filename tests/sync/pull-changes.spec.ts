@@ -119,6 +119,11 @@ test.describe("sync: pull-changes", () => {
   });
 
   test("pull with afterUpdatedAt returns only newer changes", async () => {
+    // The server applies `max(updated_at) > afterUpdatedAt` — strictly
+    // exclusive. A row whose max(updated_at) equals the cutoff is NOT
+    // returned. See tests/sync/pull-changes.spec.ts boundary test below
+    // and haex-sync-server/src/routes/sync.ts pull handler for the filter.
+
     // Push first batch and get server timestamp
     const entryIdBefore = crypto.randomUUID();
     const beforeResult = await pushChanges(auth, spaceId, [
@@ -131,6 +136,9 @@ test.describe("sync: pull-changes", () => {
       }),
     ]);
 
+    // pushResult.serverTimestamp is the Postgres max(updated_at) of the
+    // rows just written (same format as pull's serverTimestamp). Using it
+    // as cutoff excludes the pushed row because the filter is strictly `>`.
     const cutoff = beforeResult.serverTimestamp;
 
     // Push second batch after cutoff
@@ -221,6 +229,45 @@ test.describe("sync: pull-changes", () => {
       expect(usernameChange!.encryptedValue).toBe(usernameValue);
     } finally {
       await deleteVault(auth, rowSpaceId);
+    }
+  });
+
+  test("afterUpdatedAt filter is strictly exclusive at the boundary", async () => {
+    // Isolate in a fresh vault so leftover state from earlier tests cannot
+    // shift what "the only row" means at the boundary timestamp.
+    const boundarySpaceId = crypto.randomUUID();
+    await createVaultKey(auth, boundarySpaceId);
+
+    try {
+      const entryId = crypto.randomUUID();
+      const rowPks = JSON.stringify({ id: entryId });
+
+      await pushChanges(auth, boundarySpaceId, [
+        makeSyncChange({
+          tableName: "entries",
+          rowPks,
+          columnName: "title",
+          deviceId,
+          hlcTimestamp: `${new Date().toISOString()}:00000001:${deviceId}`,
+        }),
+      ]);
+
+      // The pull response's serverTimestamp is the last row's actual
+      // `max(updated_at)` (not `new Date()`), so it lies exactly on the
+      // only row we just pushed.
+      const firstPull = await pullChanges(auth, boundarySpaceId);
+      expect(firstPull.changes.length).toBe(1);
+      const boundary = firstPull.serverTimestamp;
+
+      // Pulling again with afterUpdatedAt set exactly to that boundary must
+      // return nothing — the filter is `>` (strictly exclusive), so a row
+      // whose max(updated_at) equals the cutoff is excluded.
+      const boundaryPull = await pullChanges(auth, boundarySpaceId, {
+        afterUpdatedAt: boundary,
+      });
+      expect(boundaryPull.changes).toHaveLength(0);
+    } finally {
+      await deleteVault(auth, boundarySpaceId);
     }
   });
 });
