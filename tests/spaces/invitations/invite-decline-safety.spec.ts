@@ -233,10 +233,17 @@ test.describe("invitations: decline safety", () => {
   });
 
   // =========================================================================
-  // Decline then re-invite: should work cleanly
+  // Re-invite after decline: current UX limitation
+  //
+  // The unique constraint on (spaceId, inviteeDid) means the declined invite
+  // row persists and blocks a second invite with 409. Ideally the admin's
+  // re-invite action would either auto-delete the declined row or the
+  // server would treat decline as "row no longer blocks re-invite", but the
+  // client does neither today. This test pins the current behavior so a
+  // future UX improvement doesn't land silently.
   // =========================================================================
 
-  test("user can be re-invited after declining", async () => {
+  test("re-invite after decline is blocked by unique constraint (UX limitation)", async () => {
     const invitee = await createAdminUserWithIdentity();
     const inviteeAuth = toAuthContext(invitee);
 
@@ -251,9 +258,8 @@ test.describe("invitations: decline safety", () => {
     const inv1Id = (await inv1.json()).invite.id;
     await declineServerInvite(inviteeAuth, spaceId, inv1Id);
 
-    // Second invite — server returns 409 (invite already exists for this DID+space).
-    // The original invite row persists after decline (unique constraint on inviteeDid+spaceId).
-    // Re-inviting requires the old invite to be deleted first (admin action).
+    // Second invite is rejected with 409 because the declined row still
+    // occupies the unique (spaceId, inviteeDid) slot.
     const inv2 = await createServerInvite(
       authOwner,
       spaceId,
