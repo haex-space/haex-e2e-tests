@@ -146,21 +146,21 @@ test.describe("haex-pass: client-management", () => {
       // Step 3: Disconnect and reconnect — new connection should not be auto-paired
       client.disconnect();
 
-      // New client with new keys won't be authorized
+      // New client with new keys won't be authorized. Fresh keys guarantee
+      // the server has never seen this clientId, so the reconnect must resolve
+      // to a non-paired state and the unauthorized request must be rejected.
       const client2 = new VaultBridgeClient();
       try {
         await waitForBridgeConnection(client2);
 
         const { state } = client2.getState();
-        // Should NOT be auto-paired since this is a new keypair
-        // (the original keypair was revoked and this is fresh keys)
-        if (state !== "paired") {
-          await expect(
-            client2.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-              url: "https://example.com",
-            })
-          ).rejects.toThrow("Not authorized");
-        }
+        expect(state).not.toBe("paired");
+
+        await expect(
+          client2.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+            url: "https://example.com",
+          })
+        ).rejects.toThrow("Not authorized");
       } finally {
         client2.disconnect();
       }

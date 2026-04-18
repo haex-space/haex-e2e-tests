@@ -69,20 +69,20 @@ test.describe("haex-pass: authorization-flow", () => {
   test("unauthorized client sendRequest throws not authorized", async () => {
     const client = new VaultBridgeClient();
     try {
-      // Only connect, do NOT authorize
+      // Only connect, do NOT authorize. Fresh X25519 keys generated in the
+      // VaultBridgeClient constructor guarantee the server has never seen
+      // this clientId — handshake must resolve to pending_approval or
+      // connected (denied), never paired.
       await waitForBridgeConnection(client);
 
-      // The client should be in pending_approval (not paired), so sendRequest should throw
       const { state } = client.getState();
-      if (state !== "paired") {
-        await expect(
-          client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
-            url: "https://example.com",
-          })
-        ).rejects.toThrow("Not authorized");
-      }
-      // If state is already paired (remembered), skip this assertion —
-      // the "reconnect with same keys" test covers that case
+      expect(state).not.toBe("paired");
+
+      await expect(
+        client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+          url: "https://example.com",
+        })
+      ).rejects.toThrow("Not authorized");
     } finally {
       client.disconnect();
     }
