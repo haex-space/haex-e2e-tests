@@ -413,6 +413,13 @@ services:
       - HAEX_RELAY_URL=http://iroh-relay:3340
     volumes:
       - test-results:/app/test-results
+      # Bind-mount test sources from the host so edits (and CI reruns after a
+      # fresh `git checkout`) take effect without rebuilding the image. The
+      # Dockerfile still COPYs these at build time, so the image is usable
+      # standalone — the mounts just override the baked files when present.
+      - ../tests:/app/tests:ro
+      - ../fixtures:/app/fixtures:ro
+      - ../playwright.config.ts:/app/playwright.config.ts:ro
     shm_size: "2gb"
     depends_on:
       sync-server:
@@ -455,6 +462,12 @@ services:
       - VAULT_INSTANCE=B
       # Local iroh relay for P2P discovery (mDNS doesn't work in Docker bridge)
       - HAEX_RELAY_URL=http://iroh-relay:3340
+    volumes:
+      # See vault-a: override baked test sources with host copies so edits
+      # and CI reruns take effect without an image rebuild.
+      - ../tests:/app/tests:ro
+      - ../fixtures:/app/fixtures:ro
+      - ../playwright.config.ts:/app/playwright.config.ts:ro
     shm_size: "2gb"
     depends_on:
       sync-server:
