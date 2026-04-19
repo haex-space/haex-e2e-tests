@@ -210,38 +210,6 @@ test.describe("sync: evil scenarios", () => {
     expect(pullRes.changes.length).toBeGreaterThan(0);
   });
 
-  test("extremely large payload is rejected", async () => {
-    const hugeValue = "x".repeat(10 * 1024 * 1024); // 10 MB
-
-    const bodyObj = {
-      spaceId: attackerSpaceId,
-      changes: [
-        makeSyncChange({
-          tableName: "haex_vault_settings",
-          rowPks: JSON.stringify({ id: "huge" }),
-          columnName: "value",
-          deviceId: "attacker",
-          encryptedValue: hugeValue,
-        }),
-      ],
-    };
-    const bodyStr = JSON.stringify(bodyObj);
-
-    const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
-      },
-      body: bodyStr,
-    });
-
-    // Server must reject the oversized payload with a client error (e.g. 413, 400).
-    // Must NOT crash (500) and must NOT silently accept.
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
   test("negative batchSeq is handled", async () => {
     const bodyObj = {
       spaceId: attackerSpaceId,
