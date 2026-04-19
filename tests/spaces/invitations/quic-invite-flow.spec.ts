@@ -393,8 +393,9 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
     await wait(1000);
   }
 
-  // 1. Close any leftover Settings window, then open fresh at peerNetwork.
-  //    The Start/Stop button is directly on the P2P Network index view.
+  // 1. Close any leftover Settings window, then open fresh at the Sync category.
+  //    The P2P Start/Stop button moved from a top-level "peerNetwork" category
+  //    into Sync → Config (drill-down subview), so we must navigate twice.
   await vault.executeScript(`
     const app = document.getElementById('__nuxt')?.__vue_app__;
     const pinia = app?.config?.globalProperties?.$pinia;
@@ -407,10 +408,19 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
     }
   `);
   await wait(500);
-  await openSettingsCategory(vault, "peerNetwork");
+  await openSettingsCategory(vault, "sync");
+  await wait(500);
+
+  // 2. Drill into the "Config" subview — menu items are plain <button>s with
+  //    localized labels (no test-id), so we match by visible text.
+  const configOpened = await pollUntil(
+    () => clickButton(vault, "Konfiguration", "Configuration"),
+    { timeout: 10_000, label: "Sync → Config menu item" },
+  );
+  console.log(`[QUIC] Sync config menu clicked: ${configOpened}`);
   await wait(800);
 
-  // 2. Click the "Start" / "Starten" button (not "Stop"/"Stoppen" — P2P should be stopped)
+  // 3. Click the "Start" / "Starten" button (not "Stop"/"Stoppen" — P2P should be stopped)
   const startClicked = await pollUntil(
     () => clickButton(vault, "Start", "Starten"),
     { timeout: 10_000, label: "P2P Start button" },
