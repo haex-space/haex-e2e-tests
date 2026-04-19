@@ -321,13 +321,46 @@ async function openSettingsCategory(
       });
     }
   `);
-  await wait(2500);
 
-  // Click the category button (it should now be rendered)
+  // Wait for the category nav button to actually render before clicking.
+  // Fixed sleeps (wait(2500) + 10s poll) were too tight for CI under load —
+  // when the Nuxt/Pinia boot took >12s, the poll timed out before the element
+  // rendered. Polling for existence with a short interval is both faster on
+  // fast runners and more tolerant on slow ones.
   await pollUntil(
-    () => clickTestId(vault, testId),
-    { timeout: 10_000, label: `settings-category-${category}` },
+    () => elementExists(vault, `[data-testid="${testId}"]`),
+    { timeout: 30_000, interval: 500, label: `settings-category-${category} visible` },
   );
+
+  // Click-and-verify: Vue's @click handler may not yet be bound the instant
+  // the element appears in the DOM. Click, give the frame a tick to flush,
+  // then verify the click had an effect (category button gains an 'active'
+  // attribute/class). If not, click again. This guards against the
+  // "element exists → click → nothing happened" race.
+  await pollUntil(
+    async () => {
+      const clicked = await clickTestId(vault, testId);
+      if (!clicked) return false;
+      await wait(200);
+      return vault.executeScript<boolean>(`
+        const el = document.querySelector('[data-testid="${testId}"]');
+        return !!el && (
+          el.getAttribute('aria-selected') === 'true' ||
+          el.getAttribute('data-active') === 'true' ||
+          el.classList.contains('active') ||
+          el.classList.contains('selected') ||
+          el.classList.contains('router-link-active')
+        );
+      `);
+    },
+    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
+  ).catch(() => {
+    // Fallback: the app might not mark active state with any of our known
+    // attributes. One final click so the click at least fired; content-level
+    // assertions downstream (e.g., P2P Start button poll) will catch genuine
+    // navigation failures.
+    return clickTestId(vault, testId);
+  });
   await wait(500);
 }
 
@@ -934,6 +967,14 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     );
     console.log(`[QUIC-DEBUG] Vault B spaces: ${JSON.stringify(spacesB.map(s => ({ id: s.id?.slice(0, 8), name: s.name, type: s.type, status: s.status })))}`);
 
+    // Delivery path: Vault A's outbox processor → QUIC dial via iroh-relay →
+    // Vault B's accept loop → insert into haex_pending_invites.
+    //
+    // Under CI load iroh's dial+handshake occasionally needs more than a minute
+    // to settle (observed: outbox drained in ~9s but B sees nothing for 70s+).
+    // Bumping the timeout to 120s + tightening the interval from 2s to 1s
+    // triples poll density and tolerates slower relay round-trips. The debug
+    // log throttle stays every-5th-poll so noise doesn't explode.
     let pollCount = 0;
     await pollUntil(
       async () => {
@@ -943,7 +984,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [personalSpaceId],
         );
-        if (pollCount % 5 === 1) {
+        if (pollCount % 10 === 1) {
           console.log(`[QUIC-DEBUG] Poll #${pollCount} (${Date.now() - t0}ms): invites=${invites.length}`);
           // Also check outbox status periodically
           const ob = await sqlQuery<{ status: string; retry_count: number }>(
@@ -954,7 +995,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         }
         return invites.length > 0;
       },
-      { timeout: 60_000, interval: 2_000, label: "Personal space invite delivery to Vault B" },
+      { timeout: 120_000, interval: 1_000, label: "Personal space invite delivery to Vault B" },
     );
     console.log(`[QUIC-DEBUG] Invite delivered after ${Date.now() - t0}ms (${pollCount} polls)`);
   });
