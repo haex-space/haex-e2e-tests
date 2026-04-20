@@ -986,6 +986,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     // triples poll density and tolerates slower relay round-trips. The debug
     // log throttle stays every-5th-poll so noise doesn't explode.
     let pollCount = 0;
+    const lastOutbox = { status: null as string | null, retries: -1 };
     await pollUntil(
       async () => {
         pollCount++;
@@ -994,14 +995,24 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           `SELECT id FROM haex_pending_invites WHERE space_id = ?1 AND status = 'pending'`,
           [personalSpaceId],
         );
+        // Transition tracker for flake-C analysis: log whenever outbox status
+        // or retry_count changes, so classification (stuck-queued vs.
+        // stuck-delivering vs. delivered-but-B-silent) is unambiguous across
+        // CI runs. Cheap: single-row SELECT per poll.
+        const ob = await sqlQuery<{ status: string; retry_count: number }>(
+          vaultA,
+          `SELECT status, retry_count FROM haex_invite_outbox ORDER BY created_at DESC LIMIT 1`,
+        );
+        if (ob.length > 0) {
+          const { status, retry_count } = ob[0];
+          if (status !== lastOutbox.status || retry_count !== lastOutbox.retries) {
+            console.log(`[FLAKE-C] outbox@${Date.now() - t0}ms ${lastOutbox.status}→${status} retries ${lastOutbox.retries}→${retry_count} invitesOnB=${invites.length}`);
+            lastOutbox.status = status;
+            lastOutbox.retries = retry_count;
+          }
+        }
         if (pollCount % 10 === 1) {
           console.log(`[QUIC-DEBUG] Poll #${pollCount} (${Date.now() - t0}ms): invites=${invites.length}`);
-          // Also check outbox status periodically
-          const ob = await sqlQuery<{ status: string; retry_count: number }>(
-            vaultA,
-            `SELECT status, retry_count FROM haex_invite_outbox ORDER BY created_at DESC LIMIT 1`,
-          );
-          if (ob.length > 0) console.log(`[QUIC-DEBUG] Outbox: status=${ob[0].status}, retries=${ob[0].retry_count}`);
         }
         return invites.length > 0;
       },
@@ -1249,6 +1260,26 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("accept invite on Vault B via UI", async () => {
+    // Flake-B state snapshot: diff against the stable sibling test at line
+    // 1050 ("accept Personal space invite on Vault B"). Differences in
+    // pending-invite counts, leftover MLS welcomes, or space-member rows
+    // point to distinct fixes (selector ambiguity vs. welcome race vs.
+    // pure timing). See docs/plans/2026-04-20-fix-e2e-flakes.md in haex-vault.
+    const pending = await sqlQuery<{ id: string; space_id: string; status: string; space_name: string }>(
+      vaultB,
+      `SELECT id, space_id, status, space_name FROM haex_pending_invites ORDER BY created_at DESC LIMIT 10`,
+    );
+    const mlsWelcomes = await sqlQuery<{ id: string; space_id: string; source: string }>(
+      vaultB,
+      `SELECT id, space_id, source FROM haex_mls_pending_welcomes_no_sync`,
+    );
+    const members = await sqlQuery<{ space_id: string; member_did: string }>(
+      vaultB,
+      `SELECT space_id, member_did FROM haex_space_members`,
+    );
+    console.log(`[FLAKE-B] pending=${JSON.stringify(pending.map(p => ({ id: p.id.slice(0, 8), sp: p.space_id.slice(0, 8), st: p.status, n: p.space_name })))}`);
+    console.log(`[FLAKE-B] mls_welcomes=${mlsWelcomes.length} members=${members.length}`);
+
     await acceptInviteViaUI(vaultB, spaceName, spaceId);
 
     // Verify: invite status changed to 'accepted'
