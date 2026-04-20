@@ -1273,9 +1273,9 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       vaultB,
       `SELECT id, space_id, source FROM haex_mls_pending_welcomes_no_sync`,
     );
-    const members = await sqlQuery<{ space_id: string; member_did: string }>(
+    const members = await sqlQuery<{ space_id: string; identity_id: string }>(
       vaultB,
-      `SELECT space_id, member_did FROM haex_space_members`,
+      `SELECT space_id, identity_id FROM haex_space_members`,
     );
     console.log(`[FLAKE-B] pending=${JSON.stringify(pending.map(p => ({ id: p.id.slice(0, 8), sp: p.space_id.slice(0, 8), st: p.status, n: p.space_name })))}`);
     console.log(`[FLAKE-B] mls_welcomes=${mlsWelcomes.length} members=${members.length}`);
