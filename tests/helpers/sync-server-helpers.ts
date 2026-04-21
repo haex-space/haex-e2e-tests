@@ -635,9 +635,6 @@ export interface SyncChange {
   deviceId: string;
   encryptedValue: string | null;
   nonce: string | null;
-  batchId?: string;
-  batchSeq?: number;
-  batchTotal?: number;
   signature?: string;
   signedBy?: string;
   collaborative?: boolean;
