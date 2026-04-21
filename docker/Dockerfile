@@ -13,21 +13,45 @@ ARG HAEX_VAULT_REF=main
 ARG HAEXTENSION_REF=main
 ARG VAULT_SDK_REF=main
 ARG USE_PREBUILT_VAULT=false
+ARG USE_LOCAL_VAULT=false
 
 ENV DISPLAY=:1
 ENV HAEX_VAULT_REF=${HAEX_VAULT_REF}
 ENV HAEXTENSION_REF=${HAEXTENSION_REF}
 ENV VAULT_SDK_REF=${VAULT_SDK_REF}
 ENV USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT}
+ENV USE_LOCAL_VAULT=${USE_LOCAL_VAULT}
 
 WORKDIR /repos
 
 # Copy pre-built artifacts (if any) - these are provided by the build context
 COPY prebuilt/ /prebuilt/
 
-# Clone haex-vault repository (always needed for Nuxt source code)
-RUN git clone --depth 1 --branch ${HAEX_VAULT_REF} https://github.com/haex-space/haex-vault.git || \
-    (git clone https://github.com/haex-space/haex-vault.git && cd haex-vault && git checkout ${HAEX_VAULT_REF})
+# Stage local haex-vault sources from named build context `local-vault`.
+# When USE_LOCAL_VAULT=false, `local-vault` points at ./docker/dummy-vault/
+# (a harmless placeholder), so this COPY is cheap and inert.
+# When USE_LOCAL_VAULT=true, the context points at the user's checkout and
+# the following RUN block uses it instead of git clone.
+COPY --from=local-vault . /tmp/local-vault/
+
+# Obtain haex-vault source: either copy from local mount or clone from GitHub.
+# Local copy takes precedence so developers can test in-flight branches
+# without pushing to origin.
+RUN if [ "$USE_LOCAL_VAULT" = "true" ] && [ -d "/tmp/local-vault/src-tauri" ]; then \
+      echo "Using local haex-vault sources from mounted context"; \
+      cp -a /tmp/local-vault /repos/haex-vault; \
+      # Strip build artefacts that would bloat the image or collide with \
+      # in-container builds. node_modules/target are always regenerated. \
+      rm -rf /repos/haex-vault/node_modules \
+             /repos/haex-vault/src-tauri/target \
+             /repos/haex-vault/.nuxt \
+             /repos/haex-vault/.output; \
+    else \
+      echo "Cloning haex-vault @ ${HAEX_VAULT_REF} from GitHub"; \
+      git clone --depth 1 --branch ${HAEX_VAULT_REF} https://github.com/haex-space/haex-vault.git /repos/haex-vault || \
+        (git clone https://github.com/haex-space/haex-vault.git /repos/haex-vault && cd /repos/haex-vault && git checkout ${HAEX_VAULT_REF}); \
+    fi; \
+    rm -rf /tmp/local-vault
 
 # Clone other repositories
 RUN git clone --depth 1 --branch ${HAEXTENSION_REF} https://github.com/haex-space/haextension.git || \
