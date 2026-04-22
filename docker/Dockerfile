@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # E2E Test Environment for haex-vault + haex-pass + Browser Extension
 #
 # Uses pre-built base image with all system deps (webtop, Node.js, Rust,
@@ -13,28 +14,49 @@ ARG HAEX_VAULT_REF=main
 ARG HAEXTENSION_REF=main
 ARG VAULT_SDK_REF=main
 ARG USE_PREBUILT_VAULT=false
+ARG USE_LOCAL_VAULT=false
 
 ENV DISPLAY=:1
 ENV HAEX_VAULT_REF=${HAEX_VAULT_REF}
 ENV HAEXTENSION_REF=${HAEXTENSION_REF}
 ENV VAULT_SDK_REF=${VAULT_SDK_REF}
 ENV USE_PREBUILT_VAULT=${USE_PREBUILT_VAULT}
+ENV USE_LOCAL_VAULT=${USE_LOCAL_VAULT}
 
 WORKDIR /repos
 
 # Copy pre-built artifacts (if any) - these are provided by the build context
 COPY prebuilt/ /prebuilt/
 
-# Clone haex-vault repository (always needed for Nuxt source code)
-RUN git clone --depth 1 --branch ${HAEX_VAULT_REF} https://github.com/haex-space/haex-vault.git || \
-    (git clone https://github.com/haex-space/haex-vault.git && cd haex-vault && git checkout ${HAEX_VAULT_REF})
+# Obtain haex-vault source: either copy from local mount or clone from GitHub.
+# The `local-vault` named build context is bind-mounted read-only for the
+# duration of this RUN instruction only — nothing from it is persisted into
+# an image layer. When USE_LOCAL_VAULT=false, the context points at
+# ./docker/dummy-vault/ (an empty placeholder) and the clone branch runs.
+# When USE_LOCAL_VAULT=true, the user's local checkout is copied into
+# /repos/haex-vault so in-flight branches can be tested without pushing.
+RUN --mount=type=bind,from=local-vault,source=.,target=/tmp/local-vault,readonly \
+    if [ "$USE_LOCAL_VAULT" = "true" ] && [ -d "/tmp/local-vault/src-tauri" ]; then \
+      echo "Using local haex-vault sources from mounted context"; \
+      cp -a /tmp/local-vault /repos/haex-vault; \
+      # Strip build artefacts that would bloat the image or collide with \
+      # in-container builds. node_modules/target are always regenerated. \
+      rm -rf /repos/haex-vault/node_modules \
+             /repos/haex-vault/src-tauri/target \
+             /repos/haex-vault/.nuxt \
+             /repos/haex-vault/.output; \
+    else \
+      echo "Cloning haex-vault @ ${HAEX_VAULT_REF} from GitHub"; \
+      git clone --depth 1 --branch "${HAEX_VAULT_REF}" https://github.com/haex-space/haex-vault.git /repos/haex-vault || \
+        (git clone https://github.com/haex-space/haex-vault.git /repos/haex-vault && cd /repos/haex-vault && git checkout "${HAEX_VAULT_REF}"); \
+    fi
 
 # Clone other repositories
-RUN git clone --depth 1 --branch ${HAEXTENSION_REF} https://github.com/haex-space/haextension.git || \
-    (git clone https://github.com/haex-space/haextension.git && cd haextension && git checkout ${HAEXTENSION_REF})
+RUN git clone --depth 1 --branch "${HAEXTENSION_REF}" https://github.com/haex-space/haextension.git || \
+    (git clone https://github.com/haex-space/haextension.git && cd haextension && git checkout "${HAEXTENSION_REF}")
 
-RUN git clone --depth 1 --branch ${VAULT_SDK_REF} https://github.com/haex-space/vault-sdk.git || \
-    (git clone https://github.com/haex-space/vault-sdk.git && cd vault-sdk && git checkout ${VAULT_SDK_REF})
+RUN git clone --depth 1 --branch "${VAULT_SDK_REF}" https://github.com/haex-space/vault-sdk.git || \
+    (git clone https://github.com/haex-space/vault-sdk.git && cd vault-sdk && git checkout "${VAULT_SDK_REF}")
 
 # Build haex-vault (Nuxt + Tauri app)
 WORKDIR /repos/haex-vault

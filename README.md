@@ -31,76 +31,15 @@ pnpm docker:down:clean
 
 ## Versionen konfigurieren
 
-Es gibt drei Möglichkeiten, die Versionen für E2E-Tests zu konfigurieren:
-
-### 1. Projekt-Konfigurationsdatei (empfohlen)
-
-Jedes Projekt kann eine `.e2e-versions.json` im Root enthalten, die festlegt, gegen welche Versionen der anderen Services getestet werden soll:
-
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/haex-space/haex-e2e-tests/main/schemas/e2e-versions.schema.json",
-  "project": "haex-vault",
-  "dependencies": {
-    "haex-vault": "self",
-    "haextension": "main",
-    "vault-sdk": "main",
-    "haex-sync-server": "v1.0.0"
-  },
-  "profiles": {
-    "release": {
-      "haex-vault": "self",
-      "haextension": "v2.1.0",
-      "vault-sdk": "v1.5.0",
-      "haex-sync-server": "v1.0.0"
-    }
-  }
-}
-```
-
-Der Wert `"self"` wird durch die aktuelle Git-Referenz des Projekts ersetzt (Branch, Tag oder Commit).
+Jede Komponente kann über Umgebungsvariablen auf eine beliebige Git-Ref (Branch,
+Tag oder Commit-SHA) gepinnt werden:
 
 ```bash
-# Versionen aus haex-vault/main laden
-source scripts/fetch-project-versions.sh haex-vault
-
-# Versionen aus einem Feature-Branch laden
-source scripts/fetch-project-versions.sh haex-vault feat/new-ui
-
-# Mit Version-Profil
-source scripts/fetch-project-versions.sh haex-vault main release
-```
-
-### 2. Version-Presets
-
-Drei Presets für häufige Szenarien:
-
-```bash
-# Main branches (Standard)
-pnpm docker:build
-
-# Letzte Release-Versionen
-pnpm docker:build:release
-
-# Nightly builds (falls vorhanden)
-pnpm docker:build:nightly
-```
-
-### 3. Individuelle Versionen
-
-Jede Komponente kann einzeln konfiguriert werden:
-
-```bash
-# Spezifische Versionen über Umgebungsvariablen
 HAEX_VAULT_VERSION=v1.0.0 \
 HAEXTENSION_VERSION=feat/new-ui \
 VAULT_SDK_VERSION=main \
 HAEX_SYNC_SERVER_VERSION=main \
 pnpm docker:build
-
-# Version-Resolver manuell aufrufen
-source scripts/resolve-versions.sh release
-echo $HAEX_VAULT_VERSION  # Zeigt aufgelöste Version
 ```
 
 ### Umgebungsvariablen
@@ -111,13 +50,6 @@ echo $HAEX_VAULT_VERSION  # Zeigt aufgelöste Version
 | `HAEXTENSION_VERSION` | haextension Git-Ref | `main` |
 | `VAULT_SDK_VERSION` | vault-sdk Git-Ref | `main` |
 | `HAEX_SYNC_SERVER_VERSION` | haex-sync-server Git-Ref | `main` |
-| `VERSION_PRESET` | Preset: `release`, `nightly`, `main` | - |
-
-Gültige Werte für Versionen:
-- `self` (nur in `.e2e-versions.json`): Ersetzt durch aktuelle Git-Ref
-- Branch-Namen: `main`, `develop`, `feat/new-ui`
-- Tags: `v1.0.0`, `v2.1.3`
-- Commit-SHAs: `abc1234`
 
 ## Projektstruktur
 
@@ -147,15 +79,10 @@ haex-e2e-tests/
 │   ├── test-data.ts            # Test-Einträge
 │   └── sync-test-data.ts       # Sync-Szenarien
 ├── scripts/
-│   ├── fetch-project-versions.sh  # Lädt Versionen aus Projekt-Konfiguration
-│   ├── resolve-versions.sh        # Version-Preset Resolver
 │   ├── start-all.sh               # Startet alle Services
+│   ├── start-tauri-dev.sh         # Startet haex-vault im Dev-Modus
 │   ├── start-vault.sh             # Startet haex-vault
 │   └── stop-all.sh                # Stoppt alle Services
-├── schemas/
-│   └── e2e-versions.schema.json   # JSON-Schema für .e2e-versions.json
-├── examples/
-│   └── .e2e-versions.example.json # Beispiel-Konfiguration
 ├── .env.example                   # Umgebungsvariablen-Vorlage
 ├── playwright.config.ts
 ├── package.json
@@ -185,9 +112,6 @@ pnpm docker:test
 # Einzelne Test-Suite
 docker compose -f docker/docker-compose.yml run --rm e2e-test-env \
   pnpm test tests/haex-pass/get-logins.spec.ts
-
-# Mit Release-Versionen testen
-pnpm docker:test:release
 ```
 
 ### Im Container (interaktiv)
@@ -231,23 +155,6 @@ Die E2E-Tests sind als **reusable workflow** konzipiert und werden von den Build
 ### Integration in andere Projekte
 
 In der Build-Pipeline des aufrufenden Projekts (z.B. haex-vault):
-
-**Option 1: Versionen aus Projekt-Konfiguration laden (empfohlen)**
-
-```yaml
-# .github/workflows/build.yml
-jobs:
-  e2e-tests:
-    needs: build
-    uses: haex-space/haex-e2e-tests/.github/workflows/e2e-tests.yml@main
-    with:
-      build_type: nightly
-      source_project: haex-vault           # Lade .e2e-versions.json aus diesem Repo
-      source_ref: ${{ github.sha }}        # Von aktuellem Commit
-      # version_profile: release           # Optional: bestimmtes Profil verwenden
-```
-
-**Option 2: Versionen direkt angeben**
 
 ```yaml
 # .github/workflows/build.yml
