@@ -57,27 +57,26 @@ export interface SqlCommandInput {
  *
  * Use this as a reference when choosing which command to use:
  *
- * | Command                 | CRDT Transform | Tombstone Filter | Use Case                          |
- * |------------------------|----------------|------------------|-----------------------------------|
- * | sql_select             | No             | No               | Raw SELECT, debug, PRAGMA         |
- * | sql_execute            | No             | No               | Raw DDL, test cleanup             |
- * | sql_select_with_crdt   | No             | Yes              | SELECT excluding soft-deleted     |
- * | sql_execute_with_crdt  | Yes            | N/A              | CREATE TABLE with CRDT columns    |
- * | sql_with_crdt          | Auto           | Auto             | Unified proxy for app use         |
+ * | Command                 | CRDT Transform | Delete Semantics      | Use Case                          |
+ * |------------------------|----------------|-----------------------|-----------------------------------|
+ * | sql_select             | No             | N/A                   | Raw SELECT, debug, PRAGMA         |
+ * | sql_execute            | No             | Physical, no logging  | Raw DDL, test cleanup             |
+ * | sql_select_with_crdt   | No             | N/A                   | SELECT with CRDT read-path        |
+ * | sql_execute_with_crdt  | Yes            | N/A                   | CREATE TABLE with CRDT columns    |
+ * | sql_with_crdt          | Auto           | Physical + delete-log | Unified proxy for app use         |
  */
 export const TAURI_SQL_COMMANDS = {
   /**
    * Raw SELECT without any CRDT transformation
    *
-   * - No tombstone filtering (includes soft-deleted rows)
    * - No CRDT column transformation
-   * - Use for debugging, PRAGMA queries, or accessing raw data
+   * - Use for debugging, PRAGMA queries, or direct inspection of CRDT metadata
    *
    * @example
    * ```typescript
-   * // Check tombstone status
+   * // Inspect HLC metadata
    * await vault.invokeTauriCommand("sql_select", {
-   *   sql: "SELECT id, haex_tombstone FROM users WHERE id = ?",
+   *   sql: "SELECT id, haex_hlc FROM users WHERE id = ?",
    *   params: ["user1"]
    * });
    *
@@ -94,8 +93,9 @@ export const TAURI_SQL_COMMANDS = {
    * Raw execute (non-SELECT) without any CRDT transformation
    *
    * - No CRDT column additions for CREATE TABLE
-   * - DELETE actually removes rows (hard delete)
-   * - Use for test cleanup, DDL on no-sync tables
+   * - DELETE actually removes rows without populating haex_deleted_rows (BEFORE-DELETE
+   *   trigger is bypassed when triggers_enabled='0', but sql_execute doesn't flip that
+   *   flag — use it when the test must not produce sync traffic)
    *
    * @example
    * ```typescript
@@ -115,15 +115,14 @@ export const TAURI_SQL_COMMANDS = {
   SQL_EXECUTE: "sql_execute" as const,
 
   /**
-   * SELECT with CRDT tombstone filtering
+   * SELECT through the CRDT read-path
    *
-   * - Excludes rows where haex_tombstone = 1
-   * - No other CRDT transformation
-   * - Use for queries that should exclude soft-deleted rows
+   * - Identical result shape to sql_select in the delete-log model (gelöschte
+   *   Rows sind physisch weg, daher gibt es nichts zu filtern)
+   * - Kept for API symmetry and potential future CRDT-aware read transformations
    *
    * @example
    * ```typescript
-   * // Get active users only
    * await vault.invokeTauriCommand("sql_select_with_crdt", {
    *   sql: "SELECT * FROM users",
    *   params: []
@@ -135,8 +134,8 @@ export const TAURI_SQL_COMMANDS = {
   /**
    * Execute with CRDT transformation
    *
-   * - CREATE TABLE: Adds CRDT columns (haex_timestamp, haex_column_hlcs, haex_tombstone)
-   * - Sets up triggers for CRDT operations
+   * - CREATE TABLE: Adds CRDT columns (haex_hlc, haex_column_hlcs)
+   * - Sets up BEFORE-DELETE trigger that logs deletes into haex_deleted_rows
    * - Only transforms tables without "_no_sync" suffix
    *
    * @example
@@ -150,7 +149,7 @@ export const TAURI_SQL_COMMANDS = {
    *   )`,
    *   params: []
    * });
-   * // Results in table with: id, name, email, haex_timestamp, haex_column_hlcs, haex_tombstone
+   * // Results in table with: id, name, email, haex_hlc, haex_column_hlcs
    * ```
    */
   SQL_EXECUTE_WITH_CRDT: "sql_execute_with_crdt" as const,
@@ -159,10 +158,11 @@ export const TAURI_SQL_COMMANDS = {
    * Unified SQL proxy with automatic CRDT handling
    *
    * Routes to appropriate handler based on statement type:
-   * - SELECT: Uses sql_select_with_crdt (filters tombstones)
-   * - INSERT: Adds CRDT timestamps and HLCs
-   * - UPDATE: Updates CRDT timestamps and column HLCs
-   * - DELETE: Converts to UPDATE with haex_tombstone = 1 (soft delete)
+   * - SELECT: Uses sql_select_with_crdt
+   * - INSERT: Adds CRDT HLC and per-column HLCs
+   * - UPDATE: Updates CRDT HLC and per-column HLCs
+   * - DELETE: Physically removes the row; BEFORE-DELETE trigger logs the delete
+   *   into haex_deleted_rows, which is itself CRDT-synced
    * - Other (CREATE, DROP, etc.): Uses raw sql_execute (no CRDT)
    *
    * IMPORTANT: For CREATE TABLE, use sql_execute_with_crdt instead!
@@ -170,19 +170,19 @@ export const TAURI_SQL_COMMANDS = {
    *
    * @example
    * ```typescript
-   * // Insert with CRDT (adds timestamps)
+   * // Insert with CRDT (adds HLCs)
    * await vault.invokeTauriCommand("sql_with_crdt", {
    *   sql: "INSERT INTO users (id, name) VALUES (?, ?)",
    *   params: ["user1", "Alice"]
    * });
    *
-   * // Select (filters soft-deleted)
+   * // Select
    * await vault.invokeTauriCommand("sql_with_crdt", {
    *   sql: "SELECT * FROM users WHERE active = ?",
    *   params: [1]
    * });
    *
-   * // Delete (soft delete - sets tombstone)
+   * // Delete (physical; delete-log populated by trigger)
    * await vault.invokeTauriCommand("sql_with_crdt", {
    *   sql: "DELETE FROM users WHERE id = ?",
    *   params: ["user1"]
@@ -215,17 +215,6 @@ export function isRawSqlCommand(command: string): boolean {
 }
 
 /**
- * Check if a command filters tombstones
- */
-export function filtersTombstones(command: string): boolean {
-  return (
-    command === "sql_select_with_crdt" ||
-    command === "sql_with_crdt" ||
-    command === "sql_query_with_crdt"
-  );
-}
-
-/**
  * Check if a command transforms DDL (adds CRDT columns to CREATE TABLE)
  */
 export function transformsDdl(command: string): boolean {
@@ -244,7 +233,7 @@ export function transformsDdl(command: string): boolean {
  * const command = recommendSqlCommand("CREATE TABLE", { withCrdt: true });
  * // Returns: "sql_execute_with_crdt"
  *
- * const command = recommendSqlCommand("DELETE", { hardDelete: true });
+ * const command = recommendSqlCommand("DELETE", { bypassDeleteLog: true });
  * // Returns: "sql_execute"
  * ```
  */
@@ -253,17 +242,15 @@ export function recommendSqlCommand(
   options: {
     /** Should use CRDT transformations? */
     withCrdt?: boolean;
-    /** For DELETE: should actually remove rows instead of soft delete? */
-    hardDelete?: boolean;
-    /** Should include soft-deleted rows in SELECT? */
-    includeDeleted?: boolean;
+    /** For DELETE: bypass the delete-log trigger (test cleanup, no sync traffic)? */
+    bypassDeleteLog?: boolean;
   } = {}
 ): TauriSqlCommand {
-  const { withCrdt = true, hardDelete = false, includeDeleted = false } = options;
+  const { withCrdt = true, bypassDeleteLog = false } = options;
 
   switch (operation) {
     case "SELECT":
-      if (includeDeleted || !withCrdt) return TAURI_SQL_COMMANDS.SQL_SELECT;
+      if (!withCrdt) return TAURI_SQL_COMMANDS.SQL_SELECT;
       return TAURI_SQL_COMMANDS.SQL_WITH_CRDT;
 
     case "INSERT":
@@ -272,7 +259,7 @@ export function recommendSqlCommand(
       return TAURI_SQL_COMMANDS.SQL_WITH_CRDT;
 
     case "DELETE":
-      if (hardDelete || !withCrdt) return TAURI_SQL_COMMANDS.SQL_EXECUTE;
+      if (bypassDeleteLog || !withCrdt) return TAURI_SQL_COMMANDS.SQL_EXECUTE;
       return TAURI_SQL_COMMANDS.SQL_WITH_CRDT;
 
     case "CREATE TABLE":
@@ -293,13 +280,17 @@ export function recommendSqlCommand(
  * CRDT columns automatically added by sql_execute_with_crdt
  */
 export const CRDT_COLUMNS = {
-  /** HLC timestamp for last modification */
-  TIMESTAMP: "haex_timestamp",
+  /** Transaction-scope HLC for the last write that touched the row */
+  HLC: "haex_hlc",
   /** JSON object mapping column names to their HLC timestamps */
   COLUMN_HLCS: "haex_column_hlcs",
-  /** Soft delete flag (0 = active, 1 = deleted) */
-  TOMBSTONE: "haex_tombstone",
 } as const;
+
+/**
+ * Name of the delete-log table that all CRDT-tracked deletes are appended to
+ * via BEFORE-DELETE triggers. Propagated as a regular CRDT table over sync.
+ */
+export const DELETED_ROWS_TABLE = "haex_deleted_rows";
 
 /**
  * Tables with this suffix are excluded from CRDT transformation
