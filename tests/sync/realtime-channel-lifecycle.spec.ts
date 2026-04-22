@@ -30,7 +30,6 @@ test.describe("sync: realtime connection lifecycle", () => {
 
   let auth: AuthContext;
   let publicKey: string;
-  let memberAuth: AuthContext;
   const spaceId = crypto.randomUUID();
   const deviceId = `e2e-lifecycle-${Date.now()}`;
 
@@ -45,9 +44,10 @@ test.describe("sync: realtime connection lifecycle", () => {
     const createRes = await createSpace(auth, spaceId, "Lifecycle Test Space");
     expect(createRes.status).toBe(201);
 
-    // Permanent member for broadcast tests (owner pushes, member receives)
+    // Permanent member for broadcast tests (owner pushes, member receives).
+    // Individual tests create their own per-test member for realtime clients;
+    // this call ensures the space always has at least one member in the DB.
     const member = await createAdminUserWithIdentity();
-    memberAuth = toAuthContext(member);
     await addSpaceMember(auth, spaceId, member.did, "Lifecycle Member", SpaceCapabilities.WRITE);
   });
 

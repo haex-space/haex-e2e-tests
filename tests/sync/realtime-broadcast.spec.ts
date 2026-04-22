@@ -3,13 +3,10 @@ import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
   createAdminUserWithIdentity,
-  createVaultKey,
-  deleteVault,
   createSpace,
   addSpaceMember,
   removeSpaceMember,
   deleteSpace,
-  pushChanges,
   makeSyncChange,
   signAndPushSpaceChanges,
   toAuthContext,

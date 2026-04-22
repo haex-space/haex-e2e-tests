@@ -13,7 +13,6 @@
 // This test suite validates the server-side behavior and documents
 // the expected client-side coordination between channels.
 
-import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
@@ -21,7 +20,6 @@ import {
   toAuthContext,
   createSpace,
   deleteSpace,
-  addSpaceMember,
   type AuthContext,
 } from "../../helpers";
 import {

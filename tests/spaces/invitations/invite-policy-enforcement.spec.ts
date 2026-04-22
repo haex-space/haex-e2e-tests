@@ -11,7 +11,6 @@
 // Server-side invites (HTTP API) are not affected by the local policy
 // since they go through the server's own authorization.
 
-import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,

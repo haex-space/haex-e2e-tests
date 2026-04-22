@@ -22,7 +22,6 @@ import {
   declineServerInvite,
   listPendingInvites,
   getSpaceDetails,
-  getInviteUcan,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import { SpaceCapabilities } from "@haex-space/ucan";

@@ -355,22 +355,22 @@ test.describe("sync: evil scenarios", () => {
   });
 
   // =====================================================================
-  // Tombstone Resurrection
+  // Delete-log + Resurrection
   // =====================================================================
 
-  test("deleted record can be resurrected with later timestamp", async () => {
+  test("delete event propagates as a row in haex_deleted_rows, re-insert with later HLC survives on the server", async () => {
     const spaceId = crypto.randomUUID();
     const admin = await createAdminUser();
     const auth = toAuthContext(admin);
     await createVaultKey(auth, spaceId);
 
-    const rowPks = JSON.stringify({ id: "phoenix" });
+    const targetRowPks = JSON.stringify({ id: "phoenix" });
 
-    // Create
+    // 1. Initial insert — write the `value` column of the target row.
     await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
-        rowPks,
+        rowPks: targetRowPks,
         columnName: "value",
         deviceId: "device-1",
         hlcTimestamp: "2026-03-21T10:00:00.000Z:00000001:device-1",
@@ -378,38 +378,69 @@ test.describe("sync: evil scenarios", () => {
       }),
     ]);
 
-    // Delete (tombstone)
+    // 2. Delete event. In the delete-log model, a delete on the source table
+    //    becomes a new row in `haex_deleted_rows`. The wire format is the set
+    //    of ColumnChanges on that delete-log row's columns.
+    const deleteLogId = crypto.randomUUID();
+    const deleteLogPks = JSON.stringify({ id: deleteLogId });
+    const deleteHlc = "2026-03-21T11:00:00.000Z:00000001:device-1";
     await pushChanges(auth, spaceId, [
       makeSyncChange({
-        tableName: "haex_vault_settings",
-        rowPks,
-        columnName: "haex_tombstone",
+        tableName: "haex_deleted_rows",
+        rowPks: deleteLogPks,
+        columnName: "table_name",
         deviceId: "device-1",
-        hlcTimestamp: "2026-03-21T11:00:00.000Z:00000001:device-1",
-        encryptedValue: btoa("1"),
+        hlcTimestamp: deleteHlc,
+        encryptedValue: btoa("haex_vault_settings"),
+      }),
+      makeSyncChange({
+        tableName: "haex_deleted_rows",
+        rowPks: deleteLogPks,
+        columnName: "row_pks",
+        deviceId: "device-1",
+        hlcTimestamp: deleteHlc,
+        encryptedValue: btoa(targetRowPks),
       }),
     ]);
 
-    // Resurrect with later timestamp (set tombstone back to 0)
+    // 3. Resurrection attempt: push a fresh `value` column change for the same
+    //    target row, with an HLC strictly newer than the delete event. On the
+    //    receiving device the CRDT apply-path resolves this per-column — the
+    //    newer value wins. For the server-side contract we verify that both
+    //    events are preserved and returnable via pull.
     await pushChanges(auth, spaceId, [
       makeSyncChange({
         tableName: "haex_vault_settings",
-        rowPks,
-        columnName: "haex_tombstone",
+        rowPks: targetRowPks,
+        columnName: "value",
         deviceId: "device-2",
         hlcTimestamp: "2026-03-21T12:00:00.000Z:00000001:device-2",
-        encryptedValue: btoa("0"),
+        encryptedValue: btoa("resurrected"),
       }),
     ]);
 
-    // Pull — tombstone should be 0 (resurrected)
     const pulled = await pullChanges(auth, spaceId);
-    const tombstone = pulled.changes.find(
-      (c: { rowPks: string; columnName: string }) =>
-        c.rowPks === rowPks && c.columnName === "haex_tombstone",
-    );
 
-    expect(tombstone).toBeDefined();
-    expect(tombstone!.encryptedValue).toBe(btoa("0"));
+    // Delete-log event must be present with both of its column changes.
+    const deleteLogChanges = pulled.changes.filter(
+      (c: { tableName: string; rowPks: string }) =>
+        c.tableName === "haex_deleted_rows" && c.rowPks === deleteLogPks,
+    );
+    const deleteLogColumns = deleteLogChanges.map(
+      (c: { columnName: string }) => c.columnName,
+    );
+    expect(deleteLogColumns).toContain("table_name");
+    expect(deleteLogColumns).toContain("row_pks");
+
+    // The resurrection write must be present and hold the newer value.
+    const resurrectionValue = pulled.changes.find(
+      (c: { tableName: string; rowPks: string; columnName: string; hlcTimestamp: string }) =>
+        c.tableName === "haex_vault_settings" &&
+        c.rowPks === targetRowPks &&
+        c.columnName === "value" &&
+        c.hlcTimestamp === "2026-03-21T12:00:00.000Z:00000001:device-2",
+    );
+    expect(resurrectionValue).toBeDefined();
+    expect(resurrectionValue!.encryptedValue).toBe(btoa("resurrected"));
   });
 });

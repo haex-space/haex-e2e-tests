@@ -39,9 +39,8 @@ test.describe("CRDT Behavior", () => {
     // tableInfo rows: [cid, name, type, notnull, dflt_value, pk]
     const columnNames = tableInfo.map((row) => row[1] as string);
 
-    expect(columnNames).toContain(CRDT_COLUMNS.TIMESTAMP);
+    expect(columnNames).toContain(CRDT_COLUMNS.HLC);
     expect(columnNames).toContain(CRDT_COLUMNS.COLUMN_HLCS);
-    expect(columnNames).toContain(CRDT_COLUMNS.TOMBSTONE);
 
     // Also verify user columns are present
     expect(columnNames).toContain("id");
@@ -62,40 +61,34 @@ test.describe("CRDT Behavior", () => {
     const tableInfo = await sql.getTableInfo(noCrdtTable);
     const columnNames = tableInfo.map((row) => row[1] as string);
 
-    expect(columnNames).not.toContain(CRDT_COLUMNS.TIMESTAMP);
+    expect(columnNames).not.toContain(CRDT_COLUMNS.HLC);
     expect(columnNames).not.toContain(CRDT_COLUMNS.COLUMN_HLCS);
-    expect(columnNames).not.toContain(CRDT_COLUMNS.TOMBSTONE);
 
     // User columns must still be present
     expect(columnNames).toContain("id");
     expect(columnNames).toContain("data");
   });
 
-  test("INSERT sets haex_timestamp via selectRaw", async () => {
+  test("INSERT sets haex_hlc via selectRaw", async () => {
     await sql.insert(crdtTable, { id: "crdt-1", title: "Test Entry", value: 42 });
 
     const rows = await sql.selectRaw(
       crdtTable,
-      ["id", CRDT_COLUMNS.TIMESTAMP, CRDT_COLUMNS.TOMBSTONE],
+      ["id", CRDT_COLUMNS.HLC],
       { where: "id = ?", params: ["crdt-1"] }
     );
 
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
     const id = row[0];
-    const timestamp = row[1];
-    const tombstone = row[2];
+    const hlc = row[1];
     expect(id).toEqual("crdt-1");
-    // HLC timestamp: could be ISO string (2024-...), Unix numeric, or HLC format (<ISO>:<counter>:<nodeId>)
-    expect(timestamp).not.toBeNull();
-    expect(timestamp).not.toBeUndefined();
-    if (typeof timestamp === "string") {
-      expect(timestamp.length).toBeGreaterThan(0);
-    } else if (typeof timestamp === "number") {
-      expect(timestamp).toBeGreaterThan(0);
-    }
-    // Active rows may have tombstone = 0 or null depending on vault version
-    expect([0, null]).toContain(tombstone);
+    expect(hlc).not.toBeNull();
+    expect(hlc).not.toBeUndefined();
+    // HLC format: "<u64-nanoseconds>/<hex-device-id>"
+    expect(typeof hlc).toBe("string");
+    expect((hlc as string).length).toBeGreaterThan(0);
+    expect(hlc as string).toMatch(/^\d+\/[0-9a-fA-F]+$/);
   });
 
   test("UPDATE single column updates haex_column_hlcs for that column", async () => {
@@ -115,12 +108,12 @@ test.describe("CRDT Behavior", () => {
     // Get HLC state after update
     const afterRows = await sql.selectRaw(
       crdtTable,
-      [CRDT_COLUMNS.COLUMN_HLCS, CRDT_COLUMNS.TIMESTAMP],
+      [CRDT_COLUMNS.COLUMN_HLCS, CRDT_COLUMNS.HLC],
       { where: "id = ?", params: ["crdt-1"] }
     );
     expect(afterRows).toHaveLength(1);
     const hlcsAfter = afterRows[0]![0] as string;
-    const timestampAfter = afterRows[0]![1] as string;
+    const rowHlcAfter = afterRows[0]![1] as string;
     const parsedAfter = JSON.parse(hlcsAfter) as Record<string, string>;
 
     // Column HLCs should have changed after the update
@@ -138,9 +131,8 @@ test.describe("CRDT Behavior", () => {
       expect(hlc, `HLC for column "${column}" must match <nanos>/<nodeId>`).toMatch(HLC_FORMAT);
     }
 
-    // Timestamp should be a valid non-empty string
-    expect(typeof timestampAfter).toEqual("string");
-    expect(timestampAfter.length).toBeGreaterThan(0);
+    // Row-level HLC should match the HLC format too.
+    expect(rowHlcAfter).toMatch(HLC_FORMAT);
 
     // Verify the actual value was updated
     const dataRow = await sql.selectFirst(crdtTable, ["title"], {

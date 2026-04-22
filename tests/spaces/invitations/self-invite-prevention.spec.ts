@@ -8,7 +8,6 @@
 // - Bug: Invitation comes back to sender (handle_push_invite doesn't check active status)
 // - Bug: processOutboxAsync sends to own endpoint
 
-import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
@@ -26,7 +25,6 @@ import {
   claimInviteToken,
   getSpaceDetails,
   generateSpaceId,
-  generateEndpointId,
 } from "../../helpers/invite-helpers";
 import { SpaceCapabilities } from "@haex-space/ucan";
 

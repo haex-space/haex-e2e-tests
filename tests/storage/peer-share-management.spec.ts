@@ -1,7 +1,6 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
-  getSyncServerUrl,
   checkSyncServerHealth,
   createAdminUser,
   createVaultKey,
@@ -11,37 +10,6 @@ import {
   toAuthContext,
   type AuthContext,
 } from "../helpers";
-
-const SYNC_SERVER_URL = getSyncServerUrl();
-
-function randomBase64(bytes: number): string {
-  return crypto.randomBytes(bytes).toString("base64");
-}
-
-/**
- * Create a CRDT change for haex_peer_shares table.
- * This simulates what the vault app does when adding a share.
- */
-function makeShareChange(opts: {
-  shareId: string;
-  spaceId: string;
-  deviceEndpointId: string;
-  name: string;
-  localPath: string;
-  deviceId: string;
-  hlcTimestamp?: string;
-  columnName: string;
-  encryptedValue: string;
-}) {
-  return makeSyncChange({
-    tableName: "haex_peer_shares",
-    rowPks: JSON.stringify({ id: opts.shareId }),
-    columnName: opts.columnName,
-    deviceId: opts.deviceId,
-    hlcTimestamp: opts.hlcTimestamp || `2026-03-21T14:00:00.000Z:00000001:${opts.deviceId}`,
-    encryptedValue: opts.encryptedValue,
-  });
-}
 
 /**
  * Push a complete peer share (all columns) as a batch of CRDT changes.
@@ -82,7 +50,14 @@ async function pushPeerShare(
 }
 
 /**
- * Push a tombstone (deletion) for a peer share.
+ * Push a delete event for a peer share using the delete-log wire format.
+ *
+ * In the delete-log model a deletion is propagated as a new row in the
+ * `haex_deleted_rows` table. The wire format is a batch of ColumnChanges on
+ * that new row's columns (`table_name`, `row_pks`), not a `haex_tombstone`
+ * flip on the source table.
+ *
+ * Returns the delete-log row id so the test can later assert on it.
  */
 async function deletePeerShare(
   auth: AuthContext,
@@ -90,20 +65,32 @@ async function deletePeerShare(
   shareId: string,
   deviceId: string,
   timestamp?: string,
-) {
+): Promise<{ deleteLogId: string; count: number }> {
   const ts = timestamp || `2026-03-21T15:00:00.000Z:00000001:${deviceId}`;
+  const deleteLogId = crypto.randomUUID();
+  const deleteLogPks = JSON.stringify({ id: deleteLogId });
+  const targetRowPks = JSON.stringify({ id: shareId });
 
-  // Push a tombstone change (haex_tombstone = 1)
-  return pushChanges(auth, spaceId, [
+  const res = await pushChanges(auth, spaceId, [
     makeSyncChange({
-      tableName: "haex_peer_shares",
-      rowPks: JSON.stringify({ id: shareId }),
-      columnName: "haex_tombstone",
+      tableName: "haex_deleted_rows",
+      rowPks: deleteLogPks,
+      columnName: "table_name",
       deviceId,
       hlcTimestamp: ts,
-      encryptedValue: btoa("1"),
+      encryptedValue: btoa("haex_peer_shares"),
+    }),
+    makeSyncChange({
+      tableName: "haex_deleted_rows",
+      rowPks: deleteLogPks,
+      columnName: "row_pks",
+      deviceId,
+      hlcTimestamp: ts,
+      encryptedValue: btoa(targetRowPks),
     }),
   ]);
+
+  return { deleteLogId, count: res.count };
 }
 
 test.describe("storage: peer share management via sync", () => {
@@ -117,7 +104,6 @@ test.describe("storage: peer share management via sync", () => {
   const deviceA = `device-a-${Date.now()}`;
   const deviceB = `device-b-${Date.now()}`;
   const endpointA = crypto.randomBytes(32).toString("hex");
-  const endpointB = crypto.randomBytes(32).toString("hex");
 
   test.beforeAll(async () => {
     const healthy = await checkSyncServerHealth();
@@ -239,7 +225,7 @@ test.describe("storage: peer share management via sync", () => {
     expect(delRes.count).toBeDefined();
   });
 
-  test("share deleted on device A is tombstoned when pulled from device B", async () => {
+  test("share deleted on device A appears as a haex_deleted_rows entry when pulled from device B", async () => {
     const shareId = crypto.randomUUID();
 
     // Create on device A
@@ -257,25 +243,31 @@ test.describe("storage: peer share management via sync", () => {
       `2026-03-21T14:30:00.000Z:00000001:${deviceA}`,
     );
 
-    // Delete from device B (same user, different device)
-    const delRes = await deletePeerShare(
+    // Delete from device B (same user, different device) — produces a
+    // haex_deleted_rows entry, not a tombstone column change.
+    const { deleteLogId, count } = await deletePeerShare(
       authA,
       spaceIdA,
       shareId,
       deviceB,
       `2026-03-21T14:31:00.000Z:00000001:${deviceB}`,
     );
-    expect(delRes.count).toBeDefined();
+    expect(count).toBeDefined();
 
-    // Pull and verify tombstone exists
+    // Pull and verify the delete-log entry is present with both of its
+    // column changes (table_name pointing at haex_peer_shares, row_pks
+    // carrying the deleted row's PK object).
     const pulled = await pullChanges(authA, spaceIdA);
-    const tombstoneChanges = pulled.changes.filter(
-      (c: { tableName: string; rowPks: string; columnName: string }) =>
-        c.tableName === "haex_peer_shares" &&
-        c.rowPks === JSON.stringify({ id: shareId }) &&
-        c.columnName === "haex_tombstone",
+    const deleteLogPks = JSON.stringify({ id: deleteLogId });
+    const deleteLogChanges = pulled.changes.filter(
+      (c: { tableName: string; rowPks: string }) =>
+        c.tableName === "haex_deleted_rows" && c.rowPks === deleteLogPks,
     );
-    expect(tombstoneChanges.length).toBeGreaterThan(0);
+    const deleteLogColumns = deleteLogChanges.map(
+      (c: { columnName: string }) => c.columnName,
+    );
+    expect(deleteLogColumns).toContain("table_name");
+    expect(deleteLogColumns).toContain("row_pks");
   });
 
   // =====================================================================
