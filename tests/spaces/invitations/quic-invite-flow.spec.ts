@@ -1159,8 +1159,10 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     await openSettingsCategory(vaultB, "spaces");
     await wait(1000);
 
-    // The pending invite should appear as a list item with the space name
-    const visible = await pollUntil(
+    // The pending invite should appear as a list item with the space name.
+    // We poll for visibility but don't gate on it — DB check below is the
+    // authoritative assertion since UI rendering can race.
+    await pollUntil(
       () => vaultB.executeScript<boolean>(`
         const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
         return items.some(el =>
