@@ -23,9 +23,6 @@ import {
   createSpace,
   deleteSpace,
   addSpaceMember,
-  createDidAuthHeader,
-  DidAuthAction,
-  getSyncServerUrl,
   signAndPushSpaceChanges,
   pullChanges,
   makeSyncChange,
@@ -33,14 +30,11 @@ import {
 } from "../../helpers";
 import {
   createServerInvite,
-  acceptServerInvite,
   declineServerInvite,
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import { SpaceCapabilities } from "@haex-space/ucan";
-
-const SYNC_SERVER_URL = getSyncServerUrl();
 
 test.describe("invitations: decline safety", () => {
   test.describe.configure({ mode: "serial" });
@@ -329,10 +323,11 @@ test.describe("invitations: decline safety", () => {
       afterUpdatedAt: beforeDeclineTimestamp,
     });
 
-    // No changes should include haex_spaces tombstones
-    const spaceTombstones = pullResult.changes.filter(
-      (c) => c.tableName === "haex_spaces" && c.columnName === "haex_tombstone",
+    // No delete-log entries referring to haex_spaces should leak to the owner
+    // after a decline.
+    const spaceDeletions = pullResult.changes.filter(
+      (c) => c.tableName === "haex_deleted_rows",
     );
-    expect(spaceTombstones.length).toBe(0);
+    expect(spaceDeletions.length).toBe(0);
   });
 });

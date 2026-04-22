@@ -27,9 +27,6 @@ const WEBSOCKET_URL = `ws://localhost:${WEBSOCKET_PORT}`;
 const PROTOCOL_VERSION = 1;
 const CLIENT_NAME = "E2E Test Client";
 
-// tauri-driver WebDriver URLs (different for each vault container)
-const TAURI_DRIVER_URL = "http://localhost:4444";
-
 // Multi-vault configuration for dual-container testing
 // tauri-driver binds to localhost only, but we use socat proxy on port 4446 for cross-container access
 // IMPORTANT: tauri-driver validates Host header - must be "localhost:4444"
@@ -1979,7 +1976,6 @@ export class VaultAutomation {
     const sql = `
       SELECT id, name, server_url, space_id, email, enabled
       FROM haex_sync_backends
-      WHERE haex_tombstone = 0
     `;
 
     const result = await this.invokeTauriCommand<Array<Record<string, unknown>>>(

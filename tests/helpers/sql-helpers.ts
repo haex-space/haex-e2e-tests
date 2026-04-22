@@ -8,21 +8,25 @@
 // IMPORTANT CONCEPTS:
 //
 // 1. CRDT Tables vs No-Sync Tables
-//    - Regular tables get CRDT columns automatically (haex_timestamp, haex_column_hlcs, haex_tombstone)
+//    - Regular tables get CRDT columns automatically (haex_hlc, haex_column_hlcs)
 //    - Tables with "_no_sync" suffix are local-only and don't get CRDT transformation
 //
-// 2. Soft Delete vs Hard Delete
-//    - sql_with_crdt DELETE → UPDATE with haex_tombstone = 1 (soft delete)
-//    - sql_execute DELETE → actual row deletion (hard delete)
+// 2. Delete Semantics (delete-log model)
+//    - sql_with_crdt DELETE → physical row removal; BEFORE-DELETE trigger appends
+//      an entry to `haex_deleted_rows` which is itself CRDT-synced
+//    - sql_execute DELETE → physical row removal; the vault disables triggers for
+//      the scope of the call, so nothing is written to haex_deleted_rows (silent
+//      delete, no sync traffic)
 //
 // 3. Available Tauri SQL Commands:
-//    - sql_select: Raw SELECT without CRDT filtering
-//    - sql_execute: Raw non-SELECT without CRDT transformation
-//    - sql_select_with_crdt: SELECT with tombstone filtering (excludes soft-deleted rows)
-//    - sql_execute_with_crdt: CREATE TABLE with automatic CRDT columns
+//    - sql_select: Raw SELECT
+//    - sql_execute: Raw non-SELECT without CRDT transformation (silent delete)
+//    - sql_select_with_crdt: SELECT through CRDT read-path
+//    - sql_execute_with_crdt: CREATE TABLE with automatic CRDT columns + triggers
 //    - sql_with_crdt: Unified proxy that routes based on statement type
 
 import type { VaultAutomation } from "../fixtures";
+import { DELETED_ROWS_TABLE } from "./tauri-sql-types";
 
 // =============================================================================
 // Types
@@ -88,13 +92,13 @@ export interface CreateTableOptions {
  * // Insert with CRDT
  * await sql.insert("my_table", { id: "1", name: "Test", value: 42 });
  *
- * // Query with CRDT (excludes soft-deleted rows)
+ * // Query with CRDT
  * const rows = await sql.select("my_table", ["id", "name"], { where: "value > ?", params: [10] });
  *
- * // Soft delete (sets haex_tombstone = 1)
- * await sql.softDelete("my_table", "id = ?", ["1"]);
+ * // Production delete (physical; trigger appends to haex_deleted_rows for sync)
+ * await sql.remove("my_table", "id = ?", ["1"]);
  *
- * // Hard delete (actually removes the row - use for test cleanup)
+ * // Silent delete (physical; trigger is bypassed, no sync traffic — test cleanup)
  * await sql.hardDelete("my_table", "id = ?", ["1"]);
  * ```
  */
@@ -351,20 +355,18 @@ export class SqlHelpers {
   }
 
   /**
-   * Select rows without CRDT filtering (includes soft-deleted rows)
+   * Select rows via the raw sql_select command (no CRDT read-path).
    *
-   * Use this when you need to verify tombstone status or access all rows.
+   * Use this when you want to inspect CRDT-metadata columns (haex_hlc,
+   * haex_column_hlcs) or access data the normal read-path may not surface.
    *
    * @example
    * ```typescript
-   * // Check if a row was soft-deleted
-   * const row = await sql.selectRaw("users", ["id", "haex_tombstone"], {
+   * // Inspect HLC metadata for a row
+   * const row = await sql.selectRaw("users", ["id", "haex_hlc"], {
    *   where: "id = ?",
    *   params: ["user1"],
    * });
-   * if (row[0]?.[1] === 1) {
-   *   console.log("Row is soft-deleted");
-   * }
    * ```
    */
   async selectRaw(
@@ -484,17 +486,19 @@ export class SqlHelpers {
   // ===========================================================================
 
   /**
-   * Soft delete rows (sets haex_tombstone = 1)
+   * Delete rows via the CRDT path (physical remove + delete-log entry).
    *
-   * Rows will be excluded from sql_with_crdt SELECT queries but remain in the database.
-   * Use for production deletes where CRDT sync is needed.
+   * The BEFORE-DELETE trigger on the table appends a row to `haex_deleted_rows`
+   * with the target table name, the deleted row's PK values, and the current HLC.
+   * That delete-log row is itself CRDT-synced, so other devices receive the
+   * delete as a regular ColumnChange on `haex_deleted_rows`.
    *
    * @example
    * ```typescript
-   * await sql.softDelete("users", "id = ?", ["user1"]);
+   * await sql.remove("users", "id = ?", ["user1"]);
    * ```
    */
-  async softDelete(
+  async remove(
     tableName: string,
     where: string,
     params: SqlParam[] = []
@@ -507,16 +511,18 @@ export class SqlHelpers {
   }
 
   /**
-   * Hard delete rows (actually removes them from the database)
+   * Silent delete — physical remove without populating the delete-log.
    *
-   * Use this for test cleanup to avoid PRIMARY KEY conflicts on re-insert.
+   * The vault's `sql_execute` command disables triggers transactionally for the
+   * scope of this call, so the BEFORE-DELETE trigger does not fire and no row
+   * is written to `haex_deleted_rows`. Use this for test cleanup that should
+   * not produce sync traffic.
    *
    * @example
    * ```typescript
-   * // In beforeEach to clean up test data
-   * await sql.hardDelete("test_table"); // Delete all rows
+   * // In beforeEach to reset without leaking delete-log entries
+   * await sql.hardDelete("test_table");
    *
-   * // Delete specific rows
    * await sql.hardDelete("test_table", "id = ?", ["test-id"]);
    * ```
    */
@@ -532,26 +538,29 @@ export class SqlHelpers {
   }
 
   /**
-   * Check if a row was soft-deleted
+   * Check whether a row's delete-log entry is present in `haex_deleted_rows`.
+   *
+   * Matches on (`table_name`, `row_pks`) where `row_pks` is the JSON-encoded PK
+   * object produced by the BEFORE-DELETE trigger (`{"pk1": value1, ...}`).
    *
    * @example
    * ```typescript
-   * await sql.softDelete("users", "id = ?", ["user1"]);
-   * const isTombstoned = await sql.isSoftDeleted("users", "id = ?", ["user1"]);
-   * expect(isTombstoned).toBe(true);
+   * await sql.remove("users", "id = ?", ["user1"]);
+   * const logged = await sql.isInDeleteLog("users", { id: "user1" });
+   * expect(logged).toBe(true);
    * ```
    */
-  async isSoftDeleted(
+  async isInDeleteLog(
     tableName: string,
-    where: string,
-    params: SqlParam[] = []
+    pkValues: Record<string, unknown>
   ): Promise<boolean> {
-    const sql = `SELECT haex_tombstone FROM ${tableName} WHERE ${where}`;
+    const rowPksJson = JSON.stringify(pkValues);
+    const sql = `SELECT 1 FROM ${DELETED_ROWS_TABLE} WHERE table_name = ? AND row_pks = ? LIMIT 1`;
     const result = await this.vault.invokeTauriCommand<SqlResultSet>(
       "sql_select",
-      { sql, params }
+      { sql, params: [tableName, rowPksJson] }
     );
-    return result[0]?.[0] === 1;
+    return result.length > 0;
   }
 
   // ===========================================================================
