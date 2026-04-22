@@ -14,8 +14,6 @@
     "start:vault": "./scripts/start-vault.sh",
     "start:all": "./scripts/start-all.sh",
     "docker:build": "docker compose --env-file .env -f docker/docker-compose.yml build",
-    "docker:build:release": "source scripts/resolve-versions.sh release && docker compose --env-file .env -f docker/docker-compose.yml build",
-    "docker:build:nightly": "source scripts/resolve-versions.sh nightly && docker compose --env-file .env -f docker/docker-compose.yml build",
     "docker:up": "docker compose --env-file .env -f docker/docker-compose.yml up -d",
     "docker:up:vault-a": "docker compose --env-file .env -f docker/docker-compose.yml up -d vault-a",
     "docker:up:vault-b": "docker compose --env-file .env -f docker/docker-compose.yml up -d vault-b",
@@ -23,16 +21,11 @@
     "docker:down:clean": "docker compose --env-file .env -f docker/docker-compose.yml down -v",
     "docker:test": "docker compose --env-file .env -f docker/docker-compose.yml exec vault-a pnpm test",
     "docker:test:dual-vault": "docker compose --env-file .env -f docker/docker-compose.yml exec vault-a pnpm test:dual-vault",
-    "docker:test:release": "source scripts/resolve-versions.sh release && docker compose --env-file .env -f docker/docker-compose.yml exec vault-a pnpm test",
     "docker:shell": "docker compose --env-file .env -f docker/docker-compose.yml exec vault-a bash",
     "docker:shell:b": "docker compose --env-file .env -f docker/docker-compose.yml exec vault-b bash",
     "docker:logs": "docker compose --env-file .env -f docker/docker-compose.yml logs -f",
     "docker:logs:vault-a": "docker compose --env-file .env -f docker/docker-compose.yml logs -f vault-a",
-    "docker:logs:vault-b": "docker compose --env-file .env -f docker/docker-compose.yml logs -f vault-b",
-    "versions:resolve": "source scripts/resolve-versions.sh",
-    "versions:release": "source scripts/resolve-versions.sh release",
-    "versions:nightly": "source scripts/resolve-versions.sh nightly",
-    "versions:from-project": "source scripts/fetch-project-versions.sh"
+    "docker:logs:vault-b": "docker compose --env-file .env -f docker/docker-compose.yml logs -f vault-b"
   },
   "devDependencies": {
     "@haex-space/ucan": "0.1.9",

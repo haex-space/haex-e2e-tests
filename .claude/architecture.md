@@ -190,42 +190,19 @@ Die `VaultAutomation`-Klasse verwendet automatisch die richtige URL basierend au
 
 ## Versionskonfiguration
 
-Drei Methoden zur Versionskonfiguration:
+Versionen werden über Umgebungsvariablen gesetzt (Git-Refs: Branch, Tag oder
+Commit-SHA):
 
-### 1. Projekt-Konfigurationsdatei (.e2e-versions.json)
-Jedes Projekt kann im Root eine JSON-Datei mit den E2E-Test-Versionen pflegen:
-
-```json
-{
-  "project": "haex-vault",
-  "dependencies": {
-    "haex-vault": "self",      // Ersetzt durch aktuelle Ref
-    "haextension": "main",
-    "vault-sdk": "main",
-    "haex-sync-server": "v1.0.0"
-  },
-  "profiles": {
-    "release": { ... }         // Alternative Versionssets
-  }
-}
-```
-
-Script: `scripts/fetch-project-versions.sh <project> [ref] [profile]`
-
-### 2. Version-Presets
-- `main` - Alle Services auf main-Branch
-- `release` - Letzte GitHub-Release-Tags
-- `nightly` - Nightly-Branches (falls vorhanden)
-
-Script: `scripts/resolve-versions.sh [preset]`
-
-### 3. Direkte Umgebungsvariablen
 ```bash
 HAEX_VAULT_VERSION=v1.0.0
 HAEXTENSION_VERSION=feat/new-ui
 VAULT_SDK_VERSION=main
 HAEX_SYNC_SERVER_VERSION=main
 ```
+
+Die Build-Pipeline `.github/workflows/e2e-tests.yml` nimmt die entsprechenden
+Inputs (`haex_vault_version`, `haextension_version`, ...) entgegen und reicht
+sie an den Docker-Build weiter.
 
 ## Testausführung
 
