@@ -47,8 +47,8 @@ RUN --mount=type=bind,from=local-vault,source=.,target=/tmp/local-vault,readonly
              /repos/haex-vault/.output; \
     else \
       echo "Cloning haex-vault @ ${HAEX_VAULT_REF} from GitHub"; \
-      git clone --depth 1 --branch ${HAEX_VAULT_REF} https://github.com/haex-space/haex-vault.git /repos/haex-vault || \
-        (git clone https://github.com/haex-space/haex-vault.git /repos/haex-vault && cd /repos/haex-vault && git checkout ${HAEX_VAULT_REF}); \
+      git clone --depth 1 --branch "${HAEX_VAULT_REF}" https://github.com/haex-space/haex-vault.git /repos/haex-vault || \
+        (git clone https://github.com/haex-space/haex-vault.git /repos/haex-vault && cd /repos/haex-vault && git checkout "${HAEX_VAULT_REF}"); \
     fi
 
 # Clone other repositories
