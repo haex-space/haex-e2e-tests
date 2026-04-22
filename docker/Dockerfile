@@ -52,11 +52,11 @@ RUN --mount=type=bind,from=local-vault,source=.,target=/tmp/local-vault,readonly
     fi
 
 # Clone other repositories
-RUN git clone --depth 1 --branch ${HAEXTENSION_REF} https://github.com/haex-space/haextension.git || \
-    (git clone https://github.com/haex-space/haextension.git && cd haextension && git checkout ${HAEXTENSION_REF})
+RUN git clone --depth 1 --branch "${HAEXTENSION_REF}" https://github.com/haex-space/haextension.git || \
+    (git clone https://github.com/haex-space/haextension.git && cd haextension && git checkout "${HAEXTENSION_REF}")
 
-RUN git clone --depth 1 --branch ${VAULT_SDK_REF} https://github.com/haex-space/vault-sdk.git || \
-    (git clone https://github.com/haex-space/vault-sdk.git && cd vault-sdk && git checkout ${VAULT_SDK_REF})
+RUN git clone --depth 1 --branch "${VAULT_SDK_REF}" https://github.com/haex-space/vault-sdk.git || \
+    (git clone https://github.com/haex-space/vault-sdk.git && cd vault-sdk && git checkout "${VAULT_SDK_REF}")
 
 # Build haex-vault (Nuxt + Tauri app)
 WORKDIR /repos/haex-vault
