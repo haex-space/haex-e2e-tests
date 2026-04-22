@@ -1,12 +1,25 @@
 import { test, expect, VaultAutomation } from "../fixtures";
 import { createSqlHelpers, SqlHelpers } from "../helpers";
 
+type CrdtStats = {
+  totalEntries: number;
+  applied: number;
+  deleteCount: number;
+  pendingUpload: number;
+  pendingApply: number;
+  insertCount: number;
+  updateCount: number;
+};
+
 test.describe("Delete-Log Lifecycle", () => {
   test.describe.configure({ mode: "serial" });
 
   let vault: VaultAutomation;
   let sql: SqlHelpers;
   const tableName = `e2e_deletelog_${Date.now()}`;
+  // Baseline captured before any CRDT-logged delete runs in this suite, so
+  // the stats assertion can check an exact delta rather than a lower bound.
+  let baselineDeleteCount = 0;
 
   test.beforeAll(async () => {
     vault = new VaultAutomation("A");
@@ -33,6 +46,12 @@ test.describe("Delete-Log Lifecycle", () => {
       { id: "row-3", label: "Also Keep", priority: 3 },
       { id: "row-4", label: "Silent Delete Me", priority: 4 },
     ]);
+
+    const baselineStats = await vault.invokeTauriCommand<CrdtStats>(
+      "crdt_get_stats",
+      {}
+    );
+    baselineDeleteCount = baselineStats.deleteCount;
   });
 
   test.afterAll(async () => {
@@ -126,7 +145,8 @@ test.describe("Delete-Log Lifecycle", () => {
   });
 
   test("crdt_get_stats.deleteCount reflects haex_deleted_rows size", async () => {
-    // Add one more logged deletion so the count is known-positive
+    // Add one more logged deletion so we can assert an exact delta against
+    // the baseline captured in beforeAll.
     await sql.remove(tableName, "id = ?", ["row-3"]);
 
     // CrdtStats fields (camelCase via serde rename_all):
@@ -134,23 +154,20 @@ test.describe("Delete-Log Lifecycle", () => {
     //   applied: same as totalEntries in the delete-log model
     //   deleteCount: rows currently in haex_deleted_rows
     //   pendingUpload, pendingApply, insertCount, updateCount: compat fields
-    const stats = await vault.invokeTauriCommand<{
-      totalEntries: number;
-      applied: number;
-      deleteCount: number;
-      pendingUpload: number;
-      pendingApply: number;
-      insertCount: number;
-      updateCount: number;
-    }>("crdt_get_stats", {});
+    const stats = await vault.invokeTauriCommand<CrdtStats>(
+      "crdt_get_stats",
+      {}
+    );
 
     expect(typeof stats.deleteCount).toEqual("number");
     expect(typeof stats.applied).toEqual("number");
     expect(typeof stats.totalEntries).toEqual("number");
 
-    // We have at least the two logged deletes: row-2 and row-3.
-    // (row-4 was removed silently via sql_execute and must NOT be counted.)
-    expect(stats.deleteCount).toBeGreaterThanOrEqual(2);
+    // Exactly two logged deletes happened since the baseline: row-2 (in the
+    // first test) and row-3 (just above). row-4 was removed silently via
+    // sql_execute and must NOT contribute. An exact-delta check catches both
+    // missing rows AND duplicate/stray log entries.
+    expect(stats.deleteCount).toEqual(baselineDeleteCount + 2);
 
     // Total entries is strictly the count of live rows across all CRDT tables.
     expect(stats.totalEntries).toBeGreaterThan(0);

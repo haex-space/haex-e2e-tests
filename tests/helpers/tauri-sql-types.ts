@@ -93,9 +93,11 @@ export const TAURI_SQL_COMMANDS = {
    * Raw execute (non-SELECT) without any CRDT transformation
    *
    * - No CRDT column additions for CREATE TABLE
-   * - DELETE actually removes rows without populating haex_deleted_rows (BEFORE-DELETE
-   *   trigger is bypassed when triggers_enabled='0', but sql_execute doesn't flip that
-   *   flag — use it when the test must not produce sync traffic)
+   * - DELETE removes rows silently: the command transactionally flips
+   *   `triggers_enabled='0'` for the duration of the operation, so the
+   *   BEFORE-DELETE trigger does not fire and no row is appended to
+   *   `haex_deleted_rows`. Use when the test must not produce sync traffic
+   *   (e.g. cleanup, resetting fixtures).
    *
    * @example
    * ```typescript

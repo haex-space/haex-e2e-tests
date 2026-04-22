@@ -454,16 +454,25 @@ test.describe("sync: evil scenarios", () => {
 
     const pulled = await pullChanges(auth, spaceId);
 
-    // Delete-log event must be present with both of its column changes.
+    // Delete-log event must be present with both of its column changes
+    // pointing at the correct target. We pin the wire-format values here:
+    // table_name must decode to "haex_vault_settings" and row_pks to the
+    // target row's PK object, otherwise the delete-log refers to the wrong
+    // row or table and the resurrection guarantee would be meaningless.
     const deleteLogChanges = pulled.changes.filter(
       (c: { tableName: string; rowPks: string }) =>
         c.tableName === "haex_deleted_rows" && c.rowPks === deleteLogPks,
     );
-    const deleteLogColumns = deleteLogChanges.map(
-      (c: { columnName: string }) => c.columnName,
+    const tableNameChange = deleteLogChanges.find(
+      (c: { columnName: string }) => c.columnName === "table_name",
     );
-    expect(deleteLogColumns).toContain("table_name");
-    expect(deleteLogColumns).toContain("row_pks");
+    const rowPksChange = deleteLogChanges.find(
+      (c: { columnName: string }) => c.columnName === "row_pks",
+    );
+    expect(tableNameChange).toBeDefined();
+    expect(rowPksChange).toBeDefined();
+    expect(atob(tableNameChange!.encryptedValue!)).toBe("haex_vault_settings");
+    expect(atob(rowPksChange!.encryptedValue!)).toBe(targetRowPks);
 
     // The resurrection write must be present and hold the newer value.
     const resurrectionValue = pulled.changes.find(

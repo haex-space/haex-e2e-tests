@@ -323,11 +323,16 @@ test.describe("invitations: decline safety", () => {
       afterUpdatedAt: beforeDeclineTimestamp,
     });
 
-    // No delete-log entries referring to haex_spaces should leak to the owner
-    // after a decline.
-    const spaceDeletions = pullResult.changes.filter(
+    // Decline must not leak ANY delete-log traffic to the owner. The original
+    // bug destroyed haex_spaces specifically, but a blanket "no delete-log
+    // changes at all" assertion also catches future regressions where decline
+    // triggers unrelated deletions (e.g. invite rows, membership rows). We
+    // can't narrow to haex_spaces by payload because table_name is encrypted
+    // on the wire — the owner decrypts on read, but the test reads raw change
+    // objects before that step.
+    const deleteLogLeak = pullResult.changes.filter(
       (c) => c.tableName === "haex_deleted_rows",
     );
-    expect(spaceDeletions.length).toBe(0);
+    expect(deleteLogLeak.length).toBe(0);
   });
 });

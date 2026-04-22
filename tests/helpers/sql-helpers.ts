@@ -543,6 +543,13 @@ export class SqlHelpers {
    * Matches on (`table_name`, `row_pks`) where `row_pks` is the JSON-encoded PK
    * object produced by the BEFORE-DELETE trigger (`{"pk1": value1, ...}`).
    *
+   * For composite primary keys the comparison would be order-sensitive
+   * (`{a,b}` !== `{b,a}` as strings), so we canonicalize by sorting keys
+   * alphabetically before serializing. The vault-side trigger writes the PK
+   * object with keys in column-declaration order, so single-key lookups are
+   * unaffected; composite-key callers should ensure the trigger also emits
+   * in sorted order (see haex-vault `build_pk_json`).
+   *
    * @example
    * ```typescript
    * await sql.remove("users", "id = ?", ["user1"]);
@@ -554,7 +561,10 @@ export class SqlHelpers {
     tableName: string,
     pkValues: Record<string, unknown>
   ): Promise<boolean> {
-    const rowPksJson = JSON.stringify(pkValues);
+    const sortedKeys = Object.keys(pkValues).sort();
+    const canonical: Record<string, unknown> = {};
+    for (const key of sortedKeys) canonical[key] = pkValues[key];
+    const rowPksJson = JSON.stringify(canonical);
     const sql = `SELECT 1 FROM ${DELETED_ROWS_TABLE} WHERE table_name = ? AND row_pks = ? LIMIT 1`;
     const result = await this.vault.invokeTauriCommand<SqlResultSet>(
       "sql_select",

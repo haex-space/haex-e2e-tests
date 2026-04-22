@@ -255,19 +255,28 @@ test.describe("storage: peer share management via sync", () => {
     expect(count).toBeDefined();
 
     // Pull and verify the delete-log entry is present with both of its
-    // column changes (table_name pointing at haex_peer_shares, row_pks
-    // carrying the deleted row's PK object).
+    // column changes pointing at the correct target row: table_name must
+    // equal "haex_peer_shares" and row_pks must equal the deleted share's
+    // PK object. Checking just the column names would let the delete-log
+    // point at the wrong table or row and still pass.
     const pulled = await pullChanges(authA, spaceIdA);
     const deleteLogPks = JSON.stringify({ id: deleteLogId });
+    const targetRowPks = JSON.stringify({ id: shareId });
     const deleteLogChanges = pulled.changes.filter(
       (c: { tableName: string; rowPks: string }) =>
         c.tableName === "haex_deleted_rows" && c.rowPks === deleteLogPks,
     );
-    const deleteLogColumns = deleteLogChanges.map(
-      (c: { columnName: string }) => c.columnName,
+
+    const tableNameChange = deleteLogChanges.find(
+      (c: { columnName: string }) => c.columnName === "table_name",
     );
-    expect(deleteLogColumns).toContain("table_name");
-    expect(deleteLogColumns).toContain("row_pks");
+    const rowPksChange = deleteLogChanges.find(
+      (c: { columnName: string }) => c.columnName === "row_pks",
+    );
+    expect(tableNameChange).toBeDefined();
+    expect(rowPksChange).toBeDefined();
+    expect(atob(tableNameChange!.encryptedValue!)).toBe("haex_peer_shares");
+    expect(atob(rowPksChange!.encryptedValue!)).toBe(targetRowPks);
   });
 
   // =====================================================================
