@@ -109,17 +109,68 @@ jobs:
           repository: haex-space/haex-e2e-tests
           ref: main
 
+      - name: Set versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+          INPUT_HAEX_VAULT: ${{ inputs.haex_vault_version }}
+          INPUT_HAEXTENSION: ${{ inputs.haextension_version }}
+          INPUT_VAULT_SDK: ${{ inputs.vault_sdk_version }}
+          INPUT_SYNC_SERVER: ${{ inputs.sync_server_version }}
+        run: |
+          # Resolve each upstream ref to a concrete commit SHA before any
+          # consumer (workflow clone, docker-compose build-arg) uses it.
+          # BuildKit and `git clone --branch` both treat the value opaquely,
+          # so a moving ref like "main" can be served stale, and a 40-char
+          # SHA would fail --branch entirely. Resolving up front avoids both
+          # failure modes and makes every build auditable (the SHA is logged
+          # and flows through as the effective pin).
+          resolve_sha() {
+            local repo="$1" ref="${2:-main}"
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+            else
+              gh api "repos/${repo}/commits/${ref}" --jq .sha
+            fi
+          }
+
+          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$INPUT_HAEX_VAULT")
+          HAEXTENSION_SHA=$(resolve_sha "haex-space/haextension" "$INPUT_HAEXTENSION")
+          VAULT_SDK_SHA=$(resolve_sha "haex-space/vault-sdk" "$INPUT_VAULT_SDK")
+          SYNC_SERVER_SHA=$(resolve_sha "haex-space/haex-sync-server" "$INPUT_SYNC_SERVER")
+
+          echo "haex_vault_version=$HAEX_VAULT_SHA" >> "$GITHUB_OUTPUT"
+          echo "haextension_version=$HAEXTENSION_SHA" >> "$GITHUB_OUTPUT"
+          echo "vault_sdk_version=$VAULT_SDK_SHA" >> "$GITHUB_OUTPUT"
+          echo "sync_server_version=$SYNC_SERVER_SHA" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved SHAs:"
+          echo "  haex-vault:       $HAEX_VAULT_SHA"
+          echo "  haextension:      $HAEXTENSION_SHA"
+          echo "  vault-sdk:        $VAULT_SDK_SHA"
+          echo "  haex-sync-server: $SYNC_SERVER_SHA"
+
       - name: Clone dependency repositories
+        env:
+          SYNC_SERVER_SHA: ${{ steps.versions.outputs.sync_server_version }}
         run: |
           mkdir -p repos
 
-          # Clone haex-sync-server
-          echo "Cloning haex-sync-server (${{ inputs.sync_server_version || 'main' }})..."
-          git clone --depth 1 --branch ${{ inputs.sync_server_version || 'main' }} \
-            https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server || \
-          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+          # Clone haex-sync-server at the resolved SHA. `git clone --branch`
+          # cannot accept a commit SHA, so we use init + shallow fetch of
+          # the specific SHA + checkout FETCH_HEAD. GitHub allows fetching
+          # arbitrary SHAs by default (uploadpack.allowReachableSHA1InWant).
+          echo "Cloning haex-sync-server at $SYNC_SERVER_SHA..."
+          mkdir -p repos/haex-sync-server
+          (
+            cd repos/haex-sync-server
+            git init -q
+            git remote add origin https://github.com/haex-space/haex-sync-server.git
+            git fetch --depth 1 origin "$SYNC_SERVER_SHA"
+            git checkout -q FETCH_HEAD
+          )
 
-          # Clone haex-marketplace
+          # Clone haex-marketplace (always main — no input hook exists yet).
           echo "Cloning haex-marketplace (main)..."
           git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
 
@@ -191,14 +242,6 @@ jobs:
 
           echo "use_prebuilt_vault=$USE_PREBUILT_VAULT" >> $GITHUB_OUTPUT
           echo "use_prebuilt_sync_server=$USE_PREBUILT_SYNC_SERVER" >> $GITHUB_OUTPUT
-
-      - name: Set versions
-        id: versions
-        run: |
-          echo "haex_vault_version=${{ inputs.haex_vault_version }}" >> $GITHUB_OUTPUT
-          echo "haextension_version=${{ inputs.haextension_version }}" >> $GITHUB_OUTPUT
-          echo "vault_sdk_version=${{ inputs.vault_sdk_version }}" >> $GITHUB_OUTPUT
-          echo "sync_server_version=${{ inputs.sync_server_version }}" >> $GITHUB_OUTPUT
 
       - name: Log test configuration
         run: |
