@@ -725,8 +725,13 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   let identityB: { id: string; did: string };
   let personalSpaceId: string;
   let spaceId: string;
+  let shareId: string;
   const spaceName = "QUIC Invite Test";
   const contactLabel = "Vault B Contact";
+  const shareName = "QUIC Shared Folder";
+  // Use an arbitrary path string; the content isn't accessed by the test,
+  // only the row metadata that syncs via CRDT is checked.
+  const shareLocalPath = "/tmp/haex-e2e-quic-shared-folder";
 
   // ─── Setup / Teardown ─────────────────────────────────────────────────────
 
@@ -1132,6 +1137,39 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Step 5b — Vault A attaches a peer share BEFORE inviting Vault B
+  //
+  // This models the real-world flow: the space owner adds a folder/file,
+  // then invites a collaborator. The invitee should see the share after
+  // accepting the invite (known open bug — see
+  // haex-vault/.claude/plans/share-visibility-after-accept.md).
+  //
+  // We bypass the OS file picker (unreachable from WebDriver) by writing the
+  // row directly via `sql_execute_with_crdt`. This uses the same code path
+  // as `peerStorageStore.addShareAsync`, so CRDT triggers fire identically.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test("Vault A attaches a folder share to the space before inviting", async () => {
+    shareId = crypto.randomUUID();
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `INSERT INTO haex_peer_shares
+              (id, space_id, device_endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      params: [shareId, spaceId, nodeIdA, shareName, shareLocalPath, identityA.did],
+    });
+
+    const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+      vaultA,
+      "SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1",
+      [spaceId],
+    );
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+    expect(rows.some((r) => r.id === shareId && r.name === shareName && r.device_endpoint_id === nodeIdA))
+      .toBe(true);
+    console.log(`[QUIC] Share attached on Vault A: id=${shareId.slice(0, 8)}… name="${shareName}"`);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Step 6 — Send invite from A → B via SpaceInviteDialog
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1159,9 +1197,11 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     await openSettingsCategory(vaultB, "spaces");
     await wait(1000);
 
-    // The pending invite should appear as a list item with the space name.
-    // We poll for visibility but don't gate on it — DB check below is the
-    // authoritative assertion since UI rendering can race.
+    // Hard-fail the UI check: previously this was wrapped in `.catch(() => false)`
+    // which silently swallowed rendering regressions (e.g. the listener plugin
+    // not reloading the spaces store, or the SpaceDetail component skipping
+    // pending-invite cards for already-active space IDs). A DB row that's
+    // invisible to the user is the exact bug this suite must catch.
     await pollUntil(
       () => vaultB.executeScript<boolean>(`
         const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
@@ -1171,8 +1211,8 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
               || el.className?.includes('dashed'))
         );
       `),
-      { timeout: 5000, label: "pending invite visible in UI" },
-    ).catch(() => false);
+      { timeout: 10_000, label: "pending invite visible in UI" },
+    );
 
     // Also verify via DB (use only columns guaranteed to exist across migrations)
     const invites = await sqlQuery<{
@@ -1365,6 +1405,147 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       expect(row.issuer_did).not.toBe(identityB.did);
     }
     console.log(`[QUIC] UCAN delegation shape: ${rows.length} row(s) with issuer=A, audience=B ✓`);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Step 9d — Post-accept user-visible behavior
+  //
+  // Previous tests verify backend state (haex_spaces row, UCAN shape). These
+  // three tests model what the USER actually sees:
+  //   1. The joined space appears in the Spaces list UI (not just the DB).
+  //   2. The pre-attached peer_share row from Vault A propagates to Vault B.
+  //   3. The share is visible when the user opens the space detail view.
+  //
+  // #2 is the regression documented in
+  // haex-vault/.claude/plans/share-visibility-after-accept.md — if CRDT
+  // sync after accept doesn't pull history, the row never arrives.
+  // #3 catches a separate class of bug: row present but UI filters it out
+  // (e.g. if SpaceShares only renders shares authored on the local device).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test("Vault B shows the accepted space as active (non-pending) in the Spaces list", async () => {
+    await openSettingsCategory(vaultB, "spaces");
+    await wait(1500);
+
+    // Pending vs. active is exposed via `data-space-status` on SpaceListItem
+    // (see haex-vault/src/components/haex/system/settings/spaces/SpaceListItem.vue).
+    // This is the stable contract for invitee-side visibility — the CSS
+    // dashed-border heuristic previously used here was ambiguous because
+    // [class*="rounded-lg"] also matched outer layout containers.
+    await pollUntil(
+      () => vaultB.executeScript<boolean>(`
+        const target = ${JSON.stringify(spaceId)};
+        const card = document.querySelector('[data-testid="space-card-' + target + '"]');
+        if (!card) return false;
+        const status = card.getAttribute('data-space-status');
+        return status === 'active';
+      `),
+      { timeout: 15_000, interval: 500, label: "accepted space card visible (non-pending) on Vault B" },
+    );
+    console.log(`[QUIC] Vault B spaces list shows "${spaceName}" as active ✓`);
+  });
+
+  test("Vault A's peer_share row propagates to Vault B via CRDT sync", async () => {
+    // The share row was inserted on Vault A at Step 5b (before the invite).
+    // After Vault B accepts, `local_delivery_connect` starts a peer sync loop;
+    // haex_peer_shares is CRDT-synced (no _no_sync suffix) so the row must
+    // eventually land on Vault B's DB.
+    //
+    // Budget: CRDT sync after an invite-accept can take tens of seconds on
+    // slow CI (initial MLS epoch export + UCAN token persist + first pull
+    // loop iteration). 60s is the same envelope used for invite delivery.
+    await pollUntil(
+      async () => {
+        const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+          vaultB,
+          `SELECT id, name, device_endpoint_id FROM haex_peer_shares
+           WHERE space_id = ?1 AND id = ?2`,
+          [spaceId, shareId],
+        );
+        return rows.length === 1
+          && rows[0].name === shareName
+          && rows[0].device_endpoint_id === nodeIdA;
+      },
+      { timeout: 60_000, interval: 2_000, label: "peer_share row synced to Vault B" },
+    );
+    console.log(`[QUIC] Vault A's share synced to Vault B: id=${shareId.slice(0, 8)}… ✓`);
+  });
+
+  test("Vault B shows Vault A's share in the space detail view", async () => {
+    await openSettingsCategory(vaultB, "spaces");
+    await wait(1000);
+
+    // Click the accepted space card via stable testid.
+    // Previous attempt with `[class*="rounded-lg"]` matched outer layout
+    // wrappers that also contain the space name transitively (via
+    // descendant textContent), resulting in clicks on non-handled
+    // container elements and the detail view never opening.
+    const clicked = await vaultB.executeScript<boolean>(`
+      const card = document.querySelector('[data-testid="space-card-' + ${JSON.stringify(spaceId)} + '"]');
+      if (!card) return false;
+      if (card.getAttribute('data-space-status') !== 'active') return false;
+      card.click();
+      return true;
+    `);
+    console.log(`[QUIC] Space-card click (testid): clicked=${clicked}`);
+    expect(clicked).toBe(true);
+    await wait(2000);
+
+    // Verify we're actually in the detail view — the list's "Create" button
+    // is gone and a back-button surfaces. Without this, a failing share
+    // assertion is ambiguous (UI never navigated vs. share filtered out).
+    const inDetail = await vaultB.executeScript<{ createVisible: boolean; backVisible: boolean; title: string }>(`
+      const create = document.querySelector('[data-testid="spaces-create-trigger"]');
+      const back = [...document.querySelectorAll('button')].find(b => {
+        const a = b.getAttribute('aria-label') ?? '';
+        return a.toLowerCase().includes('back') || a.toLowerCase().includes('zurück');
+      });
+      const h = document.querySelector('h1, h2, [class*="text-xl"], [class*="font-semibold"]');
+      return {
+        createVisible: !!create && (create.offsetParent !== null),
+        backVisible: !!back,
+        title: (h?.textContent ?? '').slice(0, 80),
+      };
+    `);
+    console.log(`[QUIC] Detail-view state: create_btn_visible=${inDetail.createVisible} back_btn=${inDetail.backVisible} header="${inDetail.title}"`);
+
+    // SpaceShares renders shares grouped by device. The share's `name`
+    // appears as visible text somewhere in the detail view. Poll a
+    // generous window — the component mounts async and runs
+    // `peerStore.loadSharesAsync()` in onMounted.
+    await pollUntil(
+      () => vaultB.executeScript<boolean>(`
+        const target = ${JSON.stringify(shareName)};
+        return (document.body.textContent ?? '').includes(target);
+      `),
+      { timeout: 30_000, interval: 500, label: `share "${shareName}" visible in Vault B space detail` },
+    ).catch(async (err) => {
+      // On timeout, dump peerStore state + DB sanity-check so the failure
+      // carries actionable context instead of just "not visible".
+      const diag = await vaultB.executeScript<{
+        shares: unknown;
+        nodeId: string | null;
+        currentTextSample: string;
+      }>(`
+        const app = document.getElementById('__nuxt')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const peerStore = pinia?._s?.get('peerStorage');
+        const allShares = peerStore?.shares ?? [];
+        const filtered = allShares.filter(s => s.spaceId === ${JSON.stringify(spaceId)});
+        return {
+          shares: filtered.map(s => ({
+            id: (s.id ?? '').slice(0, 8),
+            name: s.name,
+            dev: (s.deviceEndpointId ?? '').slice(0, 12),
+          })),
+          nodeId: peerStore?.nodeId ?? null,
+          currentTextSample: (document.body.textContent ?? '').slice(0, 300),
+        };
+      `);
+      console.log(`[QUIC-DEBUG] share-UI failure context: peerStore.shares(for this space)=${JSON.stringify(diag.shares)} self_nodeId=${String(diag.nodeId).slice(0, 12)} domSample="${diag.currentTextSample}"`);
+      throw err;
+    });
+    console.log(`[QUIC] Vault B space detail shows Vault A's share "${shareName}" ✓`);
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
