@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
 
+  # Validate PRs against main before merge — catches failures that would
+  # otherwise only surface post-merge on the main branch.
+  pull_request:
+    branches: [main]
+
   # Callable from other repositories (haex-vault, haextension, etc.)
   workflow_call:
     inputs:
