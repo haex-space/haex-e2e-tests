@@ -671,11 +671,35 @@ async function declineInviteViaUI(
 /**
  * Set the invite policy via the dropdown in the Spaces settings header.
  * @param policy  'all' | 'contacts_only' | 'nobody'
+ *
+ * Force-closes any open settings window and reopens fresh on the spaces
+ * category. The policy dropdown lives in the spaces *index* view's
+ * header — earlier tests in the suite navigate into the SpaceDetail
+ * drill-down (e.g. :1613 for the share-visibility check) and that
+ * navigation state persists per tab. Without resetting, the helper's
+ * dropdown selector fires against a DOM that doesn't contain the
+ * trigger and the underlying setPolicy() never runs.
  */
 async function setInvitePolicyViaUI(
   vault: VaultAutomation,
   policy: "all" | "contacts_only" | "nobody",
 ): Promise<void> {
+  // Close any existing settings window so reopening returns to the
+  // spaces *index* view (not whichever drill-down a previous test
+  // left behind). Mirrors the pattern used by startP2PEndpoint.
+  await vault.executeScript(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (wm) {
+      const win = wm.currentWorkspaceWindows?.find(w =>
+        w.sourceId === 'settings' || w.tabs?.some(t => t.sourceId === 'settings')
+      );
+      if (win) wm.closeWindow(win.id);
+    }
+  `);
+  await wait(500);
+
   await openSettingsCategory(vault, "spaces");
   await wait(500);
 
