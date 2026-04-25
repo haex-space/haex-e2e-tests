@@ -1529,21 +1529,85 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     // Budget: CRDT sync after an invite-accept can take tens of seconds on
     // slow CI (initial MLS epoch export + UCAN token persist + first pull
     // loop iteration). 60s is the same envelope used for invite delivery.
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
-          vaultB,
-          `SELECT id, name, device_endpoint_id FROM haex_peer_shares
-           WHERE space_id = ?1 AND id = ?2`,
-          [spaceId, shareId],
+    try {
+      await pollUntil(
+        async () => {
+          const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+            vaultB,
+            `SELECT id, name, device_endpoint_id FROM haex_peer_shares
+             WHERE space_id = ?1 AND id = ?2`,
+            [spaceId, shareId],
+          );
+          return rows.length === 1
+            && rows[0].name === shareName
+            && rows[0].device_endpoint_id === nodeIdA;
+        },
+        { timeout: 60_000, interval: 2_000, label: "peer_share row synced to Vault B" },
+      );
+      console.log(`[QUIC] Vault A's share synced to Vault B: id=${shareId.slice(0, 8)}… ✓`);
+    } catch (err) {
+      // Diagnostic dump on failure — we read both vaults' state PLUS
+      // the synced `haex_logs` table (haex-vault writes sync-loop / pull /
+      // membership events there because tauri-driver mutes stderr in the
+      // Docker rig). The combination tells us:
+      //   - did the sync loop on B start? (LocalDeliveryConnect / SyncLoop logs on B)
+      //   - did A's leader receive the Announce/SyncPull? (Announce / SyncPull logs on A)
+      //   - did the leader return rows or reject for capability/membership? (SyncPull served vs rejected)
+      //   - did rows land on B but with mismatched values?
+      try {
+        const sharesA = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+          vaultA, `SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
         );
-        return rows.length === 1
-          && rows[0].name === shareName
-          && rows[0].device_endpoint_id === nodeIdA;
-      },
-      { timeout: 60_000, interval: 2_000, label: "peer_share row synced to Vault B" },
-    );
-    console.log(`[QUIC] Vault A's share synced to Vault B: id=${shareId.slice(0, 8)}… ✓`);
+        const sharesB = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+          vaultB, `SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
+        );
+        const devicesB = await sqlQuery<{ device_endpoint_id: string }>(
+          vaultB, `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`, [spaceId],
+        );
+        const membersB = await sqlQuery<{ identity_id: string; role: string }>(
+          vaultB, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
+        );
+        const ucansB = await sqlQuery<{ audience_did: string; capability: string; expires_at: number }>(
+          vaultB, `SELECT audience_did, capability, expires_at FROM haex_ucan_tokens WHERE space_id = ?1`, [spaceId],
+        );
+        const membersA = await sqlQuery<{ identity_id: string; role: string }>(
+          vaultA, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
+        );
+        console.log(`[QUIC-DEBUG 1523] sharesA=${JSON.stringify(sharesA.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.device_endpoint_id.slice(0, 12) })))}`);
+        console.log(`[QUIC-DEBUG 1523] sharesB=${JSON.stringify(sharesB.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.device_endpoint_id.slice(0, 12) })))}`);
+        console.log(`[QUIC-DEBUG 1523] devicesB=${JSON.stringify(devicesB.map(d => d.device_endpoint_id.slice(0, 12)))}`);
+        console.log(`[QUIC-DEBUG 1523] membersB=${membersB.length} membersA=${membersA.length} ucansB=${JSON.stringify(ucansB.map(u => ({ aud: u.audience_did.slice(0, 24), cap: u.capability, exp: u.expires_at })))}`);
+      } catch (diagErr) {
+        console.log(`[QUIC-DEBUG 1523] state dump failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
+      }
+
+      try {
+        const logsB = await sqlQuery<{ timestamp: string; level: string; source: string; message: string }>(
+          vaultB,
+          `SELECT timestamp, level, source, message FROM haex_logs
+           WHERE source IN ('SyncLoop', 'LocalDeliveryConnect', 'SyncPull', 'Announce', 'PeerSession', 'ClaimInvite', 'MultiLeader')
+           ORDER BY timestamp DESC LIMIT 40`,
+        );
+        console.log(`[QUIC-DEBUG 1523] B logs (${logsB.length}):`);
+        for (const l of logsB) {
+          console.log(`  [${l.timestamp}] [${l.level}] [${l.source}] ${l.message}`);
+        }
+
+        const logsA = await sqlQuery<{ timestamp: string; level: string; source: string; message: string }>(
+          vaultA,
+          `SELECT timestamp, level, source, message FROM haex_logs
+           WHERE source IN ('SyncPull', 'Announce', 'MultiLeader', 'ClaimInvite')
+           ORDER BY timestamp DESC LIMIT 40`,
+        );
+        console.log(`[QUIC-DEBUG 1523] A logs (${logsA.length}):`);
+        for (const l of logsA) {
+          console.log(`  [${l.timestamp}] [${l.level}] [${l.source}] ${l.message}`);
+        }
+      } catch (diagErr) {
+        console.log(`[QUIC-DEBUG 1523] log dump failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
+      }
+      throw err;
+    }
   });
 
   test("Vault B shows Vault A's share in the space detail view", async () => {
