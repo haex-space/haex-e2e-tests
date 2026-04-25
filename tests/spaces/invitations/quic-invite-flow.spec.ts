@@ -1432,16 +1432,91 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     // This is the stable contract for invitee-side visibility — the CSS
     // dashed-border heuristic previously used here was ambiguous because
     // [class*="rounded-lg"] also matched outer layout containers.
-    await pollUntil(
-      () => vaultB.executeScript<boolean>(`
-        const target = ${JSON.stringify(spaceId)};
-        const card = document.querySelector('[data-testid="space-card-' + target + '"]');
-        if (!card) return false;
-        const status = card.getAttribute('data-space-status');
-        return status === 'active';
-      `),
-      { timeout: 15_000, interval: 500, label: "accepted space card visible (non-pending) on Vault B" },
-    );
+    //
+    // Budget: locally this resolves in ~2s, but CI saw >15s-timeouts on the
+    // first post-merge run. The store-refresh after QUIC accept is currently
+    // only triggered in the Online accept branch (useSpaceInvites.ts:116) —
+    // the QUIC path relies on implicit refresh inside acceptLocalInviteAsync.
+    // 45s matches the CRDT-sync budget for the adjacent peer_share test.
+    const pollStart = Date.now();
+    try {
+      await pollUntil(
+        () => vaultB.executeScript<boolean>(`
+          const target = ${JSON.stringify(spaceId)};
+          const card = document.querySelector('[data-testid="space-card-' + target + '"]');
+          if (!card) return false;
+          const status = card.getAttribute('data-space-status');
+          return status === 'active';
+        `),
+        { timeout: 45_000, interval: 500, label: "accepted space card visible (non-pending) on Vault B" },
+      );
+      console.log(`[QUIC-DEBUG 1426] Card became active after ${Date.now() - pollStart}ms`);
+    } catch (err) {
+      // Three-layer diagnostic dump: DOM, DB, URL/settings-panel. Lets us tell
+      // stale-store vs. data-testid mismatch vs. wrong settings panel apart
+      // in a single failing run. Each block is best-effort — if a diagnostic
+      // call itself throws (e.g. vaultB disconnected), we still surface the
+      // original pollUntil timeout rather than masking it with a secondary
+      // error.
+      console.log(`[QUIC-DEBUG 1426] Target spaceId=${spaceId}`);
+
+      try {
+        const uiState = await vaultB.executeScript<{
+          url: string;
+          cards: Array<{ testId: string | null; status: string | null; text: string }>;
+          cardCount: number;
+          createTriggerVisible: boolean;
+          activeRoute: string | null;
+          bodyHeadings: string[];
+        }>(`
+          const cards = [...document.querySelectorAll('[data-testid^="space-card-"]')].map(el => ({
+            testId: el.getAttribute('data-testid'),
+            status: el.getAttribute('data-space-status'),
+            text: (el.textContent ?? '').trim().slice(0, 120).replace(/\\s+/g, ' '),
+          }));
+          const createBtn = document.querySelector('[data-testid="spaces-create-trigger"]');
+          const activeTab = document.querySelector('[role="tab"][aria-selected="true"], [data-state="active"][role="tab"]');
+          const headings = [...document.querySelectorAll('h1, h2, h3')].map(h => (h.textContent ?? '').trim().slice(0, 80)).filter(Boolean).slice(0, 6);
+          return {
+            url: location.href,
+            cards,
+            cardCount: cards.length,
+            createTriggerVisible: !!createBtn && (createBtn.offsetParent !== null),
+            activeRoute: activeTab?.textContent?.trim() ?? null,
+            bodyHeadings: headings,
+          };
+        `);
+        console.log(`[QUIC-DEBUG 1426] UI state: ${JSON.stringify(uiState, null, 2)}`);
+      } catch (diagErr) {
+        console.log(`[QUIC-DEBUG 1426] ui-state diagnostics failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
+      }
+
+      try {
+        const dbSpaces = await sqlQuery<{ id: string; status: string; name: string; type: string; owner_identity_id: string | null }>(
+          vaultB,
+          `SELECT id, status, name, type, owner_identity_id FROM haex_spaces ORDER BY created_at DESC LIMIT 10`,
+        );
+        console.log(`[QUIC-DEBUG 1426] haex_spaces (B): ${JSON.stringify(dbSpaces.map(s => ({ id: s.id?.slice(0, 8), status: s.status, name: s.name, type: s.type, owner: s.owner_identity_id?.slice(0, 8) ?? null })))}`);
+
+        const targetSpace = dbSpaces.find(s => s.id === spaceId);
+        console.log(`[QUIC-DEBUG 1426] Target space row on B: ${targetSpace ? JSON.stringify(targetSpace) : "MISSING"}`);
+      } catch (diagErr) {
+        console.log(`[QUIC-DEBUG 1426] db-spaces diagnostics failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
+      }
+
+      try {
+        const dbInvites = await sqlQuery<{ id: string; space_id: string; status: string }>(
+          vaultB,
+          `SELECT id, space_id, status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 5`,
+          [spaceId],
+        );
+        console.log(`[QUIC-DEBUG 1426] haex_pending_invites[${spaceId.slice(0, 8)}]: ${JSON.stringify(dbInvites.map(i => ({ id: i.id?.slice(0, 8), status: i.status })))}`);
+      } catch (diagErr) {
+        console.log(`[QUIC-DEBUG 1426] db-invites diagnostics failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
+      }
+
+      throw err;
+    }
     console.log(`[QUIC] Vault B spaces list shows "${spaceName}" as active ✓`);
   });
 
