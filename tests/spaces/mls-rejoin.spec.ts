@@ -219,7 +219,7 @@ test.describe("MLS: External Commit cursor invariant (epoch-loop regression)", (
   let member: Awaited<ReturnType<typeof createAdminUser>>;
   let memberAuth: AuthContext;
   let spaceId: string;
-  let ecMessageId: number;
+  let ecMessageId!: number;
 
   test.beforeAll(async () => {
     admin = await createAdminUserWithIdentity();
@@ -242,17 +242,19 @@ test.describe("MLS: External Commit cursor invariant (epoch-loop regression)", (
       groupInfo: groupInfoPayload,
     });
     expect(seedRes.status).toBe(201);
+
+    // Submit initial EC so all tests start with a known ecMessageId
+    const ecPayload = Buffer.from("external-commit-blob").toString("base64");
+    const ecRes = await submitExternalCommit(memberAuth, spaceId, ecPayload);
+    expect(ecRes.status).toBe(201);
+    const ecData = await ecRes.json();
+    expect(typeof ecData.messageId).toBe("number");
+    expect(ecData.messageId).toBeGreaterThan(0);
+    ecMessageId = ecData.messageId;
   });
 
   test("submit external commit returns a numeric messageId", async () => {
-    const commitPayload = Buffer.from("external-commit-blob").toString("base64");
-    const res = await submitExternalCommit(memberAuth, spaceId, commitPayload);
-    expect(res.status).toBe(201);
-
-    const data = await res.json();
-    expect(typeof data.messageId).toBe("number");
-    expect(data.messageId).toBeGreaterThan(0);
-    ecMessageId = data.messageId;
+    expect(ecMessageId).toBeGreaterThan(0);
   });
 
   // Regression: the peer advances its cursor to ec_msg_id after submitting the
