@@ -155,7 +155,6 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
         });
       }
     }
-    await wait(3000);
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -387,7 +386,9 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
         const app = document.getElementById('__nuxt')?.__vue_app__;
         const pinia = app?.config?.globalProperties?.$pinia;
         const spacesStore = pinia?._s?.get('haexSpacesStore');
-        if (!spacesStore?.acceptLocalInviteAsync) return;
+        if (!spacesStore?.acceptLocalInviteAsync) {
+          throw new Error('[SHARE-VIS] spacesStore or acceptLocalInviteAsync unavailable — Pinia store not mounted');
+        }
         try {
           await spacesStore.acceptLocalInviteAsync(${JSON.stringify(invite)});
         } catch (e) {
