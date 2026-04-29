@@ -198,3 +198,104 @@ test.describe("MLS: KeyPackage management via server", () => {
   });
 });
 
+/**
+ * MLS External Commit cursor invariant — regression for the infinite epoch loop.
+ *
+ * Root cause: after an External Commit (EC) is submitted, the sync loop must
+ * advance its message cursor to AT LEAST the EC's own message ID so the EC is
+ * not re-fetched on the next cycle. Without this, every cycle re-processes the
+ * stale-epoch EC, triggers another rejoin, stores another EC, and loops forever.
+ *
+ * These tests verify the server-side half of the invariant:
+ *   1. submitExternalCommit returns the assigned messageId.
+ *   2. Fetching messages with after_id = messageId returns nothing (EC skipped).
+ *   3. Fetching with after_id = messageId - 1 returns the EC (it IS there).
+ */
+test.describe("MLS: External Commit cursor invariant (epoch-loop regression)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let admin: Awaited<ReturnType<typeof createAdminUserWithIdentity>>;
+  let adminAuth: AuthContext;
+  let member: Awaited<ReturnType<typeof createAdminUser>>;
+  let memberAuth: AuthContext;
+  let spaceId: string;
+  let ecMessageId!: number;
+
+  test.beforeAll(async () => {
+    admin = await createAdminUserWithIdentity();
+    adminAuth = toAuthContext(admin);
+    member = await createAdminUser();
+    memberAuth = toAuthContext(member);
+
+    spaceId = generateSpaceId();
+    const createRes = await createSpace(adminAuth, spaceId, "Cursor Regression Test");
+    expect(createRes.status).toBe(201);
+
+    const addRes = await addSpaceMember(adminAuth, spaceId, member.did, "Member", "space/write");
+    expect(addRes.status).toBe(201);
+
+    // Seed a commit so the space has a GroupInfo for rejoin
+    const commitPayload = Buffer.from("fake-commit").toString("base64");
+    const groupInfoPayload = Buffer.from("fake-group-info").toString("base64");
+    const seedRes = await sendMlsMessage(adminAuth, spaceId, commitPayload, "commit", {
+      epoch: 1,
+      groupInfo: groupInfoPayload,
+    });
+    expect(seedRes.status).toBe(201);
+
+    // Submit initial EC so all tests start with a known ecMessageId
+    const ecPayload = Buffer.from("external-commit-blob").toString("base64");
+    const ecRes = await submitExternalCommit(memberAuth, spaceId, ecPayload);
+    expect(ecRes.status).toBe(201);
+    const ecData = await ecRes.json();
+    expect(typeof ecData.messageId).toBe("number");
+    expect(ecData.messageId).toBeGreaterThan(0);
+    ecMessageId = ecData.messageId;
+  });
+
+  test("submit external commit returns a numeric messageId", async () => {
+    expect(ecMessageId).toBeGreaterThan(0);
+  });
+
+  // Regression: the peer advances its cursor to ec_msg_id after submitting the
+  // EC. The next fetch (after_id = ec_msg_id) must return nothing — if the EC
+  // itself were returned, the "Wrong Epoch" error would trigger another rejoin,
+  // storing yet another EC, causing the infinite loop.
+  test("fetch after ec_msg_id cursor returns empty — EC is not re-fetched", async () => {
+    expect(ecMessageId).toBeGreaterThan(0);
+
+    const res = await fetchMlsMessages(memberAuth, spaceId, ecMessageId);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    expect(data.messages).toHaveLength(0);
+  });
+
+  // Confirm the EC is present at the expected position (before the cursor).
+  // If this test fails, the EC was never stored — a different bug entirely.
+  test("fetch with cursor one below ec_msg_id does include the EC", async () => {
+    expect(ecMessageId).toBeGreaterThan(0);
+
+    const res = await fetchMlsMessages(memberAuth, spaceId, ecMessageId - 1);
+    expect(res.status).toBe(200);
+
+    const data = await res.json();
+    const ecMessages = data.messages.filter((m: { id: number }) => m.id === ecMessageId);
+    expect(ecMessages).toHaveLength(1);
+  });
+
+  // Two consecutive EC submissions must each get their own unique messageId.
+  // If they shared an ID, the second EC would overwrite the cursor position and
+  // the first EC would be re-fetched — equivalent to the loop regression.
+  test("two external commits receive distinct increasing messageIds", async () => {
+    expect(ecMessageId).toBeGreaterThan(0);
+
+    const payload = Buffer.from("second-ec").toString("base64");
+    const res = await submitExternalCommit(memberAuth, spaceId, payload);
+    expect(res.status).toBe(201);
+
+    const data = await res.json();
+    expect(data.messageId).toBeGreaterThan(ecMessageId);
+  });
+});
+
