@@ -697,8 +697,8 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       return devices.filter(d => d.deviceEndpointId === ${JSON.stringify(nodeIdB)}).length;
     `);
     console.log(`[FileSharing] Pinia spaceDevices entries for B: ${allowedCount}`);
-    // At minimum peer_storage_reload_shares must succeed
     expect(loaded).toBeGreaterThanOrEqual(1);
+    expect(allowedCount).toBeGreaterThanOrEqual(1);
   });
 
   test("Vault B's UCAN for the space is stored and valid", async () => {
@@ -766,6 +766,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       `SELECT token FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2 LIMIT 1`,
       [spaceId, identityB.did],
     );
+    expect(ucans.length).toBeGreaterThan(0);
     const ucanToken = ucans[0].token;
 
     const entries = await vaultB.invokeTauriCommand<FileEntry[]>(
@@ -795,6 +796,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       `SELECT token FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2 LIMIT 1`,
       [spaceId, identityB.did],
     );
+    expect(ucans.length).toBeGreaterThan(0);
     const ucanToken = ucans[0].token;
 
     const localPath = await vaultB.peerStorageDownloadFile({
@@ -822,6 +824,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       `SELECT token FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2 LIMIT 1`,
       [spaceId, identityB.did],
     );
+    expect(ucans.length).toBeGreaterThan(0);
     const ucanToken = ucans[0].token;
 
     const localPath = await vaultB.peerStorageDownloadFile({
