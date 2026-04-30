@@ -102,9 +102,28 @@ async function elementExists(vault: VaultAutomation, selector: string): Promise<
 async function openSettingsCategory(vault: VaultAutomation, category: string): Promise<void> {
   const testId = `settings-category-${category}`;
 
+  const activateCategory = () =>
+    pollUntil(
+      async () => {
+        const clicked = await clickTestId(vault, testId);
+        if (!clicked) return false;
+        await wait(200);
+        return vault.executeScript<boolean>(`
+          const el = document.querySelector('[data-testid="${testId}"]');
+          return !!el && (
+            el.getAttribute('aria-selected') === 'true' ||
+            el.getAttribute('data-active') === 'true' ||
+            el.classList.contains('active') ||
+            el.classList.contains('selected') ||
+            el.classList.contains('router-link-active')
+          );
+        `);
+      },
+      { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
+    );
+
   if (await elementExists(vault, `[data-testid="${testId}"]`)) {
-    await clickTestId(vault, testId);
-    await wait(500);
+    await activateCategory();
     return;
   }
 
@@ -126,25 +145,7 @@ async function openSettingsCategory(vault: VaultAutomation, category: string): P
     { timeout: 30_000, interval: 500, label: `settings-category-${category} visible` },
   );
 
-  await pollUntil(
-    async () => {
-      const clicked = await clickTestId(vault, testId);
-      if (!clicked) return false;
-      await wait(200);
-      return vault.executeScript<boolean>(`
-        const el = document.querySelector('[data-testid="${testId}"]');
-        return !!el && (
-          el.getAttribute('aria-selected') === 'true' ||
-          el.getAttribute('data-active') === 'true' ||
-          el.classList.contains('active') ||
-          el.classList.contains('selected') ||
-          el.classList.contains('router-link-active')
-        );
-      `);
-    },
-    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
-  ).catch(() => clickTestId(vault, testId));
-  await wait(500);
+  await activateCategory();
 }
 
 async function setInputValue(
