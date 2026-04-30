@@ -110,13 +110,7 @@ async function openSettingsCategory(vault: VaultAutomation, category: string): P
         await wait(200);
         return vault.executeScript<boolean>(`
           const el = document.querySelector('[data-testid="${testId}"]');
-          return !!el && (
-            el.getAttribute('aria-selected') === 'true' ||
-            el.getAttribute('data-active') === 'true' ||
-            el.classList.contains('active') ||
-            el.classList.contains('selected') ||
-            el.classList.contains('router-link-active')
-          );
+          return !!el && el.classList.contains('bg-primary');
         `);
       },
       { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
