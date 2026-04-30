@@ -265,15 +265,16 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
   await openSettingsCategory(vault, "sync");
   await wait(500);
 
+  // Navigate into the Config subview and click Start. If we're already in the
+  // Config subview (left over from a previous suite's UI navigation), the
+  // "Konfiguration" button won't exist as a clickable item — the Start button
+  // will already be visible. Combining both into one poll handles both states.
   await pollUntil(
-    () => clickButton(vault, "Konfiguration", "Configuration"),
-    { timeout: 10_000, label: "Sync → Config menu item" },
-  );
-  await wait(800);
-
-  await pollUntil(
-    () => clickButton(vault, "Start", "Starten"),
-    { timeout: 10_000, label: "P2P Start button" },
+    async () => {
+      await clickButton(vault, "Konfiguration", "Configuration");
+      return clickButton(vault, "Start", "Starten");
+    },
+    { timeout: 15_000, label: "P2P Start button" },
   );
 
   const info = await pollUntil(
