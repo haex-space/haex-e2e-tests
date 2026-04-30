@@ -97,20 +97,22 @@ async function clickTestId(vault: VaultAutomation, testId: string): Promise<bool
 
 async function openSettingsCategory(vault: VaultAutomation, category: string): Promise<void> {
   const testId = `settings-category-${category}`;
+  const isActive = () => vault.executeScript<boolean>(`
+    const el = document.querySelector('[data-testid="${testId}"]');
+    return !!(el && (
+      el.getAttribute('aria-current') === 'page' ||
+      el.getAttribute('data-active') === 'true' ||
+      el.classList.contains('active') ||
+      el.classList.contains('selected') ||
+      el.classList.contains('router-link-active')
+    ));
+  `);
   await clickTestId(vault, testId);
-  await pollUntil(
-    () => vault.executeScript<boolean>(`
-      const el = document.querySelector('[data-testid="${testId}"]');
-      return !!(el && (
-        el.getAttribute('aria-current') === 'page' ||
-        el.getAttribute('data-active') === 'true' ||
-        el.classList.contains('active') ||
-        el.classList.contains('selected') ||
-        el.classList.contains('router-link-active')
-      ));
-    `),
-    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
-  ).catch(() => clickTestId(vault, testId));
+  await pollUntil(isActive, { timeout: 10_000, interval: 500, label: `settings-category-${category} active` })
+    .catch(async () => {
+      await clickTestId(vault, testId);
+      await pollUntil(isActive, { timeout: 5_000, interval: 500, label: `settings-category-${category} active (retry)` });
+    });
   await wait(500);
 }
 
