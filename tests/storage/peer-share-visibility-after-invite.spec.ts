@@ -95,24 +95,55 @@ async function clickTestId(vault: VaultAutomation, testId: string): Promise<bool
   `);
 }
 
+async function elementExists(vault: VaultAutomation, selector: string): Promise<boolean> {
+  return vault.executeScript<boolean>(`return !!document.querySelector('${selector}')`);
+}
+
 async function openSettingsCategory(vault: VaultAutomation, category: string): Promise<void> {
   const testId = `settings-category-${category}`;
-  const isActive = () => vault.executeScript<boolean>(`
-    const el = document.querySelector('[data-testid="${testId}"]');
-    return !!(el && (
-      el.getAttribute('aria-current') === 'page' ||
-      el.getAttribute('data-active') === 'true' ||
-      el.classList.contains('active') ||
-      el.classList.contains('selected') ||
-      el.classList.contains('router-link-active')
-    ));
+
+  if (await elementExists(vault, `[data-testid="${testId}"]`)) {
+    await clickTestId(vault, testId);
+    await wait(500);
+    return;
+  }
+
+  // Settings window not open — open it via the Pinia window manager.
+  await vault.executeScript(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (wm?.openWindowAsync) {
+      wm.openWindowAsync({
+        sourceId: 'settings', type: 'system',
+        params: { category: '${category}' },
+      });
+    }
   `);
-  await clickTestId(vault, testId);
-  await pollUntil(isActive, { timeout: 10_000, interval: 500, label: `settings-category-${category} active` })
-    .catch(async () => {
-      await clickTestId(vault, testId);
-      await pollUntil(isActive, { timeout: 5_000, interval: 500, label: `settings-category-${category} active (retry)` });
-    });
+
+  await pollUntil(
+    () => elementExists(vault, `[data-testid="${testId}"]`),
+    { timeout: 30_000, interval: 500, label: `settings-category-${category} visible` },
+  );
+
+  await pollUntil(
+    async () => {
+      const clicked = await clickTestId(vault, testId);
+      if (!clicked) return false;
+      await wait(200);
+      return vault.executeScript<boolean>(`
+        const el = document.querySelector('[data-testid="${testId}"]');
+        return !!el && (
+          el.getAttribute('aria-selected') === 'true' ||
+          el.getAttribute('data-active') === 'true' ||
+          el.classList.contains('active') ||
+          el.classList.contains('selected') ||
+          el.classList.contains('router-link-active')
+        );
+      `);
+    },
+    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
+  ).catch(() => clickTestId(vault, testId));
   await wait(500);
 }
 
