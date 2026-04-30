@@ -325,19 +325,24 @@ async function startP2PEndpoint(vault: VaultAutomation): Promise<string> {
 
 async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string): Promise<string> {
   await openSettingsCategory(vault, "spaces");
-  await wait(500);
-  await clickTestId(vault, "spaces-create-trigger");
-  await wait(800);
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-trigger"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-trigger" },
+  );
   await setInputValue(
     vault,
     'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])',
     spaceName,
     '[data-testid="spaces-create-name"]',
   );
-  await wait(300);
-  await clickTestId(vault, "spaces-create-type-local");
-  await wait(300);
-  await clickTestId(vault, "spaces-create-submit");
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-type-local"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-type-local" },
+  );
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-submit"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-submit" },
+  );
   await wait(1500);
 
   const spaces = await sqlQuery<{ id: string }>(
