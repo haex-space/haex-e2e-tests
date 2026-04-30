@@ -500,7 +500,7 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
       (async () => {
         const app = document.getElementById('__nuxt')?.__vue_app__;
         const pinia = app?.config?.globalProperties?.$pinia;
-        const spacesStore = pinia?._s?.get('haexSpacesStore');
+        const spacesStore = pinia?._s?.get('spacesStore');
         if (!spacesStore?.acceptLocalInviteAsync) {
           throw new Error('[SHARE-VIS] spacesStore or acceptLocalInviteAsync unavailable — Pinia store not mounted');
         }
