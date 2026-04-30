@@ -650,9 +650,9 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("Vault B can list files inside the share after invite (regression)", async () => {
-    // Ensure Vault A has reloaded allowed_peers after receiving the CRDT row
-    await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
-
+    // No manual reload needed: the fix in leader.rs reloads allowed_peers
+    // synchronously inside the SyncPush handler before returning Ok, so Vault A
+    // is ready to authorize Vault B as soon as the push handshake completes.
     const t0 = Date.now();
     const entries = await vaultB.invokeTauriCommand<FileEntry[]>(
       "peer_storage_remote_list",
