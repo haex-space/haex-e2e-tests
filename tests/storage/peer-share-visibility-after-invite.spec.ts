@@ -95,23 +95,51 @@ async function clickTestId(vault: VaultAutomation, testId: string): Promise<bool
   `);
 }
 
+async function elementExists(vault: VaultAutomation, selector: string): Promise<boolean> {
+  return vault.executeScript<boolean>(`return !!document.querySelector('${selector}')`);
+}
+
 async function openSettingsCategory(vault: VaultAutomation, category: string): Promise<void> {
   const testId = `settings-category-${category}`;
-  await clickTestId(vault, testId);
+
+  const activateCategory = () =>
+    pollUntil(
+      async () => {
+        const clicked = await clickTestId(vault, testId);
+        if (!clicked) return false;
+        await wait(200);
+        return vault.executeScript<boolean>(`
+          const el = document.querySelector('[data-testid="${testId}"]');
+          return !!el && el.classList.contains('bg-primary');
+        `);
+      },
+      { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
+    );
+
+  if (await elementExists(vault, `[data-testid="${testId}"]`)) {
+    await activateCategory();
+    return;
+  }
+
+  // Settings window not open — open it via the Pinia window manager.
+  await vault.executeScript(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (wm?.openWindowAsync) {
+      wm.openWindowAsync({
+        sourceId: 'settings', type: 'system',
+        params: { category: '${category}' },
+      });
+    }
+  `);
+
   await pollUntil(
-    () => vault.executeScript<boolean>(`
-      const el = document.querySelector('[data-testid="${testId}"]');
-      return !!(el && (
-        el.getAttribute('aria-current') === 'page' ||
-        el.getAttribute('data-active') === 'true' ||
-        el.classList.contains('active') ||
-        el.classList.contains('selected') ||
-        el.classList.contains('router-link-active')
-      ));
-    `),
-    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
-  ).catch(() => clickTestId(vault, testId));
-  await wait(500);
+    () => elementExists(vault, `[data-testid="${testId}"]`),
+    { timeout: 30_000, interval: 500, label: `settings-category-${category} visible` },
+  );
+
+  await activateCategory();
 }
 
 async function setInputValue(
@@ -136,18 +164,24 @@ async function setInputValue(
 
 async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string): Promise<string> {
   await openSettingsCategory(vault, "spaces");
-  await clickTestId(vault, "spaces-create-trigger");
-  await wait(800);
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-trigger"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-trigger" },
+  );
   await setInputValue(
     vault,
     'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])',
     spaceName,
     '[data-testid="spaces-create-name"]',
   );
-  await wait(300);
-  await clickTestId(vault, "spaces-create-type-local");
-  await wait(300);
-  await clickTestId(vault, "spaces-create-submit");
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-type-local"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-type-local" },
+  );
+  await pollUntil(
+    () => clickTestId(vault, "spaces-create-submit"),
+    { timeout: 10_000, interval: 300, label: "spaces-create-submit" },
+  );
   await wait(1500);
 
   const spaces = await sqlQuery<{ id: string }>(
