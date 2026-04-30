@@ -479,7 +479,19 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
       [spaceId],
     );
     expect(invites.length).toBe(1);
-    const invite = invites[0];
+    const raw = invites[0];
+    // acceptLocalInviteAsync expects camelCase keys (Drizzle-mapped); raw SQL
+    // returns snake_case column names, so we map explicitly.
+    const invite = {
+      id: raw.id,
+      spaceId: raw.space_id,
+      spaceName: raw.space_name,
+      spaceType: raw.space_type,
+      inviterDid: raw.inviter_did,
+      inviterLabel: raw.inviter_label,
+      tokenId: raw.token_id,
+      spaceEndpoints: raw.space_endpoints,
+    };
 
     // Fire-and-forget via executeScript — the async call to claim the invite
     // (QUIC roundtrip to Vault A) continues in the background. We poll the DB
