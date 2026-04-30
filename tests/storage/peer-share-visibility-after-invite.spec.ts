@@ -87,6 +87,78 @@ async function sqlQuery<T extends Record<string, unknown>>(
   });
 }
 
+async function clickTestId(vault: VaultAutomation, testId: string): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const el = document.querySelector('[data-testid="${testId}"]');
+    if (el) { el.click(); return true; }
+    return false;
+  `);
+}
+
+async function openSettingsCategory(vault: VaultAutomation, category: string): Promise<void> {
+  const testId = `settings-category-${category}`;
+  await clickTestId(vault, testId);
+  await pollUntil(
+    () => vault.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="${testId}"]');
+      return !!(el && (
+        el.getAttribute('aria-current') === 'page' ||
+        el.getAttribute('data-active') === 'true' ||
+        el.classList.contains('active') ||
+        el.classList.contains('selected') ||
+        el.classList.contains('router-link-active')
+      ));
+    `),
+    { timeout: 10_000, interval: 500, label: `settings-category-${category} active` },
+  ).catch(() => clickTestId(vault, testId));
+  await wait(500);
+}
+
+async function setInputValue(
+  vault: VaultAutomation,
+  selector: string,
+  value: string,
+  container = "document",
+): Promise<void> {
+  await vault.executeScript(`
+    const root = ${container === "document" ? "document" : `document.querySelector('${container}')`};
+    const input = root?.querySelector('${selector}');
+    if (input) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, '');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      setter.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  `);
+}
+
+async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string): Promise<string> {
+  await openSettingsCategory(vault, "spaces");
+  await clickTestId(vault, "spaces-create-trigger");
+  await wait(800);
+  await setInputValue(
+    vault,
+    'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])',
+    spaceName,
+    '[data-testid="spaces-create-name"]',
+  );
+  await wait(300);
+  await clickTestId(vault, "spaces-create-type-local");
+  await wait(300);
+  await clickTestId(vault, "spaces-create-submit");
+  await wait(1500);
+
+  const spaces = await sqlQuery<{ id: string }>(
+    vault,
+    `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
+    [spaceName],
+  );
+  expect(spaces.length).toBe(1);
+  return spaces[0].id;
+}
+
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 test.describe("storage: P2P file visibility after QUIC invite accept", () => {
@@ -229,14 +301,11 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("create shared space on Vault A with test files and share", async () => {
-    spaceId = crypto.randomUUID();
-
-    // Space record (Vault A is owner)
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id, status)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [spaceId, "local", `ShareVis-${spaceId.slice(0, 8)}`, identityA.id, "active"],
-    });
+    // Create the space via UI so the vault initializes the owner's admin UCAN
+    // (raw SQL insertion would skip UCAN generation, causing local_delivery_create_invite
+    // to fail with "No admin UCAN found for space").
+    const spaceName = `ShareVis-${Date.now()}`;
+    spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
 
     // Register Vault A's device (required for local_delivery_start leader election)
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
