@@ -441,6 +441,7 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
   let identityA: { id: string; did: string };
   let identityB: { id: string; did: string };
   let spaceId: string;
+  let actualContactLabel: string;
 
   const spaceName = "File Sync Manifest Test";
   const contactLabel = "Vault B (sync)";
@@ -564,12 +565,15 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     await clickTestId(vaultA, "contacts-import-submit");
     await wait(1000);
 
-    const contacts = await sqlQuery<{ id: string }>(
+    const contacts = await sqlQuery<{ id: string; name: string }>(
       vaultA,
-      `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
+      `SELECT id, name FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
       [identityB.did],
     );
     expect(contacts.length).toBe(1);
+    // Use the actual stored name — on reused vault containers a prior suite may
+    // have already registered this DID under a different label (e.g. "Vault B").
+    actualContactLabel = contacts[0].name;
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -636,7 +640,7 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("Vault A sends invite with write capability to Vault B", async () => {
-    await sendInviteViaUI(vaultA, spaceName, contactLabel, true);
+    await sendInviteViaUI(vaultA, spaceName, actualContactLabel, true);
 
     await pollUntil(
       async () => {
