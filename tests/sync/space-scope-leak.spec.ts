@@ -30,7 +30,6 @@ import {
   checkSyncServerHealth,
   createAdminUserWithIdentity,
   createSpace as createSharedSpace,
-  addSpaceMember,
   signAndPushSpaceChanges,
   pullChanges,
   makeSyncChange,
@@ -111,11 +110,12 @@ export function findScopeViolations(
 test.describe("sync: shared-space scope (data-leak prevention)", () => {
   test.describe.configure({ mode: "serial" });
 
-  // User B is a member of two shared spaces — the realistic scenario where
-  // the original leak surfaced. Every "push S over backend S" the test
-  // simulates would, before the fix, also have shipped any T-side rows in
-  // a single batch.
-  let authA: AuthContext;
+  // The realistic shape: user B owns two unrelated shared spaces. The
+  // original leak fired when a member of S+T pushed dirty rows for both
+  // through the S-bound pipeline; the asymmetry is encoded in which space
+  // the changes are pushed to (S vs T), not in who is doing the pushing.
+  // Owner-side pulls are enough to inspect what landed under each space —
+  // member pulls would need a UCAN dance unrelated to the leak shape.
   let authB: AuthContext;
   let userB: { privateKeyBase64: string; publicKey: string };
   const spaceS = crypto.randomUUID();
@@ -128,31 +128,17 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
 
   test.beforeAll(async () => {
     expect(await checkSyncServerHealth()).toBe(true);
-    // We need the public-key half too (sync server requires every push to
-    // be signed and the signedBy field is the pusher's pubkey), so use the
-    // *WithIdentity flavour for B and keep the raw record around.
-    const adminA = await createAdminUserWithIdentity();
+    // *WithIdentity gives us the public-key half too (sync server requires
+    // every push to be signed and the signedBy field is the pusher's
+    // pubkey), so use that flavour and keep the raw record around.
     const adminB = await createAdminUserWithIdentity();
-    authA = toAuthContext(adminA);
     authB = toAuthContext(adminB);
     userB = { privateKeyBase64: adminB.privateKeyBase64, publicKey: adminB.publicKey };
 
-    // User B owns both shared spaces (the realistic shape: one user
-    // happens to be a member of two unrelated spaces). User A is invited
-    // to S only — that is the asymmetry the leak exploited.
     const sRes = await createSharedSpace(authB, spaceS, "scope-leak: space S");
     expect(sRes.status).toBe(201);
     const tRes = await createSharedSpace(authB, spaceT, "scope-leak: space T");
     expect(tRes.status).toBe(201);
-
-    const memberRes = await addSpaceMember(
-      authB,
-      spaceS,
-      authA.did,
-      "user A on S",
-      "space/write",
-    );
-    expect(memberRes.status).toBe(201);
   });
 
   test("baseline: well-behaved push only sends in-scope rows for the target space", async () => {
@@ -175,7 +161,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(authA, spaceS);
+    const pulled = await pullChanges(authB, spaceS);
     const violations = findScopeViolations(pulled.changes, spaceS);
     expect(violations).toEqual([]);
   });
@@ -197,7 +183,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(authA, spaceS);
+    const pulled = await pullChanges(authB, spaceS);
     const violations = findScopeViolations(pulled.changes, spaceS);
     const phantomSpaceRow = violations.find(
       (v) =>
@@ -229,7 +215,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(authA, spaceS);
+    const pulled = await pullChanges(authB, spaceS);
     const violations = findScopeViolations(pulled.changes, spaceS);
     const tables = new Set(violations.map((v) => v.tableName));
     expect(tables.has("haex_vault_settings")).toBe(true);
@@ -258,7 +244,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
       ]);
     }
 
-    const pulled = await pullChanges(authA, spaceS);
+    const pulled = await pullChanges(authB, spaceS);
     const violations = findScopeViolations(pulled.changes, spaceS);
     // Only the foreign haex_spaces row from the earlier test plus the
     // vault-private rows (also from earlier) should still be there.
@@ -278,7 +264,6 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     // touching the S backend with T-scoped data.
     const cleanSpaceForRehearsal = crypto.randomUUID();
     expect((await createSharedSpace(authB, cleanSpaceForRehearsal, "rehearsal-S")).status).toBe(201);
-    expect((await addSpaceMember(authB, cleanSpaceForRehearsal, authA.did, "user A on rehearsal-S", "space/write")).status).toBe(201);
 
     await pushAsB(cleanSpaceForRehearsal, [
       makeSyncChange({
@@ -309,7 +294,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
       }),
     ]);
 
-    const pulled = await pullChanges(authA, cleanSpaceForRehearsal);
+    const pulled = await pullChanges(authB, cleanSpaceForRehearsal);
     const violations = findScopeViolations(pulled.changes, cleanSpaceForRehearsal);
     // No phantom-spaces, no foreign tables, no surprises.
     expect(violations).toEqual([]);
