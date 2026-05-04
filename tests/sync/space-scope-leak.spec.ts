@@ -28,10 +28,10 @@ import { test, expect } from "@playwright/test";
 import type { AuthContext } from "../helpers";
 import {
   checkSyncServerHealth,
-  createAdminUser,
+  createAdminUserWithIdentity,
   createSpace as createSharedSpace,
   addSpaceMember,
-  pushChanges,
+  signAndPushSpaceChanges,
   pullChanges,
   makeSyncChange,
   toAuthContext,
@@ -117,14 +117,25 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
   // a single batch.
   let authA: AuthContext;
   let authB: AuthContext;
+  let userB: { privateKeyBase64: string; publicKey: string };
   const spaceS = crypto.randomUUID();
   const spaceT = crypto.randomUUID();
   const deviceB = `device-b-${Date.now()}`;
 
+  /** Sign-and-push wrapper bound to user B (the only pusher in this spec). */
+  const pushAsB = (spaceId: string, changes: Parameters<typeof signAndPushSpaceChanges>[2]) =>
+    signAndPushSpaceChanges(authB, spaceId, changes, userB.privateKeyBase64, userB.publicKey);
+
   test.beforeAll(async () => {
     expect(await checkSyncServerHealth()).toBe(true);
-    authA = toAuthContext(await createAdminUser());
-    authB = toAuthContext(await createAdminUser());
+    // We need the public-key half too (sync server requires every push to
+    // be signed and the signedBy field is the pusher's pubkey), so use the
+    // *WithIdentity flavour for B and keep the raw record around.
+    const adminA = await createAdminUserWithIdentity();
+    const adminB = await createAdminUserWithIdentity();
+    authA = toAuthContext(adminA);
+    authB = toAuthContext(adminB);
+    userB = { privateKeyBase64: adminB.privateKeyBase64, publicKey: adminB.publicKey };
 
     // User B owns both shared spaces (the realistic shape: one user
     // happens to be a member of two unrelated spaces). User A is invited
@@ -147,7 +158,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
   test("baseline: well-behaved push only sends in-scope rows for the target space", async () => {
     // Simulates the haex-vault client AFTER the fix: when pushing to
     // backend S, the row belongs to space S.
-    await pushChanges(authB, spaceS, [
+    await pushAsB(spaceS, [
       makeSyncChange({
         tableName: "haex_spaces",
         rowPks: JSON.stringify({ id: spaceS }),
@@ -176,7 +187,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     // flag the resulting pull. If this assertion ever flips, the
     // server-side scope policy changed and the policy mirror at the top
     // of this file likely needs to follow.
-    await pushChanges(authB, spaceS, [
+    await pushAsB(spaceS, [
       makeSyncChange({
         tableName: "haex_spaces",
         rowPks: JSON.stringify({ id: spaceT }), // <-- foreign space's PK
@@ -201,7 +212,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     // must never travel over a shared-space backend regardless of who
     // ships them. We simulate the exact buggy shape and assert the
     // detector flags it.
-    await pushChanges(authB, spaceS, [
+    await pushAsB(spaceS, [
       makeSyncChange({
         tableName: "haex_vault_settings",
         rowPks: JSON.stringify({ id: "leaked-setting" }),
@@ -233,7 +244,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     let counter = 1;
     for (const table of SHARED_SPACE_BUILTIN_TABLES) {
       const seq = String(counter++).padStart(8, "0");
-      await pushChanges(authB, spaceS, [
+      await pushAsB(spaceS, [
         makeSyncChange({
           tableName: table,
           rowPks:
@@ -269,7 +280,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     expect((await createSharedSpace(authB, cleanSpaceForRehearsal, "rehearsal-S")).status).toBe(201);
     expect((await addSpaceMember(authB, cleanSpaceForRehearsal, authA.did, "user A on rehearsal-S", "space/write")).status).toBe(201);
 
-    await pushChanges(authB, cleanSpaceForRehearsal, [
+    await pushAsB(cleanSpaceForRehearsal, [
       makeSyncChange({
         tableName: "haex_spaces",
         rowPks: JSON.stringify({ id: cleanSpaceForRehearsal }),
@@ -288,7 +299,7 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
 
     // T-scoped rows go to the T backend ONLY, exactly as a fixed client
     // does it. They must NOT leak into the S pull.
-    await pushChanges(authB, spaceT, [
+    await pushAsB(spaceT, [
       makeSyncChange({
         tableName: "haex_peer_shares",
         rowPks: JSON.stringify({ id: `share-${spaceT}` }),
