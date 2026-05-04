@@ -29,7 +29,8 @@ import type { AuthContext } from "../helpers";
 import {
   checkSyncServerHealth,
   createAdminUser,
-  createVaultKey,
+  createSpace as createSharedSpace,
+  addSpaceMember,
   pushChanges,
   pullChanges,
   makeSyncChange,
@@ -124,11 +125,23 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     expect(await checkSyncServerHealth()).toBe(true);
     authA = toAuthContext(await createAdminUser());
     authB = toAuthContext(await createAdminUser());
-    // Each member needs a vault key per space they participate in for the
-    // sync server to accept their pushes.
-    await createVaultKey(authB, spaceS);
-    await createVaultKey(authB, spaceT);
-    await createVaultKey(authA, spaceS);
+
+    // User B owns both shared spaces (the realistic shape: one user
+    // happens to be a member of two unrelated spaces). User A is invited
+    // to S only — that is the asymmetry the leak exploited.
+    const sRes = await createSharedSpace(authB, spaceS, "scope-leak: space S");
+    expect(sRes.status).toBe(201);
+    const tRes = await createSharedSpace(authB, spaceT, "scope-leak: space T");
+    expect(tRes.status).toBe(201);
+
+    const memberRes = await addSpaceMember(
+      authB,
+      spaceS,
+      authA.did,
+      "user A on S",
+      "space/write",
+    );
+    expect(memberRes.status).toBe(201);
   });
 
   test("baseline: well-behaved push only sends in-scope rows for the target space", async () => {
@@ -253,8 +266,8 @@ test.describe("sync: shared-space scope (data-leak prevention)", () => {
     // explicitly only pushing S-scoped rows to the S backend, never
     // touching the S backend with T-scoped data.
     const cleanSpaceForRehearsal = crypto.randomUUID();
-    await createVaultKey(authB, cleanSpaceForRehearsal);
-    await createVaultKey(authA, cleanSpaceForRehearsal);
+    expect((await createSharedSpace(authB, cleanSpaceForRehearsal, "rehearsal-S")).status).toBe(201);
+    expect((await addSpaceMember(authB, cleanSpaceForRehearsal, authA.did, "user A on rehearsal-S", "space/write")).status).toBe(201);
 
     await pushChanges(authB, cleanSpaceForRehearsal, [
       makeSyncChange({
