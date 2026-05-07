@@ -390,8 +390,12 @@ jobs:
       matrix:
         shard:
           - "workflows"    # vault-lifecycle, sync, spaces, storage, identity-auth, extensions
-          - "haex-pass"    # get-logins, get-totp, authorization-flow, set-login
           - "other"        # database, ui
+          # haex-pass shard removed: passwords are now first-class in haex-vault
+          # via the `passwords::commands::extension_password_*` Tauri handlers,
+          # so the dedicated haex-pass extension is no longer the source of
+          # truth for that flow. The tests under `tests/haex-pass/` still
+          # exist for historical reference but should not gate haex-vault CI.
 
     outputs:
       success: ${{ steps.test.outcome == 'success' }}
@@ -558,9 +562,6 @@ jobs:
           case "${{ matrix.shard }}" in
             "workflows")
               TEST_DIR="tests/vault-lifecycle tests/sync tests/spaces tests/storage tests/identity-auth tests/extensions"
-              ;;
-            "haex-pass")
-              TEST_DIR="tests/haex-pass"
               ;;
             "other")
               TEST_DIR="tests/database tests/ui"
