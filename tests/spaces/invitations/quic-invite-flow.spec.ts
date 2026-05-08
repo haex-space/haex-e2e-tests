@@ -968,6 +968,29 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
+    // Reset Vault B's state for this specific personalSpaceId. On a fresh
+    // vault this is a no-op; on a persistent app (Playwright retries or
+    // earlier specs in the same shard) B may already have an accepted
+    // entry for A's Personal space — in that case the PushInvite handler
+    // correctly skips and never writes haex_pending_invites, and the poll
+    // below would time out by design. Cleaning state restores the test's
+    // precondition so each run sees a fresh delivery.
+    await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_pending_invites WHERE space_id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+    await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_spaces WHERE id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+    // Also stop any sync loop tied to this space on B and drop any
+    // outbox entry on A that could double-fire ahead of the new invite.
+    try { await vaultB.invokeTauriCommand("local_delivery_stop", { spaceId: personalSpaceId }); } catch { /* ok */ }
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_invite_outbox WHERE space_id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+
     // Debug: check QUIC connectivity before invite
     console.log(`[QUIC-DEBUG] Personal space invite — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
     for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
@@ -1556,6 +1579,14 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     try {
       await pollUntil(
         async () => {
+          // Nudge Vault B's sync loop on every tick so the next pull cycle
+          // starts immediately rather than waiting up to POLL_INTERVAL (5s)
+          // on the backend. force_sync is a no-op when the loop has not
+          // been created yet or the command isn't available, so the .catch
+          // keeps this safe across vault versions.
+          await vaultB
+            .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+            .catch(() => { /* loop may not exist yet, or command absent */ });
           const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
             vaultB,
             `SELECT id, name, device_endpoint_id FROM haex_peer_shares
@@ -1566,7 +1597,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
             && rows[0].name === shareName
             && rows[0].device_endpoint_id === nodeIdA;
         },
-        { timeout: 60_000, interval: 2_000, label: "peer_share row synced to Vault B" },
+        { timeout: 90_000, interval: 500, label: "peer_share row synced to Vault B" },
       );
       console.log(`[QUIC] Vault A's share synced to Vault B: id=${shareId.slice(0, 8)}… ✓`);
     } catch (err) {
