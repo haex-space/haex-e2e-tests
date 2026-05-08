@@ -400,6 +400,14 @@ async function acceptInviteViaUI(
   vault: VaultAutomation,
   spaceId: string,
 ): Promise<void> {
+  // Force a remount of the spaces settings panel: navigating to "spaces"
+  // when the spaces panel is already open is a no-op and skips onMounted,
+  // so loadInvitesAsync() doesn't re-run and pendingInvites can be stale
+  // (e.g. when an earlier spec in the same shard left settings on "spaces").
+  // A detour through another category guarantees onMounted fires when we
+  // come back, refreshing pendingInvites from the DB.
+  await openSettingsCategory(vault, "general");
+  await wait(300);
   await openSettingsCategory(vault, "spaces");
   await wait(1500);
 
@@ -407,18 +415,37 @@ async function acceptInviteViaUI(
   // Accept button. Targeting via spaceId avoids ambiguity when multiple
   // spaces share the same name (e.g. across test retries on a persistent
   // app instance).
-  await vault.executeScript<boolean>(`
-    const card = document.querySelector('[data-testid="space-card-${spaceId}"]');
-    if (!card) return false;
-    const btns = [...card.querySelectorAll('button')];
-    const acceptBtn = btns.find(b => {
-      const t = b.textContent?.trim();
-      return t?.includes('Accept') || t?.includes('Annehmen');
-    });
-    if (!acceptBtn) return false;
-    acceptBtn.click();
-    return true;
-  `);
+  //
+  // The card mounts asynchronously — `pendingInvites` is loaded reactively
+  // after the haex_pending_invites row arrives — so the card may not exist
+  // when this function first runs. Poll the click until either the click
+  // lands or the SQL row flips to 'accepted', whichever comes first.
+  await pollUntil(
+    async () => {
+      const clicked = await vault.executeScript<boolean>(`
+        const card = document.querySelector('[data-testid="space-card-${spaceId}"]');
+        if (!card) return false;
+        const btns = [...card.querySelectorAll('button')];
+        const acceptBtn = btns.find(b => {
+          const t = b.textContent?.trim();
+          return t?.includes('Accept') || t?.includes('Annehmen');
+        });
+        if (!acceptBtn || acceptBtn.disabled) return false;
+        acceptBtn.click();
+        return true;
+      `);
+      if (clicked) return true;
+      // The accept may already have fired earlier — short-circuit if the
+      // row is already accepted so we don't keep clicking after success.
+      const rows = await sqlQuery<{ status: string }>(
+        vault,
+        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+        [spaceId],
+      );
+      return rows.length > 0 && rows[0].status === "accepted";
+    },
+    { timeout: 30_000, interval: 500, label: "accept button clickable" },
+  ).catch(() => console.log("[FileSharing] Accept button not clickable within 30s"));
 
   await pollUntil(
     async () => {
@@ -429,7 +456,7 @@ async function acceptInviteViaUI(
       );
       return rows.length > 0 && rows[0].status === "accepted";
     },
-    { timeout: 45_000, interval: 1_000, label: "invite accepted" },
+    { timeout: 45_000, interval: 500, label: "invite accepted" },
   ).catch(() => console.log("[FileSharing] Invite not yet accepted after polling — proceeding"));
 }
 
