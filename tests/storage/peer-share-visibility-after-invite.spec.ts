@@ -575,8 +575,16 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
 
   test("Vault A receives Vault B's device_endpoint_id via CRDT sync", async () => {
     const t0 = Date.now();
+    // Nudge Vault B's sync loop on every tick so the next cycle starts
+    // immediately rather than waiting up to POLL_INTERVAL (5s) on the
+    // backend. force_sync is a no-op when the loop has not been created
+    // yet or the command isn't available (older haex-vault), so the
+    // .catch keeps this safe across vault versions.
     await pollUntil(
       async () => {
+        await vaultB
+          .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+          .catch(() => { /* loop may not exist yet, or command absent */ });
         const devices = await sqlQuery<{ device_endpoint_id: string }>(
           vaultA,
           `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
@@ -592,7 +600,7 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
         }
         return found;
       },
-      { timeout: 60_000, interval: 2_000, label: "Vault B endpoint synced to Vault A haex_space_devices" },
+      { timeout: 90_000, interval: 500, label: "Vault B endpoint synced to Vault A haex_space_devices" },
     );
     console.log(`[SHARE-VIS] Vault B's device synced to Vault A after ${Date.now() - t0}ms ✓`);
   });

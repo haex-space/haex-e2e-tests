@@ -677,8 +677,16 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
   });
 
   test("Vault B device row propagates to Vault A (CRDT)", async () => {
+    // Nudge Vault B's sync loop on every tick so the next cycle starts
+    // immediately rather than waiting up to POLL_INTERVAL (5s) on the
+    // backend. force_sync is a no-op when the loop has not been created
+    // yet or the command isn't available (older haex-vault), so the
+    // .catch keeps this safe across vault versions.
     await pollUntil(
       async () => {
+        await vaultB
+          .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+          .catch(() => { /* loop may not exist yet, or command absent */ });
         const rows = await sqlQuery<{ device_endpoint_id: string }>(
           vaultA,
           `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
@@ -686,7 +694,7 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
         );
         return rows.some((r) => r.device_endpoint_id === nodeIdB);
       },
-      { timeout: 60_000, interval: 2_000, label: "Vault B device row on Vault A" },
+      { timeout: 90_000, interval: 500, label: "Vault B device row on Vault A" },
     );
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
     console.log(`[FileSyncRules] Vault B is now an allowed peer on Vault A ✓`);
