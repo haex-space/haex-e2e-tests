@@ -968,6 +968,29 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   });
 
   test("send invite to Personal space from Vault A to Vault B", async () => {
+    // Reset Vault B's state for this specific personalSpaceId. On a fresh
+    // vault this is a no-op; on a persistent app (Playwright retries or
+    // earlier specs in the same shard) B may already have an accepted
+    // entry for A's Personal space — in that case the PushInvite handler
+    // correctly skips and never writes haex_pending_invites, and the poll
+    // below would time out by design. Cleaning state restores the test's
+    // precondition so each run sees a fresh delivery.
+    await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_pending_invites WHERE space_id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+    await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_spaces WHERE id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+    // Also stop any sync loop tied to this space on B and drop any
+    // outbox entry on A that could double-fire ahead of the new invite.
+    try { await vaultB.invokeTauriCommand("local_delivery_stop", { spaceId: personalSpaceId }); } catch { /* ok */ }
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_invite_outbox WHERE space_id = ?1`,
+      params: [personalSpaceId],
+    }).catch(() => { /* best effort */ });
+
     // Debug: check QUIC connectivity before invite
     console.log(`[QUIC-DEBUG] Personal space invite — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
     for (const [label, vault] of [["A", vaultA], ["B", vaultB]] as const) {
