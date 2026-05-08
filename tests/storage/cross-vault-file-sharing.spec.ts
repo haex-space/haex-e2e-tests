@@ -339,9 +339,12 @@ async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string):
   );
   await wait(1500);
 
+  // Pick the newest matching space — multiple spaces may share the same
+  // name across test retries on a persistent app instance, and we always
+  // want the one we just created.
   const spaces = await sqlQuery<{ id: string }>(
     vault,
-    `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
+    `SELECT id FROM haex_spaces WHERE name = ?1 ORDER BY created_at DESC LIMIT 1`,
     [spaceName],
   );
   expect(spaces.length).toBe(1);
@@ -350,7 +353,7 @@ async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string):
 
 async function sendInviteViaUI(
   vault: VaultAutomation,
-  spaceName: string,
+  spaceId: string,
   contactLabel: string,
   withWrite = false,
 ): Promise<void> {
@@ -366,17 +369,9 @@ async function sendInviteViaUI(
   `);
   await wait(300);
 
-  const spaceForInvite = await sqlQuery<{ id: string }>(
-    vault,
-    `SELECT id FROM haex_spaces WHERE name = ?1 LIMIT 1`,
-    [spaceName],
-  );
-  const targetSpaceId = spaceForInvite[0]?.id;
-  if (!targetSpaceId) throw new Error(`Space "${spaceName}" not found`);
-
-  await clickTestId(vault, `space-invite-trigger-${targetSpaceId}`);
+  await clickTestId(vault, `space-invite-trigger-${spaceId}`);
   await wait(300);
-  await clickTestId(vault, `space-invite-option-contact-${targetSpaceId}`);
+  await clickTestId(vault, `space-invite-option-contact-${spaceId}`);
   await wait(1000);
 
   await clickTestId(vault, "invite-contact-select");
@@ -403,25 +398,26 @@ async function sendInviteViaUI(
 
 async function acceptInviteViaUI(
   vault: VaultAutomation,
-  spaceName: string,
-  spaceIdForFallback: string,
+  spaceId: string,
 ): Promise<void> {
   await openSettingsCategory(vault, "spaces");
   await wait(1500);
 
+  // Find the pending space card by stable per-space testid and click its
+  // Accept button. Targeting via spaceId avoids ambiguity when multiple
+  // spaces share the same name (e.g. across test retries on a persistent
+  // app instance).
   await vault.executeScript<boolean>(`
-    const name = ${JSON.stringify(spaceName)};
-    const items = [...document.querySelectorAll('[class*="rounded-lg"]')];
-    for (const item of items) {
-      if (!item.textContent?.includes(name)) continue;
-      const btns = [...item.querySelectorAll('button')];
-      const acceptBtn = btns.find(b => {
-        const t = b.textContent?.trim();
-        return t?.includes('Accept') || t?.includes('Annehmen');
-      });
-      if (acceptBtn) { acceptBtn.click(); return true; }
-    }
-    return false;
+    const card = document.querySelector('[data-testid="space-card-${spaceId}"]');
+    if (!card) return false;
+    const btns = [...card.querySelectorAll('button')];
+    const acceptBtn = btns.find(b => {
+      const t = b.textContent?.trim();
+      return t?.includes('Accept') || t?.includes('Annehmen');
+    });
+    if (!acceptBtn) return false;
+    acceptBtn.click();
+    return true;
   `);
 
   await pollUntil(
@@ -429,7 +425,7 @@ async function acceptInviteViaUI(
       const rows = await sqlQuery<{ status: string }>(
         vault,
         `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
-        [spaceIdForFallback],
+        [spaceId],
       );
       return rows.length > 0 && rows[0].status === "accepted";
     },
@@ -437,10 +433,112 @@ async function acceptInviteViaUI(
   ).catch(() => console.log("[FileSharing] Invite not yet accepted after polling — proceeding"));
 }
 
+/**
+ * Wipe leftover state from earlier runs (failed test + Playwright retry, or
+ * earlier specs in the same shard sharing the WebDriver session). All steps
+ * are best-effort: a fresh app has nothing to clean and the SQL DELETEs are
+ * no-ops in that case.
+ *
+ *   1. Stop every running local_delivery loop so no stale sync attempts
+ *      compete with the new test setup.
+ *   2. Stop the P2P endpoint — startP2PEndpoint() restarts it cleanly.
+ *   3. Drop pending invites scoped to this test's space name (no FK cascade
+ *      on haex_pending_invites).
+ *   4. Drop matching spaces. haex_space_devices and haex_peer_shares cascade
+ *      via FK, so deleting the space is enough.
+ */
+async function resetTestState(
+  vault: VaultAutomation,
+  label: string,
+  testSpaceName: string,
+): Promise<void> {
+  try {
+    const status = await vault.invokeTauriCommand<{ activeSpaces?: string[] }>(
+      "local_delivery_status",
+      {},
+    );
+    for (const sid of status.activeSpaces ?? []) {
+      try { await vault.invokeTauriCommand("local_delivery_stop", { spaceId: sid }); } catch { /* ok */ }
+    }
+  } catch { /* ok */ }
+
+  try { await vault.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ok */ }
+
+  try {
+    await vault.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_pending_invites WHERE space_name = ?1`,
+      params: [testSpaceName],
+    });
+  } catch (e) { console.log(`[FileSharing] reset invites on ${label}: ${e}`); }
+
+  try {
+    await vault.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_spaces WHERE name = ?1`,
+      params: [testSpaceName],
+    });
+  } catch (e) { console.log(`[FileSharing] reset spaces on ${label}: ${e}`); }
+}
+
+/**
+ * On a sync timeout, the failure is one of:
+ *   - leader never started       → local_delivery_status.activeSpaces empty
+ *   - peer storage offline       → peer_storage_status.running = false
+ *   - leader didn't accept push  → device row missing on A but present on B
+ *   - never inserted on B        → device row missing on both
+ *   - pending invite not delivered/accepted → status anomalies
+ *
+ * Without this dump the failure looks like an opaque 60s timeout. Each branch
+ * below answers one of the questions above so the next failure is sortable
+ * from the log alone.
+ */
+async function dumpSyncDiagnostics(
+  vaultA: VaultAutomation,
+  vaultB: VaultAutomation,
+  spaceId: string,
+  nodeIdB: string,
+): Promise<void> {
+  const safe = async <T>(fn: () => Promise<T>, label: string): Promise<T | string> => {
+    try { return await fn(); } catch (e) { return `<error: ${(e as Error).message ?? e}> on ${label}`; }
+  };
+
+  const [
+    statusA, statusB,
+    peerA, peerB,
+    devicesA, devicesB,
+    invitesA, invitesB,
+  ] = await Promise.all([
+    safe(() => vaultA.invokeTauriCommand("local_delivery_status", {}), "A.local_delivery_status"),
+    safe(() => vaultB.invokeTauriCommand("local_delivery_status", {}), "B.local_delivery_status"),
+    safe(() => vaultA.invokeTauriCommand("peer_storage_status", {}), "A.peer_storage_status"),
+    safe(() => vaultB.invokeTauriCommand("peer_storage_status", {}), "B.peer_storage_status"),
+    safe(() => sqlQuery(vaultA, `SELECT device_endpoint_id, device_name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "A.haex_space_devices"),
+    safe(() => sqlQuery(vaultB, `SELECT device_endpoint_id, device_name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "B.haex_space_devices"),
+    safe(() => sqlQuery(vaultA, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "A.haex_pending_invites"),
+    safe(() => sqlQuery(vaultB, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "B.haex_pending_invites"),
+  ]);
+
+  console.log("[FileSharing][diag] ──── sync timeout diagnostics ────");
+  console.log(`[FileSharing][diag] spaceId=${spaceId.slice(0, 8)}… expected nodeIdB=${nodeIdB.slice(0, 16)}…`);
+  console.log(`[FileSharing][diag] A.local_delivery_status: ${JSON.stringify(statusA)}`);
+  console.log(`[FileSharing][diag] B.local_delivery_status: ${JSON.stringify(statusB)}`);
+  console.log(`[FileSharing][diag] A.peer_storage_status:   ${JSON.stringify(peerA)}`);
+  console.log(`[FileSharing][diag] B.peer_storage_status:   ${JSON.stringify(peerB)}`);
+  console.log(`[FileSharing][diag] A.space_devices: ${JSON.stringify(devicesA)}`);
+  console.log(`[FileSharing][diag] B.space_devices: ${JSON.stringify(devicesB)}`);
+  console.log(`[FileSharing][diag] A.pending_invites: ${JSON.stringify(invitesA)}`);
+  console.log(`[FileSharing][diag] B.pending_invites: ${JSON.stringify(invitesB)}`);
+  console.log("[FileSharing][diag] ────────────────────────────────────");
+}
+
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 test.describe("cross-vault P2P file sharing after real invite", () => {
-  test.describe.configure({ mode: "serial" });
+  // retries=0: Playwright reuses the same WebDriver session across retries,
+  // so a failed run leaves the Tauri app in a polluted state (active loops,
+  // half-accepted invites, lingering rows). Retries here typically fail with
+  // misleading errors that hide the real root cause. Better to see the
+  // primary failure with the diagnostic dump than to chase ghost retries.
+  test.describe.configure({ mode: "serial", retries: 0 });
   test.setTimeout(120_000);
 
   let vaultA: VaultAutomation;
@@ -460,6 +558,13 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
     await vaultB.createSession();
+
+    // Reset state from any previous run on this persistent app instance.
+    // The same WebDriver session is reused across Playwright retries and
+    // across other specs in the same shard, so leftover spaces, invites,
+    // and active local_delivery loops can poison this suite.
+    await resetTestState(vaultA, "Vault A", spaceName);
+    await resetTestState(vaultB, "Vault B", spaceName);
   });
 
   test.afterAll(async () => {
@@ -619,10 +724,11 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       });
     }
 
-    // Start space leader
-    try {
-      await vaultA.invokeTauriCommand("local_delivery_start", { spaceId });
-    } catch { /* already running */ }
+    // Start space leader. local_delivery_start is idempotent — it overwrites
+    // the leader-state map entry — so a real error here (e.g. peer storage
+    // not running, HLC lock poisoned) is a hard failure that would silently
+    // turn into a 60s sync-loop timeout later. Surface it instead.
+    await vaultA.invokeTauriCommand("local_delivery_start", { spaceId });
 
     // Create peer share pointing to the real test directory
     const shareId = crypto.randomUUID();
@@ -650,7 +756,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("Vault A sends invite to Vault B", async () => {
-    await sendInviteViaUI(vaultA, spaceName, contactLabel, true);
+    await sendInviteViaUI(vaultA, spaceId, contactLabel, true);
 
     await pollUntil(
       async () => {
@@ -667,7 +773,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
   });
 
   test("Vault B accepts the invite", async () => {
-    await acceptInviteViaUI(vaultB, spaceName, spaceId);
+    await acceptInviteViaUI(vaultB, spaceId);
 
     const invites = await sqlQuery<{ status: string }>(
       vaultB,
@@ -700,17 +806,31 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     // The regression being tested: if SyncPush was rejected as a whole batch
     // (due to foreign membership rows), this row never arrived and
     // peer_storage_reload_shares could not include Vault B in allowed_peers.
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ device_endpoint_id: string }>(
-          vaultA,
-          `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
-          [spaceId],
-        );
-        return rows.some((r) => r.device_endpoint_id === nodeIdB);
-      },
-      { timeout: 60_000, interval: 2_000, label: "Vault B device row on Vault A" },
-    );
+    //
+    // We nudge Vault B's sync loop on every poll tick so the next cycle
+    // starts immediately instead of waiting up to POLL_INTERVAL (5s) on the
+    // backend. force_sync is a no-op when the loop has not been created
+    // yet (e.g. local_delivery_connect after accept hasn't completed),
+    // so the call is safe to fire blindly from the start of polling.
+    try {
+      await pollUntil(
+        async () => {
+          await vaultB
+            .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+            .catch(() => { /* loop may not exist yet — that's fine */ });
+          const rows = await sqlQuery<{ device_endpoint_id: string }>(
+            vaultA,
+            `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+            [spaceId],
+          );
+          return rows.some((r) => r.device_endpoint_id === nodeIdB);
+        },
+        { timeout: 90_000, interval: 500, label: "Vault B device row on Vault A" },
+      );
+    } catch (err) {
+      await dumpSyncDiagnostics(vaultA, vaultB, spaceId, nodeIdB);
+      throw err;
+    }
     console.log(`[FileSharing] Vault B device row reached Vault A ✓`);
   });
 
