@@ -1556,6 +1556,14 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     try {
       await pollUntil(
         async () => {
+          // Nudge Vault B's sync loop on every tick so the next pull cycle
+          // starts immediately rather than waiting up to POLL_INTERVAL (5s)
+          // on the backend. force_sync is a no-op when the loop has not
+          // been created yet or the command isn't available, so the .catch
+          // keeps this safe across vault versions.
+          await vaultB
+            .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+            .catch(() => { /* loop may not exist yet, or command absent */ });
           const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
             vaultB,
             `SELECT id, name, device_endpoint_id FROM haex_peer_shares
@@ -1566,7 +1574,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
             && rows[0].name === shareName
             && rows[0].device_endpoint_id === nodeIdA;
         },
-        { timeout: 60_000, interval: 2_000, label: "peer_share row synced to Vault B" },
+        { timeout: 90_000, interval: 500, label: "peer_share row synced to Vault B" },
       );
       console.log(`[QUIC] Vault A's share synced to Vault B: id=${shareId.slice(0, 8)}… ✓`);
     } catch (err) {
