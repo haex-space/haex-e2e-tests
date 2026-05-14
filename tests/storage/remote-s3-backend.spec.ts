@@ -50,6 +50,15 @@ test.describe("storage: remote S3 backend", () => {
         // Best effort cleanup
       }
     }
+    // Release the per-process vault mount so the next suite (which shares the
+    // Tauri session across files) starts with a clean AppState. Without this
+    // its beforeAll's create_encrypted_database / open_encrypted_database
+    // returns VaultAlreadyMountedInProcess and the whole suite cascades.
+    try {
+      await vault.invokeTauriCommand("close_database", {});
+    } catch {
+      // Best effort
+    }
   });
 
   test("list_backends returns an array", async () => {
