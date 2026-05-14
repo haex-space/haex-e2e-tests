@@ -186,13 +186,19 @@ test.describe("storage: P2P connectivity between vaults", () => {
       // Best effort
     }
 
-    // Release the per-suite vault B mount so the next suite starts with a
-    // clean AppState. Without this its beforeAll's create_encrypted_database
-    // / open_encrypted_database returns VaultAlreadyMountedInProcess and the
-    // whole suite cascades. Vault A is opened by global-setup and shared
-    // across suites — do NOT close it or downstream suites lose their DB.
+    // Release the per-suite vault B mount and reset the UI to root so the
+    // next suite's beforeAll starts with a clean AppState. Without close_database
+    // it gets VaultAlreadyMountedInProcess; without the navigate the WebView
+    // stays on /vault/... and initializeVaultViaUI early-returns thinking
+    // vault B is open while the DB is actually unmounted. Vault A is opened
+    // by global-setup and shared across suites — do NOT close it.
     try {
       await vaultB.invokeTauriCommand("close_database", {});
+    } catch {
+      // Best effort
+    }
+    try {
+      await vaultB.navigateTo("/");
     } catch {
       // Best effort
     }
