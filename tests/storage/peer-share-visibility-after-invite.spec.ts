@@ -95,6 +95,126 @@ async function clickTestId(vault: VaultAutomation, testId: string): Promise<bool
   `);
 }
 
+async function clickButton(vault: VaultAutomation, ...labels: string[]): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const labels = ${JSON.stringify(labels)};
+    const btns = [...document.querySelectorAll('button, [role="button"]')];
+    for (const label of labels) {
+      const btn = btns.find(b => {
+        const t = b.textContent?.trim();
+        return t === label || t?.includes(label);
+      });
+      if (btn && !btn.disabled) { btn.click(); return true; }
+    }
+    return false;
+  `);
+}
+
+async function clickButtonIn(
+  vault: VaultAutomation,
+  containerSelector: string,
+  ...labels: string[]
+): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const container = document.querySelector('${containerSelector}');
+    if (!container) return false;
+    const labels = ${JSON.stringify(labels)};
+    const btns = [...container.querySelectorAll('button, [role="button"]')];
+    for (const label of labels) {
+      const btn = btns.find(b => {
+        const t = b.textContent?.trim();
+        return t === label || t?.includes(label);
+      });
+      if (btn && !btn.disabled) { btn.click(); return true; }
+    }
+    return false;
+  `);
+}
+
+// Mount vault via the full UI flow so Pinia stores (spacesStore in particular)
+// get initialized. A backend-only open_encrypted_database leaves the WebView
+// on the picker route with no stores mounted, which breaks tests that access
+// spacesStore.acceptLocalInviteAsync below.
+async function initializeVaultViaUI(
+  vault: VaultAutomation,
+  vaultName: string,
+  password: string,
+): Promise<void> {
+  const href = await vault.executeScript<string>("return location.href");
+  if (href?.includes("/vault/")) return;
+
+  const vaults = await vault.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {});
+  const exists = vaults.some((v) => v.name === vaultName);
+
+  if (!exists) {
+    await pollUntil(
+      () => clickButton(vault, "Create vault", "Vault erstellen"),
+      { timeout: 10_000, label: "Create vault button" },
+    );
+    await wait(1000);
+    await vault.executeScript(`
+      const dialog = document.querySelector('[role="dialog"]');
+      if (!dialog) return;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      const nameInput = dialog.querySelector(
+        'input:not([type="password"]):not([type="hidden"]):not([type="checkbox"])'
+      );
+      if (nameInput) {
+        setter.call(nameInput, '');
+        nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+        setter.call(nameInput, ${JSON.stringify(vaultName)});
+        nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      dialog.querySelectorAll('input[type="password"]').forEach(input => {
+        setter.call(input, ${JSON.stringify(password)});
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    `);
+    await wait(500);
+    await clickButtonIn(vault, '[role="dialog"]', "Create", "Erstellen");
+  } else {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const clicked = await vault.executeScript<boolean>(`
+        const name = ${JSON.stringify(vaultName)};
+        const slotBtns = [...document.querySelectorAll('button[data-slot="base"]')];
+        const slotMatch = slotBtns.find(b => b.textContent?.trim().includes(name));
+        if (slotMatch) { slotMatch.click(); return true; }
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        let node;
+        while (node = walker.nextNode()) {
+          if (node.textContent?.trim() === name) {
+            const btn = node.parentElement?.closest('button')
+              || node.parentElement?.closest('[role="button"]');
+            if (btn) { btn.click(); return true; }
+            node.parentElement?.click();
+            return true;
+          }
+        }
+        return false;
+      `);
+      if (clicked) break;
+      await wait(2000);
+    }
+    await wait(1500);
+    await vault.executeScript(`
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      const pw = document.querySelector('input[type="password"]');
+      if (pw) {
+        setter.call(pw, ${JSON.stringify(password)});
+        pw.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    `);
+    await wait(300);
+    await clickButton(vault, "Unlock", "Entsperren");
+  }
+
+  await pollUntil(
+    () => vault.executeScript<boolean>("return location.href?.includes('/vault/')"),
+    { timeout: 30_000, interval: 1_000, label: "vault navigation" },
+  );
+  await wait(2000);
+}
+
 async function elementExists(vault: VaultAutomation, selector: string): Promise<boolean> {
   return vault.executeScript<boolean>(`return !!document.querySelector('${selector}')`);
 }
@@ -252,23 +372,12 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   });
 
   test("Vault B has an open vault", async () => {
-    try {
-      await vaultB.invokeTauriCommand("create_encrypted_database", {
-        vaultName: "ShareVis Test Vault B",
-        key: "test-password-b",
-        spaceId: null,
-      });
-    } catch {
-      const vaults = await vaultB.invokeTauriCommand<Array<{ name: string; path: string }>>(
-        "list_vaults", {},
-      );
-      if (vaults.length > 0) {
-        await vaultB.invokeTauriCommand("open_encrypted_database", {
-          vaultPath: vaults[0].path,
-          key: "test-password-b",
-        });
-      }
-    }
+    // Use the full UI flow (picker click → password dialog → router push) so
+    // Pinia stores mount — the spacesStore is needed by the "accept invite"
+    // test below. A bare create/open_encrypted_database leaves the WebView
+    // on the picker route with no stores wired up.
+    await initializeVaultViaUI(vaultB, "ShareVis Test Vault B", "test-password-b");
+    expect(await vaultB.executeScript<string>("return location.href")).toContain("/vault/");
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
