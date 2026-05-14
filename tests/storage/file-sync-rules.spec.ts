@@ -469,14 +469,12 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     try {
       await vaultB.invokeTauriCommand("filesystem_remove", { path: targetDir, recursive: true });
     } catch { /* best effort */ }
-    // Release the per-process vault mount so the next suite (which shares the
-    // Tauri session across files) starts with a clean AppState. Without this
-    // its beforeAll's create_encrypted_database / open_encrypted_database
-    // returns VaultAlreadyMountedInProcess and the whole suite cascades.
-    for (const vault of [vaultA, vaultB]) {
-      if (!vault) continue;
-      try { await vault.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
-    }
+    // Release the per-suite vault B mount so the next suite starts with a
+    // clean AppState. Without this its beforeAll's create_encrypted_database
+    // / open_encrypted_database returns VaultAlreadyMountedInProcess and the
+    // whole suite cascades. Vault A is opened by global-setup and shared
+    // across suites — do NOT close it or downstream suites lose their DB.
+    try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
