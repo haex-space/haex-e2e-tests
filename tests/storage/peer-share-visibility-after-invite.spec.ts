@@ -141,7 +141,18 @@ async function initializeVaultViaUI(
   password: string,
 ): Promise<void> {
   const href = await vault.executeScript<string>("return location.href");
-  if (href?.includes("/vault/")) return;
+  if (href?.includes("/vault/")) {
+    // The URL alone is not enough: a previous suite's afterAll may have
+    // close_database'd while leaving the WebView on /vault/... — in that
+    // case the route is stale and an early return would skip the re-mount
+    // we need. Probe the DB with a trivial query and only treat the vault
+    // as already-open when the query succeeds.
+    const mounted = await vault
+      .invokeTauriCommand("sql_select_with_crdt", { sql: "SELECT 1", params: [] })
+      .then(() => true)
+      .catch(() => false);
+    if (mounted) return;
+  }
 
   const vaults = await vault.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {});
   const exists = vaults.some((v) => v.name === vaultName);
@@ -173,8 +184,9 @@ async function initializeVaultViaUI(
     await wait(500);
     await clickButtonIn(vault, '[role="dialog"]', "Create", "Erstellen");
   } else {
+    let clicked = false;
     for (let attempt = 0; attempt < 5; attempt++) {
-      const clicked = await vault.executeScript<boolean>(`
+      clicked = await vault.executeScript<boolean>(`
         const name = ${JSON.stringify(vaultName)};
         const slotBtns = [...document.querySelectorAll('button[data-slot="base"]')];
         const slotMatch = slotBtns.find(b => b.textContent?.trim().includes(name));
@@ -194,6 +206,9 @@ async function initializeVaultViaUI(
       `);
       if (clicked) break;
       await wait(2000);
+    }
+    if (!clicked) {
+      throw new Error(`vault picker selection failed for "${vaultName}" after 5 retries`);
     }
     await wait(1500);
     await vault.executeScript(`
