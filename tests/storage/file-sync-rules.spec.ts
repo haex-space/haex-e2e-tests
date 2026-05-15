@@ -685,6 +685,15 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
   });
 
   test("Vault B device row propagates to Vault A (CRDT)", async () => {
+    // Explicitly start Vault B's sync loop for the space. Invite-accept
+    // alone is racy: when this test runs before B's loop has initialized,
+    // the first local_delivery_force_sync below blocks for ~36s waiting
+    // for implicit startup, burning the polling budget. local_delivery_start
+    // is idempotent — safe if already running.
+    await vaultB
+      .invokeTauriCommand("local_delivery_start", { spaceId })
+      .catch(() => { /* already running, command absent on older vault, etc. */ });
+
     // Nudge Vault B's sync loop on every tick so the next cycle starts
     // immediately rather than waiting up to POLL_INTERVAL (5s) on the
     // backend. force_sync is a no-op when the loop has not been created
