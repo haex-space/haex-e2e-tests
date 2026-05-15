@@ -688,22 +688,38 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     // Explicitly start Vault B's sync loop for the space. Invite-accept
     // alone is racy: when this test runs before B's loop has initialized,
     // the first local_delivery_force_sync below blocks for ~36s waiting
-    // for implicit startup, burning the polling budget. local_delivery_start
-    // is idempotent — safe if already running.
+    // for implicit startup. local_delivery_start is idempotent — safe if
+    // already running.
     await vaultB
       .invokeTauriCommand("local_delivery_start", { spaceId })
       .catch(() => { /* already running, command absent on older vault, etc. */ });
 
+    // local_delivery_start returns fire-and-forget; the loop is only
+    // actually initialized once spaceId appears in local_delivery_status
+    // .activeSpaces. If we skip this wait and go straight to force_sync,
+    // the FIRST force_sync call blocks for ~34s waiting on the same
+    // initialization, burning a third of the 90s device-row budget. Wait
+    // for activation on a separate budget so the device-row poll gets the
+    // full 90s for actual CRDT propagation.
+    await pollUntil(
+      async () => {
+        const status = await vaultB.invokeTauriCommand<{ activeSpaces?: string[] }>(
+          "local_delivery_status",
+          {},
+        );
+        return (status.activeSpaces ?? []).includes(spaceId);
+      },
+      { timeout: 60_000, interval: 1_000, label: "Vault B local_delivery active for space" },
+    );
+
     // Nudge Vault B's sync loop on every tick so the next cycle starts
     // immediately rather than waiting up to POLL_INTERVAL (5s) on the
-    // backend. force_sync is a no-op when the loop has not been created
-    // yet or the command isn't available (older haex-vault), so the
-    // .catch keeps this safe across vault versions.
+    // backend.
     await pollUntil(
       async () => {
         await vaultB
           .invokeTauriCommand("local_delivery_force_sync", { spaceId })
-          .catch(() => { /* loop may not exist yet, or command absent */ });
+          .catch(() => { /* command absent on older vault */ });
         const rows = await sqlQuery<{ device_endpoint_id: string }>(
           vaultA,
           `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,

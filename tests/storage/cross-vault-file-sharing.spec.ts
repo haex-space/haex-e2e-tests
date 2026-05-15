@@ -851,17 +851,37 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       .invokeTauriCommand("local_delivery_start", { spaceId })
       .catch(() => { /* already running, command absent on older vault, etc. */ });
 
+    // local_delivery_start returns fire-and-forget; the loop is only actually
+    // initialized once spaceId appears in local_delivery_status.activeSpaces.
+    // If we skip this wait and go straight to force_sync, the FIRST force_sync
+    // call blocks for ~34s waiting on the same initialization, burning a third
+    // of the 90s device-row budget. Wait for activation on a separate budget
+    // so the device-row poll gets the full 90s for actual CRDT propagation.
+    try {
+      await pollUntil(
+        async () => {
+          const status = await vaultB.invokeTauriCommand<{ activeSpaces?: string[] }>(
+            "local_delivery_status",
+            {},
+          );
+          return (status.activeSpaces ?? []).includes(spaceId);
+        },
+        { timeout: 60_000, interval: 1_000, label: "Vault B local_delivery active for space" },
+      );
+    } catch (err) {
+      await dumpSyncDiagnostics(vaultA, vaultB, spaceId, nodeIdB);
+      throw err;
+    }
+
     // We nudge Vault B's sync loop on every poll tick so the next cycle
     // starts immediately instead of waiting up to POLL_INTERVAL (5s) on the
-    // backend. force_sync is a no-op when the loop has not been created
-    // yet (e.g. local_delivery_connect after accept hasn't completed),
-    // so the call is safe to fire blindly from the start of polling.
+    // backend.
     try {
       await pollUntil(
         async () => {
           await vaultB
             .invokeTauriCommand("local_delivery_force_sync", { spaceId })
-            .catch(() => { /* loop may not exist yet — that's fine */ });
+            .catch(() => { /* command absent on older vault */ });
           const rows = await sqlQuery<{ device_endpoint_id: string }>(
             vaultA,
             `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
