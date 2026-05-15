@@ -602,6 +602,14 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     try {
       await vaultA.invokeTauriCommand("filesystem_remove", { path: testDir, recursive: true });
     } catch { /* best effort */ }
+    // Release the per-suite vault B mount and reset the UI to root so the
+    // next suite's beforeAll starts with a clean AppState. Without close_database
+    // it gets VaultAlreadyMountedInProcess; without the navigate the WebView
+    // stays on /vault/... and initializeVaultViaUI early-returns thinking
+    // vault B is open while the DB is actually unmounted. Vault A is opened
+    // by global-setup and shared across suites — do NOT close it.
+    try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
+    try { await vaultB.navigateTo("/"); } catch { /* ignore */ }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -834,6 +842,15 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     // (due to foreign membership rows), this row never arrived and
     // peer_storage_reload_shares could not include Vault B in allowed_peers.
     //
+    // Explicitly start Vault B's sync loop for the space. Invite-accept alone
+    // is racy: in CI the diagnostic dump showed B.activeSpaces did NOT include
+    // the freshly-accepted space, so CRDT push never even started and we burned
+    // the entire 90s budget waiting. local_delivery_start is idempotent — safe
+    // if already running.
+    await vaultB
+      .invokeTauriCommand("local_delivery_start", { spaceId })
+      .catch(() => { /* already running, command absent on older vault, etc. */ });
+
     // We nudge Vault B's sync loop on every poll tick so the next cycle
     // starts immediately instead of waiting up to POLL_INTERVAL (5s) on the
     // backend. force_sync is a no-op when the loop has not been created

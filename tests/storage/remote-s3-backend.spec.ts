@@ -50,6 +50,9 @@ test.describe("storage: remote S3 backend", () => {
         // Best effort cleanup
       }
     }
+    // No close_database here: this suite only drives vault A which is opened
+    // by global-setup and shared across suites — closing it would leave every
+    // downstream storage spec with "Connection to vault failed".
   });
 
   test("list_backends returns an array", async () => {

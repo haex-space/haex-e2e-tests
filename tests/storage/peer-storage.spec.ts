@@ -45,6 +45,9 @@ test.describe("storage: peer storage endpoint lifecycle", () => {
     } catch {
       // Best effort cleanup
     }
+    // No close_database here: this suite only drives vault A which is opened
+    // by global-setup and shared across suites — closing it would leave every
+    // downstream storage spec with "Connection to vault failed".
   });
 
   test("status when stopped returns running false", async () => {

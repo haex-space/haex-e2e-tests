@@ -469,6 +469,14 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     try {
       await vaultB.invokeTauriCommand("filesystem_remove", { path: targetDir, recursive: true });
     } catch { /* best effort */ }
+    // Release the per-suite vault B mount and reset the UI to root so the
+    // next suite's beforeAll starts with a clean AppState. Without close_database
+    // it gets VaultAlreadyMountedInProcess; without the navigate the WebView
+    // stays on /vault/... and initializeVaultViaUI early-returns thinking
+    // vault B is open while the DB is actually unmounted. Vault A is opened
+    // by global-setup and shared across suites — do NOT close it.
+    try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
+    try { await vaultB.navigateTo("/"); } catch { /* ignore */ }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -677,6 +685,15 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
   });
 
   test("Vault B device row propagates to Vault A (CRDT)", async () => {
+    // Explicitly start Vault B's sync loop for the space. Invite-accept
+    // alone is racy: when this test runs before B's loop has initialized,
+    // the first local_delivery_force_sync below blocks for ~36s waiting
+    // for implicit startup, burning the polling budget. local_delivery_start
+    // is idempotent — safe if already running.
+    await vaultB
+      .invokeTauriCommand("local_delivery_start", { spaceId })
+      .catch(() => { /* already running, command absent on older vault, etc. */ });
+
     // Nudge Vault B's sync loop on every tick so the next cycle starts
     // immediately rather than waiting up to POLL_INTERVAL (5s) on the
     // backend. force_sync is a no-op when the loop has not been created
