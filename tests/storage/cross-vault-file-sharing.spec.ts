@@ -842,6 +842,15 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     // (due to foreign membership rows), this row never arrived and
     // peer_storage_reload_shares could not include Vault B in allowed_peers.
     //
+    // Explicitly start Vault B's sync loop for the space. Invite-accept alone
+    // is racy: in CI the diagnostic dump showed B.activeSpaces did NOT include
+    // the freshly-accepted space, so CRDT push never even started and we burned
+    // the entire 90s budget waiting. local_delivery_start is idempotent — safe
+    // if already running.
+    await vaultB
+      .invokeTauriCommand("local_delivery_start", { spaceId })
+      .catch(() => { /* already running, command absent on older vault, etc. */ });
+
     // We nudge Vault B's sync loop on every poll tick so the next cycle
     // starts immediately instead of waiting up to POLL_INTERVAL (5s) on the
     // backend. force_sync is a no-op when the loop has not been created
