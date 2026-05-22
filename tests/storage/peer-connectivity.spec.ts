@@ -530,10 +530,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
     // Create a third ephemeral vault automation (simulated by starting
     // a new endpoint on Vault B after removing its registration from Vault A)
 
-    // Remove Vault B from Vault A's allowed peers
+    // Remove Vault B from Vault A's allowed peers. Scope by space — endpoint_id
+    // alone would strip Vault B from every space and break later tests.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1`,
-      params: [nodeIdB],
+      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1 AND space_id = ?2`,
+      params: [nodeIdB, spaceId],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
@@ -550,11 +551,20 @@ test.describe("storage: P2P connectivity between vaults", () => {
       })
     ).rejects.toThrow();
 
-    // Re-register Vault B for subsequent tests
+    // Re-register Vault B for subsequent tests. The earlier delete only
+    // dropped the haex_space_devices row — the haex_devices stub for nodeIdB
+    // (created by the ensure-refs trigger on first insert) is still there.
+    // Reuse that stub's id so this insert doesn't trip the
+    // UNIQUE(endpoint_id) constraint on haex_devices.
+    const existingStubB = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdB],
+    });
+    const deviceIdB = existingStubB.length > 0 ? existingStubB[0][0] : crypto.randomUUID();
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      params: [crypto.randomUUID(), spaceId, crypto.randomUUID(), nodeIdB, "VaultB", "desktop", ownDidA],
+      params: [crypto.randomUUID(), spaceId, deviceIdB, nodeIdB, "VaultB", "desktop", ownDidA],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
   });
