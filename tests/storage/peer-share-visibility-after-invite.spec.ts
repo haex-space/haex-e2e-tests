@@ -473,11 +473,17 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
     const spaceName = `ShareVis-${Date.now()}`;
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
 
-    // Register Vault A's device (required for local_delivery_start leader election)
-    // device_id references the publishing vault's haex_devices.id. Random UUID
-    // is fine — the Phase 2 haex_space_devices_ensure_refs trigger auto-creates
-    // the FK parent in haex_devices because authored_by_did is set.
-    const localDeviceIdA = crypto.randomUUID();
+    // Register Vault A's device (required for local_delivery_start leader election).
+    // device_id MUST be Vault A's real haex_devices.id (Phase 2 FK +
+    // UNIQUE(endpoint_id) — a random UUID would make the ensure-refs trigger
+    // collide on the own row's endpoint_id and fail the FK).
+    const ownDeviceRowsA = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRowsA.length).toBe(1);
+    const localDeviceIdA = ownDeviceRowsA[0].id;
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT OR IGNORE INTO haex_space_devices
               (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)

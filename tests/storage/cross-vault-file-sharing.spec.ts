@@ -751,10 +751,17 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    // device_id references the publishing vault's haex_devices.id. Random UUID
-    // is fine — the Phase 2 haex_space_devices_ensure_refs trigger creates the
-    // FK parent in haex_devices when authored_by_did is set.
-    const localDeviceIdA = crypto.randomUUID();
+    // device_id must point at the real haex_devices row of this vault (Phase 2
+    // FK on haex_devices.id with UNIQUE on endpoint_id — a random UUID would
+    // make the ensure-refs trigger try to create a stub that collides on the
+    // own row's endpoint_id and fail the FK).
+    const ownDeviceRows = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRows.length).toBe(1);
+    const localDeviceIdA = ownDeviceRows[0].id;
     if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
         sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)

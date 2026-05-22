@@ -955,10 +955,20 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       [personalSpaceId],
     );
     if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
+      // device_id must point at the real haex_devices row of this vault.
+      // Phase 2 added a SQL FK on haex_devices.id; passing a random UUID here
+      // would make the ensure-refs trigger try to create a stub that
+      // collides with the own row on UNIQUE(endpoint_id).
+      const ownDeviceRows = await sqlQuery<{ id: string }>(
+        vaultA,
+        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+        [nodeIdA],
+      );
+      expect(ownDeviceRows.length).toBe(1);
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        params: [crypto.randomUUID(), personalSpaceId, crypto.randomUUID(), nodeIdA, "Vault A Desktop", "desktop"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), personalSpaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
       });
     }
 
@@ -1160,10 +1170,16 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       [spaceId],
     );
     if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
+      const ownDeviceRows = await sqlQuery<{ id: string }>(
+        vaultA,
+        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+        [nodeIdA],
+      );
+      expect(ownDeviceRows.length).toBe(1);
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        params: [crypto.randomUUID(), spaceId, crypto.randomUUID(), nodeIdA, "Vault A Desktop", "desktop"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), spaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
       });
     }
 
@@ -1198,11 +1214,20 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
 
   test("Vault A attaches a folder share to the space before inviting", async () => {
     shareId = crypto.randomUUID();
+    // device_id must be the real haex_devices.id for Vault A's own device
+    // (Phase 2 FK + UNIQUE(endpoint_id) — a random UUID would make the
+    // ensure-refs trigger collide on the existing own row's endpoint_id).
+    const ownDeviceRows = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRows.length).toBe(1);
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_peer_shares
               (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      params: [shareId, spaceId, crypto.randomUUID(), nodeIdA, shareName, shareLocalPath, identityA.did],
+      params: [shareId, spaceId, ownDeviceRows[0].id, nodeIdA, shareName, shareLocalPath, identityA.did],
     });
 
     const rows = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
