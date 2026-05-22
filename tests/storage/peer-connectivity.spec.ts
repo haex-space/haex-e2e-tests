@@ -532,11 +532,14 @@ test.describe("storage: P2P connectivity between vaults", () => {
     // Create a third ephemeral vault automation (simulated by starting
     // a new endpoint on Vault B after removing its registration from Vault A)
 
-    // Remove Vault B from Vault A's allowed peers. Scope by space — endpoint_id
-    // alone would strip Vault B from every space and break later tests.
+    // Fully unregister Vault B (across every space) so the listing below is
+    // truly unauthorized. Scoping to spaceId leaves leftover rows from a
+    // persistent test container in other spaces, and the backend resolves
+    // ownership by endpoint_id rather than rejecting — the call would then
+    // succeed with an empty list instead of throwing.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1 AND space_id = ?2`,
-      params: [nodeIdB, spaceId],
+      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1`,
+      params: [nodeIdB],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
