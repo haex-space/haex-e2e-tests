@@ -274,19 +274,25 @@ test.describe("storage: P2P connectivity between vaults", () => {
     const rowAB = crypto.randomUUID();
     const rowBB = crypto.randomUUID();
     // haex_space_devices.device_id is a SQL FK on haex_devices.id (Phase 2).
-    // For Vault A's OWN device on Vault A we MUST use the real haex_devices.id
-    // — otherwise the ensure-refs trigger tries to create a stub that
-    // collides with the existing own row on UNIQUE(endpoint_id) and the FK
-    // fails. For foreign rows (Vault B's device on Vault A, Vault A's device
-    // on Vault B) a random UUID is fine — the trigger creates the stub.
+    // For cross-vault stability the row each vault publishes must keep using
+    // the SAME device_id every time: that's the publisher vault's actual
+    // haex_devices.id. UNIQUE(endpoint_id) on haex_devices means the
+    // ensure-refs trigger would otherwise leave a stale stub from a previous
+    // test run (random id, same endpoint_id) blocking the new stub, and the
+    // new random device_id would have no FK parent.
     const ownDeviceA = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
       sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
       params: [nodeIdA],
     });
     expect(ownDeviceA.length).toBe(1);
     const ownDeviceIdA = ownDeviceA[0][0];
-    const foreignDeviceIdA = crypto.randomUUID(); // Vault A's device as seen by Vault B
-    const localDeviceIdB = crypto.randomUUID();
+
+    const ownDeviceB = await vaultB.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdB],
+    });
+    expect(ownDeviceB.length).toBe(1);
+    const ownDeviceIdB = ownDeviceB[0][0];
 
     // Register Vault A's device on Vault A
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
@@ -295,25 +301,21 @@ test.describe("storage: P2P connectivity between vaults", () => {
       params: [rowAA, spaceId, ownDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, ownDidA],
     });
 
-    // Register Vault B's device on Vault A (so A knows B is allowed). The
-    // authored_by_did is still A's because Vault A is the one inserting — the
-    // trigger uses it as owner_did for the stub. For test purposes that
-    // attribution is fine; the row still satisfies the FK.
+    // Register Vault B's device on Vault A (so A knows B is allowed). Use
+    // Vault B's REAL haex_devices.id so the row is stable across runs and
+    // matches what Vault B itself would publish via CRDT in production.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      params: [rowAB, spaceId, localDeviceIdB, nodeIdB, "VaultB", "desktop", ownDidA],
+      params: [rowAB, spaceId, ownDeviceIdB, nodeIdB, "VaultB", "desktop", ownDidB],
     });
 
-    // Register Vault A's device on Vault B (so B knows how to reach A).
-    // Vault B has no haex_devices row for Vault A yet — the trigger creates
-    // the stub from authored_by_did + nodeIdA. The device id used here is
-    // distinct from ownDeviceIdA on purpose: Vault B doesn't know Vault A's
-    // actual row id, only the endpoint_id snapshot.
+    // Register Vault A's device on Vault B — same stability argument: use
+    // Vault A's real haex_devices.id as device_id on Vault B's side.
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-      params: [rowBB, spaceId, foreignDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, ownDidB],
+      params: [rowBB, spaceId, ownDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, ownDidA],
     });
 
     // Reload on both sides
