@@ -232,12 +232,15 @@ test.describe("storage: P2P connectivity between vaults", () => {
 
   test("register share on Vault A via DB", async () => {
     const shareId = crypto.randomUUID();
+    // device_id references the publishing vault's haex_devices.id — random
+    // UUID is fine for tests since the FK is not enforced.
+    const localDeviceIdA = crypto.randomUUID();
 
     // Insert peer share record (CRDT table)
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [shareId, spaceId, nodeIdA, "TestShare", testDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      params: [shareId, spaceId, localDeviceIdA, nodeIdA, "TestShare", testDir],
     });
 
     // Reload shares into the running endpoint
@@ -249,28 +252,35 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("register devices in shared space on both vaults", async () => {
-    const deviceIdA = crypto.randomUUID();
-    const deviceIdB = crypto.randomUUID();
+    const rowAA = crypto.randomUUID();
+    const rowAB = crypto.randomUUID();
+    const rowBB = crypto.randomUUID();
+    // haex_space_devices.device_id references the random haex_devices.id of
+    // the publishing vault. The tests use random UUIDs as opaque values —
+    // the FK is intentionally not enforced because foreign-vault rows
+    // arrive without a matching haex_devices entry locally.
+    const localDeviceIdA = crypto.randomUUID();
+    const localDeviceIdB = crypto.randomUUID();
 
     // Register Vault A's device on Vault A
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [deviceIdA, spaceId, nodeIdA, "VaultA", relayUrlA],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, relay_url)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [rowAA, spaceId, localDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA],
     });
 
     // Register Vault B's device on Vault A (so A knows B is allowed)
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-            VALUES (?1, ?2, ?3, ?4)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdB, "VaultB"],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      params: [rowAB, spaceId, localDeviceIdB, nodeIdB, "VaultB", "desktop"],
     });
 
     // Register Vault A's device on Vault B (so B knows how to reach A)
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [deviceIdB, spaceId, nodeIdA, "VaultA", relayUrlA],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, relay_url)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [rowBB, spaceId, localDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA],
     });
 
     // Reload on both sides
@@ -489,7 +499,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
 
     // Remove Vault B from Vault A's allowed peers
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `DELETE FROM haex_space_devices WHERE device_endpoint_id = ?1`,
+      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1`,
       params: [nodeIdB],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
@@ -509,9 +519,9 @@ test.describe("storage: P2P connectivity between vaults", () => {
 
     // Re-register Vault B for subsequent tests
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-            VALUES (?1, ?2, ?3, ?4)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdB, "VaultB"],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      params: [crypto.randomUUID(), spaceId, crypto.randomUUID(), nodeIdB, "VaultB", "desktop"],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
   });
@@ -538,9 +548,9 @@ test.describe("storage: P2P connectivity between vaults", () => {
       data: Buffer.from("secret data").toString("base64"),
     });
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [otherShareId, otherSpaceId, nodeIdA, "SecretShare", otherDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      params: [otherShareId, otherSpaceId, crypto.randomUUID(), nodeIdA, "SecretShare", otherDir],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 

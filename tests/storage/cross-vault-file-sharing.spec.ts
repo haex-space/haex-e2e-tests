@@ -538,8 +538,8 @@ async function dumpSyncDiagnostics(
     safe(() => vaultB.invokeTauriCommand("local_delivery_status", {}), "B.local_delivery_status"),
     safe(() => vaultA.invokeTauriCommand("peer_storage_status", {}), "A.peer_storage_status"),
     safe(() => vaultB.invokeTauriCommand("peer_storage_status", {}), "B.peer_storage_status"),
-    safe(() => sqlQuery(vaultA, `SELECT device_endpoint_id, device_name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "A.haex_space_devices"),
-    safe(() => sqlQuery(vaultB, `SELECT device_endpoint_id, device_name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "B.haex_space_devices"),
+    safe(() => sqlQuery(vaultA, `SELECT endpoint_id, name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "A.haex_space_devices"),
+    safe(() => sqlQuery(vaultB, `SELECT endpoint_id, name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "B.haex_space_devices"),
     safe(() => sqlQuery(vaultA, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "A.haex_pending_invites"),
     safe(() => sqlQuery(vaultB, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "B.haex_pending_invites"),
   ]);
@@ -746,16 +746,19 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
 
   test("register Vault A device in the space and create peer share", async () => {
     // Ensure Vault A's device is registered in the space
-    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+    const devices = await sqlQuery<{ endpoint_id: string }>(
       vaultA,
-      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    if (!devices.some((d) => d.device_endpoint_id === nodeIdA)) {
+    // device_id references the publishing vault's haex_devices.id — random
+    // UUID is fine for tests since the FK is not enforced.
+    const localDeviceIdA = crypto.randomUUID();
+    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [crypto.randomUUID(), spaceId, nodeIdA, "Vault A"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+        params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "Vault A", "desktop"],
       });
     }
 
@@ -769,9 +772,9 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     const shareId = crypto.randomUUID();
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_peer_shares
-              (id, space_id, device_endpoint_id, name, local_path, authored_by_did)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      params: [shareId, spaceId, nodeIdA, "TestShare", testDir, identityA.did],
+              (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [shareId, spaceId, localDeviceIdA, nodeIdA, "TestShare", testDir, identityA.did],
     });
 
     // Reload so the running endpoint picks up the new share
@@ -779,7 +782,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
 
     const shares = await sqlQuery<{ id: string }>(
       vaultA,
-      "SELECT id FROM haex_peer_shares WHERE space_id = ?1 AND device_endpoint_id = ?2",
+      "SELECT id FROM haex_peer_shares WHERE space_id = ?1 AND endpoint_id = ?2",
       [spaceId, nodeIdA],
     );
     expect(shares.length).toBeGreaterThanOrEqual(1);
@@ -862,12 +865,12 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
           await vaultB
             .invokeTauriCommand("local_delivery_force_sync", { spaceId })
             .catch(() => { /* loop may not exist yet — that's fine */ });
-          const rows = await sqlQuery<{ device_endpoint_id: string }>(
+          const rows = await sqlQuery<{ endpoint_id: string }>(
             vaultA,
-            `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+            `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
             [spaceId],
           );
-          return rows.some((r) => r.device_endpoint_id === nodeIdB);
+          return rows.some((r) => r.endpoint_id === nodeIdB);
         },
         { timeout: 90_000, interval: 500, label: "Vault B device row on Vault A" },
       );
@@ -892,7 +895,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       const pinia = app?.config?.globalProperties?.$pinia;
       const peerStore = pinia?._s?.get('peerStorageStore');
       const devices = peerStore?.spaceDevices ?? [];
-      return devices.filter(d => d.deviceEndpointId === ${JSON.stringify(nodeIdB)}).length;
+      return devices.filter(d => d.endpointId === ${JSON.stringify(nodeIdB)}).length;
     `);
     console.log(`[FileSharing] Pinia spaceDevices entries for B: ${allowedCount}`);
     expect(loaded).toBeGreaterThanOrEqual(1);
@@ -941,12 +944,12 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
       );
     } catch (err) {
       // Diagnostic: check if Vault A has Vault B in allowed_peers
-      const devicesOnA = await sqlQuery<{ device_endpoint_id: string }>(
+      const devicesOnA = await sqlQuery<{ endpoint_id: string }>(
         vaultA,
-        `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+        `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
         [spaceId],
       );
-      console.log(`[FileSharing] peer_storage_remote_list FAILED. devicesOnA=${JSON.stringify(devicesOnA.map(d => d.device_endpoint_id.slice(0, 12)))}, nodeIdB=${nodeIdB.slice(0, 12)}`);
+      console.log(`[FileSharing] peer_storage_remote_list FAILED. devicesOnA=${JSON.stringify(devicesOnA.map(d => d.endpoint_id.slice(0, 12)))}, nodeIdB=${nodeIdB.slice(0, 12)}`);
       throw err;
     }
     console.log(`[FileSharing] peer_storage_remote_list took ${Date.now() - t0}ms, entries=${entries.length}`);
