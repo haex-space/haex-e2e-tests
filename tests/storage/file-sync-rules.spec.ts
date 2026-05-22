@@ -618,14 +618,15 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
       "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    // device_id references the publishing vault's haex_devices.id — random
-    // UUID is fine for tests since the FK is not enforced.
+    // device_id references the publishing vault's haex_devices.id. Random UUID
+    // is fine — the Phase 2 haex_space_devices_ensure_refs trigger creates the
+    // FK parent in haex_devices when authored_by_did is set.
     const localDeviceIdA = crypto.randomUUID();
     if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-        params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "Vault A", "desktop"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "Vault A", "desktop", identityA.did],
       });
     }
 

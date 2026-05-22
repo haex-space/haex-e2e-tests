@@ -474,14 +474,15 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
 
     // Register Vault A's device (required for local_delivery_start leader election)
-    // device_id references the publishing vault's haex_devices.id — random
-    // UUID is fine for tests since the FK is not enforced.
+    // device_id references the publishing vault's haex_devices.id. Random UUID
+    // is fine — the Phase 2 haex_space_devices_ensure_refs trigger auto-creates
+    // the FK parent in haex_devices because authored_by_did is set.
     const localDeviceIdA = crypto.randomUUID();
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT OR IGNORE INTO haex_space_devices
-              (id, space_id, device_id, endpoint_id, name, platform, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA],
+              (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, identityA.did],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
@@ -503,9 +504,9 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
     // Attach the share — reuse the same opaque device_id as the space-devices
     // row above since both rows logically refer to the same publishing device.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, shareName, testDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, shareName, testDir, identityA.did],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
