@@ -529,24 +529,38 @@ test.describe("storage: P2P connectivity between vaults", () => {
   // ===========================================================================
 
   test("unregistered peer cannot list shares", async () => {
-    // Create a third ephemeral vault automation (simulated by starting
-    // a new endpoint on Vault B after removing its registration from Vault A)
+    // Drive the canonical "remove member" flow on Vault A via the Pinia
+    // store — same code path the Settings → Space → Members → Remove UI
+    // button takes. The action drops Vault B's haex_space_devices rows for
+    // this space (matched on authored_by_did), revokes their UCAN tokens,
+    // and calls peer_storage_reload_shares so Vault A's QUIC endpoint stops
+    // recognising Vault B's UCAN against this space. The handle_request
+    // gate then rejects the listing since the UCAN's claimed space is no
+    // longer in Vault B's allowed_spaces for this connection.
+    const removalResult = await vaultA.executeScript<string | null>(`
+      return (async () => {
+        const app = document.getElementById('__nuxt')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const spacesStore = pinia?._s?.get('spacesStore');
+        if (!spacesStore?.removeSpaceMemberAsync) {
+          return 'spacesStore.removeSpaceMemberAsync unavailable';
+        }
+        try {
+          await spacesStore.removeSpaceMemberAsync(${JSON.stringify(spaceId)}, ${JSON.stringify(ownDidB)});
+          return null;
+        } catch (e) {
+          return e?.message || String(e);
+        }
+      })();
+    `);
+    expect(removalResult).toBeNull();
 
-    // Fully unregister Vault B (across every space) so the listing below is
-    // truly unauthorized. Scoping to spaceId leaves leftover rows from a
-    // persistent test container in other spaces, and the backend resolves
-    // ownership by endpoint_id rather than rejecting — the call would then
-    // succeed with an empty list instead of throwing.
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `DELETE FROM haex_space_devices WHERE endpoint_id = ?1`,
-      params: [nodeIdB],
-    });
-    await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
-
-    // Wait briefly for state to propagate
+    // The reload happens inside removeSpaceMemberAsync, but give the iroh
+    // accept loop a tick to observe the new allowed_peers map.
     await new Promise((r) => setTimeout(r, 500));
 
-    // Vault B should now be rejected
+    // Vault B's UCAN claims spaceId but Vault B is no longer registered
+    // there → handle_request's per-UCAN-space gate rejects.
     await expect(
       vaultB.invokeTauriCommand<FileEntry[]>("peer_storage_remote_list", {
         nodeId: nodeIdA,
@@ -556,11 +570,8 @@ test.describe("storage: P2P connectivity between vaults", () => {
       })
     ).rejects.toThrow();
 
-    // Re-register Vault B for subsequent tests. The earlier delete only
-    // dropped the haex_space_devices row — the haex_devices stub for nodeIdB
-    // (created by the ensure-refs trigger on first insert) is still there.
-    // Reuse that stub's id so this insert doesn't trip the
-    // UNIQUE(endpoint_id) constraint on haex_devices.
+    // Re-register Vault B for subsequent tests. Reuse the existing
+    // haex_devices stub so the FK + UNIQUE(endpoint_id) constraints pass.
     const existingStubB = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
       sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
       params: [nodeIdB],
@@ -569,7 +580,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-      params: [crypto.randomUUID(), spaceId, deviceIdB, nodeIdB, "VaultB", "desktop", ownDidA],
+      params: [crypto.randomUUID(), spaceId, deviceIdB, nodeIdB, "VaultB", "desktop", ownDidB],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
   });
