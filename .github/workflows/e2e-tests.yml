@@ -138,6 +138,13 @@ jobs:
           INPUT_HAEXTENSION: ${{ inputs.haextension_version }}
           INPUT_VAULT_SDK: ${{ inputs.vault_sdk_version }}
           INPUT_SYNC_SERVER: ${{ inputs.sync_server_version }}
+          # Same probe as the artifact resolver below — see the comment on
+          # the download step for the cross-repo branch-coupling rationale.
+          # We resolve haex-vault's source ref to the matching branch HEAD
+          # so the migrations cloned from GitHub match the binary downloaded
+          # from the artifact. Without this the source comes from main and
+          # the binary from the feature branch — schema column names diverge.
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           # Resolve each upstream ref to a concrete commit SHA before any
           # consumer (workflow clone, docker-compose build-arg) uses it.
@@ -155,7 +162,21 @@ jobs:
             fi
           }
 
-          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$INPUT_HAEX_VAULT")
+          # For haex-vault, when no explicit version was passed (standalone
+          # PR/push), prefer a same-named branch on haex-vault. This keeps
+          # the source clone (which carries database/migrations/) in sync
+          # with the artifact resolver below, which already picks the
+          # matching branch's binary. Falls back to main if no matching
+          # branch exists.
+          HAEX_VAULT_REF="$INPUT_HAEX_VAULT"
+          if [ -z "$HAEX_VAULT_REF" ] && [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
+              HAEX_VAULT_REF="$E2E_BRANCH"
+              echo "Resolving haex-vault source to matching branch: $HAEX_VAULT_REF"
+            fi
+          fi
+
+          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$HAEX_VAULT_REF")
           HAEXTENSION_SHA=$(resolve_sha "haex-space/haextension" "$INPUT_HAEXTENSION")
           VAULT_SDK_SHA=$(resolve_sha "haex-space/vault-sdk" "$INPUT_VAULT_SDK")
           SYNC_SERVER_SHA=$(resolve_sha "haex-space/haex-sync-server" "$INPUT_SYNC_SERVER")
