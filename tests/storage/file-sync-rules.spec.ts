@@ -613,16 +613,26 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
     expect(spaceId).toBeTruthy();
 
-    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+    const devices = await sqlQuery<{ endpoint_id: string }>(
       vaultA,
-      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    if (!devices.some((d) => d.device_endpoint_id === nodeIdA)) {
+    // device_id must point at the real haex_devices row of this vault (Phase 2
+    // FK + UNIQUE(endpoint_id) — see cross-vault-file-sharing.spec.ts for the
+    // rationale).
+    const ownDeviceRows = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRows.length).toBe(1);
+    const localDeviceIdA = ownDeviceRows[0].id;
+    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [crypto.randomUUID(), spaceId, nodeIdA, "Vault A"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "Vault A", "desktop", identityA.did],
       });
     }
 
@@ -633,9 +643,9 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     const shareId = crypto.randomUUID();
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_peer_shares
-              (id, space_id, device_endpoint_id, name, local_path, authored_by_did)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      params: [shareId, spaceId, nodeIdA, "SyncShare", sourceDir, identityA.did],
+              (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [shareId, spaceId, localDeviceIdA, nodeIdA, "SyncShare", sourceDir, identityA.did],
     });
 
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
@@ -720,12 +730,12 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
         await vaultB
           .invokeTauriCommand("local_delivery_force_sync", { spaceId })
           .catch(() => { /* command absent on older vault */ });
-        const rows = await sqlQuery<{ device_endpoint_id: string }>(
+        const rows = await sqlQuery<{ endpoint_id: string }>(
           vaultA,
-          `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+          `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
           [spaceId],
         );
-        return rows.some((r) => r.device_endpoint_id === nodeIdB);
+        return rows.some((r) => r.endpoint_id === nodeIdB);
       },
       { timeout: 90_000, interval: 500, label: "Vault B device row on Vault A" },
     );

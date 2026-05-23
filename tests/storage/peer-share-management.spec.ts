@@ -20,19 +20,26 @@ async function pushPeerShare(
   share: {
     id: string;
     spaceId: string;
-    deviceEndpointId: string;
+    endpointId: string;
     name: string;
     localPath: string;
+    /**
+     * Opaque random UUID referencing the publishing vault's haex_devices.id.
+     * Auto-generated if omitted — the FK is intentionally not enforced.
+     */
+    deviceRowId?: string;
   },
   deviceId: string,
   timestamp?: string,
 ) {
   const ts = timestamp || `2026-03-21T14:00:00.000Z:00000001:${deviceId}`;
   const rowPks = JSON.stringify({ id: share.id });
+  const deviceRowId = share.deviceRowId ?? crypto.randomUUID();
 
   const changes = [
     { columnName: "space_id", value: share.spaceId },
-    { columnName: "device_endpoint_id", value: share.deviceEndpointId },
+    { columnName: "device_id", value: deviceRowId },
+    { columnName: "endpoint_id", value: share.endpointId },
     { columnName: "name", value: share.name },
     { columnName: "local_path", value: share.localPath },
   ].map((col) =>
@@ -129,7 +136,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareId,
         spaceId: "personal",
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "Downloads",
         localPath: "/home/user/Downloads",
       },
@@ -172,7 +179,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareId,
         spaceId: "personal",
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "Photos",
         localPath: "/home/user/Photos",
       },
@@ -206,7 +213,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareId,
         spaceId: "personal",
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "ToDelete",
         localPath: "/tmp/to-delete",
       },
@@ -235,7 +242,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareId,
         spaceId: "personal",
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "CrossDeviceDelete",
         localPath: "/tmp/cross-delete",
       },
@@ -322,7 +329,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: sharePersonal,
         spaceId: spacePersonal,
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "PersonalDocs",
         localPath: "/home/user/personal",
       },
@@ -337,7 +344,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareWork,
         spaceId: spaceWork,
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "WorkDocs",
         localPath: "/home/user/work",
       },
@@ -379,7 +386,7 @@ test.describe("storage: peer share management via sync", () => {
       {
         id: shareId,
         spaceId: "personal",
-        deviceEndpointId: endpointA,
+        endpointId: endpointA,
         name: "OriginalName",
         localPath: "/tmp/lww-test",
       },

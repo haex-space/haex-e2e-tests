@@ -473,12 +473,22 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
     const spaceName = `ShareVis-${Date.now()}`;
     spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
 
-    // Register Vault A's device (required for local_delivery_start leader election)
+    // Register Vault A's device (required for local_delivery_start leader election).
+    // device_id MUST be Vault A's real haex_devices.id (Phase 2 FK +
+    // UNIQUE(endpoint_id) — a random UUID would make the ensure-refs trigger
+    // collide on the own row's endpoint_id and fail the FK).
+    const ownDeviceRowsA = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRowsA.length).toBe(1);
+    const localDeviceIdA = ownDeviceRowsA[0].id;
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT OR IGNORE INTO haex_space_devices
-              (id, space_id, device_endpoint_id, device_name, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdA, "VaultA", relayUrlA],
+              (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, identityA.did],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
@@ -497,11 +507,12 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
       data: Buffer.from("Some shared notes").toString("base64"),
     });
 
-    // Attach the share
+    // Attach the share — reuse the same opaque device_id as the space-devices
+    // row above since both rows logically refer to the same publishing device.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdA, shareName, testDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [crypto.randomUUID(), spaceId, localDeviceIdA, nodeIdA, shareName, testDir, identityA.did],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
@@ -676,18 +687,18 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   test("Vault B's nodeId is in haex_space_devices for the accepted space", async () => {
-    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+    const devices = await sqlQuery<{ endpoint_id: string }>(
       vaultB,
-      `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+      `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
       [spaceId],
     );
     console.log(
       `[SHARE-VIS] haex_space_devices on Vault B (space ${spaceId.slice(0, 8)}…): [${
-        devices.map((d) => d.device_endpoint_id.slice(0, 12)).join(", ")
+        devices.map((d) => d.endpoint_id.slice(0, 12)).join(", ")
       }]`,
     );
 
-    const ownRegistered = devices.some((d) => d.device_endpoint_id === nodeIdB);
+    const ownRegistered = devices.some((d) => d.endpoint_id === nodeIdB);
     if (!ownRegistered) {
       throw new Error(
         `Regression: Vault B's nodeId ${nodeIdB.slice(0, 16)}… not in haex_space_devices for space ${spaceId.slice(0, 8)}… — ` +
@@ -705,7 +716,7 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   // for this space.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  test("Vault A receives Vault B's device_endpoint_id via CRDT sync", async () => {
+  test("Vault A receives Vault B's endpoint_id via CRDT sync", async () => {
     const t0 = Date.now();
     // Nudge Vault B's sync loop on every tick so the next cycle starts
     // immediately rather than waiting up to POLL_INTERVAL (5s) on the
@@ -717,16 +728,16 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
         await vaultB
           .invokeTauriCommand("local_delivery_force_sync", { spaceId })
           .catch(() => { /* loop may not exist yet, or command absent */ });
-        const devices = await sqlQuery<{ device_endpoint_id: string }>(
+        const devices = await sqlQuery<{ endpoint_id: string }>(
           vaultA,
-          `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
+          `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`,
           [spaceId],
         );
-        const found = devices.some((d) => d.device_endpoint_id === nodeIdB);
+        const found = devices.some((d) => d.endpoint_id === nodeIdB);
         if (!found && Date.now() - t0 > 10_000) {
           console.log(
             `[SHARE-VIS] Still waiting for sync — A devices: [${
-              devices.map((d) => d.device_endpoint_id.slice(0, 12)).join(", ")
+              devices.map((d) => d.endpoint_id.slice(0, 12)).join(", ")
             }]`,
           );
         }
@@ -780,7 +791,7 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   // This was the failing case. Vault B called peer_storage_remote_list with
   // path "/SharedDocs" and Vault A's handler hit find_share_and_subpath, which
   // filters shares by allowed_spaces (derived from allowed_peers loaded from
-  // haex_space_devices WHERE device_endpoint_id != own_id).
+  // haex_space_devices WHERE endpoint_id != own_id).
   //
   // Before the fix: Vault B's endpoint was absent from haex_space_devices →
   //   allowed_peers for this space was empty → share not found → error.

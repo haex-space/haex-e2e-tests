@@ -138,6 +138,13 @@ jobs:
           INPUT_HAEXTENSION: ${{ inputs.haextension_version }}
           INPUT_VAULT_SDK: ${{ inputs.vault_sdk_version }}
           INPUT_SYNC_SERVER: ${{ inputs.sync_server_version }}
+          # Same probe as the artifact resolver below — see the comment on
+          # the download step for the cross-repo branch-coupling rationale.
+          # We resolve haex-vault's source ref to the matching branch HEAD
+          # so the migrations cloned from GitHub match the binary downloaded
+          # from the artifact. Without this the source comes from main and
+          # the binary from the feature branch — schema column names diverge.
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           # Resolve each upstream ref to a concrete commit SHA before any
           # consumer (workflow clone, docker-compose build-arg) uses it.
@@ -155,7 +162,21 @@ jobs:
             fi
           }
 
-          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$INPUT_HAEX_VAULT")
+          # For haex-vault, when no explicit version was passed (standalone
+          # PR/push), prefer a same-named branch on haex-vault. This keeps
+          # the source clone (which carries database/migrations/) in sync
+          # with the artifact resolver below, which already picks the
+          # matching branch's binary. Falls back to main if no matching
+          # branch exists.
+          HAEX_VAULT_REF="$INPUT_HAEX_VAULT"
+          if [ -z "$HAEX_VAULT_REF" ] && [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
+              HAEX_VAULT_REF="$E2E_BRANCH"
+              echo "Resolving haex-vault source to matching branch: $HAEX_VAULT_REF"
+            fi
+          fi
+
+          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$HAEX_VAULT_REF")
           HAEXTENSION_SHA=$(resolve_sha "haex-space/haextension" "$INPUT_HAEXTENSION")
           VAULT_SDK_SHA=$(resolve_sha "haex-space/vault-sdk" "$INPUT_VAULT_SDK")
           SYNC_SERVER_SHA=$(resolve_sha "haex-space/haex-sync-server" "$INPUT_SYNC_SERVER")
@@ -208,27 +229,59 @@ jobs:
         if: inputs.haex_vault_artifact == '' || inputs.haex_vault_artifact_run_id == ''
         env:
           GH_TOKEN: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+          # Cross-repo branch coupling: when an e2e-tests branch ships test
+          # changes that depend on an unmerged haex-vault PR (e.g. schema
+          # changes), the matching haex-vault branch usually carries the
+          # same name. Without this resolution the e2e shard runs against
+          # the latest main artifact and fails on the column/API mismatch.
+          # We probe haex-vault for a same-named branch and fall back to
+          # main if it doesn't exist. Mirrors haex-vault's symmetric resolver.
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           echo "Fetching latest successful haex-vault build artifact..."
 
-          # Find the latest successful workflow run with the artifact
-          RUN_ID=$(gh api repos/haex-space/haex-vault/actions/workflows/build.yml/runs \
-            --jq '.workflow_runs | map(select(.conclusion == "success" and .head_branch == "main")) | .[0].id' \
-            2>/dev/null || echo "")
-
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" == "null" ]; then
-            echo "No successful build found, will build from source"
-            exit 0
+          TARGET_BRANCH="main"
+          if [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
+              TARGET_BRANCH="$E2E_BRANCH"
+              echo "Found matching haex-vault branch: $TARGET_BRANCH"
+            else
+              echo "No matching haex-vault branch for '$E2E_BRANCH' — using main"
+            fi
           fi
 
-          echo "Found successful run: $RUN_ID"
+          # Try to download the Linux e2e artifact from the most recent runs on
+          # the target branch. We don't filter by conclusion because the haex-vault
+          # build often fails its own e2e-tests step while the Linux binary build
+          # succeeds (Windows / e2e-tests are slower / flaky). If the artifact
+          # isn't uploaded (e.g. ubuntu build itself failed), gh run download
+          # returns non-zero and we try the next run. Fall back to main if no
+          # usable artifact is found on the feature branch.
+          download_artifact() {
+            local branch="$1"
+            local run_ids
+            run_ids=$(gh api "repos/haex-space/haex-vault/actions/workflows/build.yml/runs?head_branch=${branch}&per_page=10" \
+              --jq '.workflow_runs | .[].id' \
+              2>/dev/null || echo "")
 
-          # Download the artifact
+            for rid in $run_ids; do
+              echo "Trying run $rid on '$branch'..."
+              if gh run download "$rid" --repo haex-space/haex-vault --name haex-vault-linux-e2e 2>/dev/null; then
+                echo "Successfully downloaded pre-built haex-vault binary from run $rid ($branch)"
+                return 0
+              fi
+            done
+            return 1
+          }
+
           mkdir -p ./docker/prebuilt/haex-vault
           cd ./docker/prebuilt/haex-vault
 
-          if gh run download "$RUN_ID" --repo haex-space/haex-vault --name haex-vault-linux-e2e 2>/dev/null; then
-            echo "Successfully downloaded pre-built haex-vault binary"
+          if download_artifact "$TARGET_BRANCH"; then
+            ls -la
+            chmod +x haex-vault 2>/dev/null || true
+          elif [ "$TARGET_BRANCH" != "main" ] && download_artifact "main"; then
+            echo "Used fallback artifact from main"
             ls -la
             chmod +x haex-vault 2>/dev/null || true
           else

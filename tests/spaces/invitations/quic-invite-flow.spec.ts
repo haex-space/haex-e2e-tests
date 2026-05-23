@@ -949,16 +949,26 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
     console.log(`[QUIC] Personal space: ${personalSpaceId.slice(0, 8)}…`);
 
     // Ensure device is registered in Personal space
-    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+    const devices = await sqlQuery<{ endpoint_id: string }>(
       vaultA,
-      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [personalSpaceId],
     );
-    if (!devices.some((d) => d.device_endpoint_id === nodeIdA)) {
+    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
+      // device_id must point at the real haex_devices row of this vault.
+      // Phase 2 added a SQL FK on haex_devices.id; passing a random UUID here
+      // would make the ensure-refs trigger try to create a stub that
+      // collides with the own row on UNIQUE(endpoint_id).
+      const ownDeviceRows = await sqlQuery<{ id: string }>(
+        vaultA,
+        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+        [nodeIdA],
+      );
+      expect(ownDeviceRows.length).toBe(1);
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [crypto.randomUUID(), personalSpaceId, nodeIdA, "Vault A Desktop"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), personalSpaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
       });
     }
 
@@ -1154,25 +1164,31 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
 
   test("ensure Vault A device is registered in space", async () => {
     // The UI might auto-register the device; if not, do it manually.
-    const devices = await sqlQuery<{ device_endpoint_id: string }>(
+    const devices = await sqlQuery<{ endpoint_id: string }>(
       vaultA,
-      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    if (!devices.some((d) => d.device_endpoint_id === nodeIdA)) {
+    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
+      const ownDeviceRows = await sqlQuery<{ id: string }>(
+        vaultA,
+        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+        [nodeIdA],
+      );
+      expect(ownDeviceRows.length).toBe(1);
       await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-              VALUES (?1, ?2, ?3, ?4)`,
-        params: [crypto.randomUUID(), spaceId, nodeIdA, "Vault A Desktop"],
+        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+        params: [crypto.randomUUID(), spaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
       });
     }
 
-    const updated = await sqlQuery<{ device_endpoint_id: string }>(
+    const updated = await sqlQuery<{ endpoint_id: string }>(
       vaultA,
-      "SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
       [spaceId],
     );
-    expect(updated.some((d) => d.device_endpoint_id === nodeIdA)).toBe(true);
+    expect(updated.some((d) => d.endpoint_id === nodeIdA)).toBe(true);
 
     // No stale-data cleanup — test expects fresh vault containers.
 
@@ -1198,20 +1214,29 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
 
   test("Vault A attaches a folder share to the space before inviting", async () => {
     shareId = crypto.randomUUID();
+    // device_id must be the real haex_devices.id for Vault A's own device
+    // (Phase 2 FK + UNIQUE(endpoint_id) — a random UUID would make the
+    // ensure-refs trigger collide on the existing own row's endpoint_id).
+    const ownDeviceRows = await sqlQuery<{ id: string }>(
+      vaultA,
+      "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      [nodeIdA],
+    );
+    expect(ownDeviceRows.length).toBe(1);
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_peer_shares
-              (id, space_id, device_endpoint_id, name, local_path, authored_by_did)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      params: [shareId, spaceId, nodeIdA, shareName, shareLocalPath, identityA.did],
+              (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [shareId, spaceId, ownDeviceRows[0].id, nodeIdA, shareName, shareLocalPath, identityA.did],
     });
 
-    const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+    const rows = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
       vaultA,
-      "SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1",
+      "SELECT id, name, endpoint_id FROM haex_peer_shares WHERE space_id = ?1",
       [spaceId],
     );
     expect(rows.length).toBeGreaterThanOrEqual(1);
-    expect(rows.some((r) => r.id === shareId && r.name === shareName && r.device_endpoint_id === nodeIdA))
+    expect(rows.some((r) => r.id === shareId && r.name === shareName && r.endpoint_id === nodeIdA))
       .toBe(true);
     console.log(`[QUIC] Share attached on Vault A: id=${shareId.slice(0, 8)}… name="${shareName}"`);
   });
@@ -1587,15 +1612,15 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           await vaultB
             .invokeTauriCommand("local_delivery_force_sync", { spaceId })
             .catch(() => { /* loop may not exist yet, or command absent */ });
-          const rows = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
+          const rows = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
             vaultB,
-            `SELECT id, name, device_endpoint_id FROM haex_peer_shares
+            `SELECT id, name, endpoint_id FROM haex_peer_shares
              WHERE space_id = ?1 AND id = ?2`,
             [spaceId, shareId],
           );
           return rows.length === 1
             && rows[0].name === shareName
-            && rows[0].device_endpoint_id === nodeIdA;
+            && rows[0].endpoint_id === nodeIdA;
         },
         { timeout: 90_000, interval: 500, label: "peer_share row synced to Vault B" },
       );
@@ -1610,14 +1635,14 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
       //   - did the leader return rows or reject for capability/membership? (SyncPull served vs rejected)
       //   - did rows land on B but with mismatched values?
       try {
-        const sharesA = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
-          vaultA, `SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
+        const sharesA = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
+          vaultA, `SELECT id, name, endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
         );
-        const sharesB = await sqlQuery<{ id: string; name: string; device_endpoint_id: string }>(
-          vaultB, `SELECT id, name, device_endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
+        const sharesB = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
+          vaultB, `SELECT id, name, endpoint_id FROM haex_peer_shares WHERE space_id = ?1`, [spaceId],
         );
-        const devicesB = await sqlQuery<{ device_endpoint_id: string }>(
-          vaultB, `SELECT device_endpoint_id FROM haex_space_devices WHERE space_id = ?1`, [spaceId],
+        const devicesB = await sqlQuery<{ endpoint_id: string }>(
+          vaultB, `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`, [spaceId],
         );
         const membersB = await sqlQuery<{ identity_id: string; role: string }>(
           vaultB, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
@@ -1628,9 +1653,9 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
         const membersA = await sqlQuery<{ identity_id: string; role: string }>(
           vaultA, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
         );
-        console.log(`[QUIC-DEBUG 1523] sharesA=${JSON.stringify(sharesA.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.device_endpoint_id.slice(0, 12) })))}`);
-        console.log(`[QUIC-DEBUG 1523] sharesB=${JSON.stringify(sharesB.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.device_endpoint_id.slice(0, 12) })))}`);
-        console.log(`[QUIC-DEBUG 1523] devicesB=${JSON.stringify(devicesB.map(d => d.device_endpoint_id.slice(0, 12)))}`);
+        console.log(`[QUIC-DEBUG 1523] sharesA=${JSON.stringify(sharesA.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.endpoint_id.slice(0, 12) })))}`);
+        console.log(`[QUIC-DEBUG 1523] sharesB=${JSON.stringify(sharesB.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.endpoint_id.slice(0, 12) })))}`);
+        console.log(`[QUIC-DEBUG 1523] devicesB=${JSON.stringify(devicesB.map(d => d.endpoint_id.slice(0, 12)))}`);
         console.log(`[QUIC-DEBUG 1523] membersB=${membersB.length} membersA=${membersA.length} ucansB=${JSON.stringify(ucansB.map(u => ({ aud: u.audience_did.slice(0, 24), cap: u.capability, exp: u.expires_at })))}`);
       } catch (diagErr) {
         console.log(`[QUIC-DEBUG 1523] state dump failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
@@ -1730,7 +1755,7 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
           shares: filtered.map(s => ({
             id: (s.id ?? '').slice(0, 8),
             name: s.name,
-            dev: (s.deviceEndpointId ?? '').slice(0, 12),
+            dev: (s.endpointId ?? '').slice(0, 12),
           })),
           nodeId: peerStore?.nodeId ?? null,
           currentTextSample: (document.body.textContent ?? '').slice(0, 300),

@@ -51,6 +51,8 @@ test.describe("storage: P2P connectivity between vaults", () => {
   const testDir = `/tmp/e2e-p2p-test-${Date.now()}`;
   let ucanToken: string;
   let ownerIdentityId: string;
+  let ownDidA: string;
+  let ownDidB: string;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -137,12 +139,22 @@ test.describe("storage: P2P connectivity between vaults", () => {
     // Create the space record on both vaults so FK constraints on
     // haex_peer_shares and haex_space_devices are satisfied.
     // haex_spaces requires owner_identity_id — use the vault's own identity.
+    // We also capture each vault's own DID so subsequent INSERTs into the
+    // CRDT-synced device tables can carry authored_by_did. The Phase 2
+    // haex_space_devices_ensure_refs / haex_peer_shares_ensure_refs triggers
+    // need that DID to auto-create the haex_devices stub the FK points at.
     for (const vault of [vaultA, vaultB]) {
-      const [[identityId]] = await vault.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
-        sql: "SELECT id FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+      const rows = await vault.invokeTauriCommand<[string, string][]>("sql_select_with_crdt", {
+        sql: "SELECT id, did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
         params: [],
       });
-      if (vault === vaultA) ownerIdentityId = identityId;
+      const [identityId, identityDid] = rows[0];
+      if (vault === vaultA) {
+        ownerIdentityId = identityId;
+        ownDidA = identityDid;
+      } else {
+        ownDidB = identityDid;
+      }
 
       await vault.invokeTauriCommand("sql_execute_with_crdt", {
         sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
@@ -232,12 +244,21 @@ test.describe("storage: P2P connectivity between vaults", () => {
 
   test("register share on Vault A via DB", async () => {
     const shareId = crypto.randomUUID();
+    // device_id must be the real haex_devices.id for this vault (Phase 2 FK +
+    // UNIQUE(endpoint_id) — a random UUID would make the ensure-refs trigger
+    // collide on the existing own row's endpoint_id and fail the FK).
+    const ownDeviceA = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdA],
+    });
+    expect(ownDeviceA.length).toBe(1);
+    const localDeviceIdA = ownDeviceA[0][0];
 
     // Insert peer share record (CRDT table)
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [shareId, spaceId, nodeIdA, "TestShare", testDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [shareId, spaceId, localDeviceIdA, nodeIdA, "TestShare", testDir, ownDidA],
     });
 
     // Reload shares into the running endpoint
@@ -249,28 +270,52 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("register devices in shared space on both vaults", async () => {
-    const deviceIdA = crypto.randomUUID();
-    const deviceIdB = crypto.randomUUID();
+    const rowAA = crypto.randomUUID();
+    const rowAB = crypto.randomUUID();
+    const rowBB = crypto.randomUUID();
+    // haex_space_devices.device_id is a SQL FK on haex_devices.id (Phase 2).
+    // For cross-vault stability the row each vault publishes must keep using
+    // the SAME device_id every time: that's the publisher vault's actual
+    // haex_devices.id. UNIQUE(endpoint_id) on haex_devices means the
+    // ensure-refs trigger would otherwise leave a stale stub from a previous
+    // test run (random id, same endpoint_id) blocking the new stub, and the
+    // new random device_id would have no FK parent.
+    const ownDeviceA = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdA],
+    });
+    expect(ownDeviceA.length).toBe(1);
+    const ownDeviceIdA = ownDeviceA[0][0];
+
+    const ownDeviceB = await vaultB.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdB],
+    });
+    expect(ownDeviceB.length).toBe(1);
+    const ownDeviceIdB = ownDeviceB[0][0];
 
     // Register Vault A's device on Vault A
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [deviceIdA, spaceId, nodeIdA, "VaultA", relayUrlA],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      params: [rowAA, spaceId, ownDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, ownDidA],
     });
 
-    // Register Vault B's device on Vault A (so A knows B is allowed)
+    // Register Vault B's device on Vault A (so A knows B is allowed). Use
+    // Vault B's REAL haex_devices.id so the row is stable across runs and
+    // matches what Vault B itself would publish via CRDT in production.
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-            VALUES (?1, ?2, ?3, ?4)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdB, "VaultB"],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [rowAB, spaceId, ownDeviceIdB, nodeIdB, "VaultB", "desktop", ownDidB],
     });
 
-    // Register Vault A's device on Vault B (so B knows how to reach A)
+    // Register Vault A's device on Vault B — same stability argument: use
+    // Vault A's real haex_devices.id as device_id on Vault B's side.
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name, relay_url)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [deviceIdB, spaceId, nodeIdA, "VaultA", relayUrlA],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, relay_url, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      params: [rowBB, spaceId, ownDeviceIdA, nodeIdA, "VaultA", "desktop", relayUrlA, ownDidA],
     });
 
     // Reload on both sides
@@ -484,20 +529,38 @@ test.describe("storage: P2P connectivity between vaults", () => {
   // ===========================================================================
 
   test("unregistered peer cannot list shares", async () => {
-    // Create a third ephemeral vault automation (simulated by starting
-    // a new endpoint on Vault B after removing its registration from Vault A)
+    // Drive the canonical "remove member" flow on Vault A via the Pinia
+    // store — same code path the Settings → Space → Members → Remove UI
+    // button takes. The action drops Vault B's haex_space_devices rows for
+    // this space (matched on authored_by_did), revokes their UCAN tokens,
+    // and calls peer_storage_reload_shares so Vault A's QUIC endpoint stops
+    // recognising Vault B's UCAN against this space. The handle_request
+    // gate then rejects the listing since the UCAN's claimed space is no
+    // longer in Vault B's allowed_spaces for this connection.
+    const removalResult = await vaultA.executeScript<string | null>(`
+      return (async () => {
+        const app = document.getElementById('__nuxt')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const spacesStore = pinia?._s?.get('spacesStore');
+        if (!spacesStore?.removeSpaceMemberAsync) {
+          return 'spacesStore.removeSpaceMemberAsync unavailable';
+        }
+        try {
+          await spacesStore.removeSpaceMemberAsync(${JSON.stringify(spaceId)}, ${JSON.stringify(ownDidB)});
+          return null;
+        } catch (e) {
+          return e?.message || String(e);
+        }
+      })();
+    `);
+    expect(removalResult).toBeNull();
 
-    // Remove Vault B from Vault A's allowed peers
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `DELETE FROM haex_space_devices WHERE device_endpoint_id = ?1`,
-      params: [nodeIdB],
-    });
-    await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
-
-    // Wait briefly for state to propagate
+    // The reload happens inside removeSpaceMemberAsync, but give the iroh
+    // accept loop a tick to observe the new allowed_peers map.
     await new Promise((r) => setTimeout(r, 500));
 
-    // Vault B should now be rejected
+    // Vault B's UCAN claims spaceId but Vault B is no longer registered
+    // there → handle_request's per-UCAN-space gate rejects.
     await expect(
       vaultB.invokeTauriCommand<FileEntry[]>("peer_storage_remote_list", {
         nodeId: nodeIdA,
@@ -507,11 +570,17 @@ test.describe("storage: P2P connectivity between vaults", () => {
       })
     ).rejects.toThrow();
 
-    // Re-register Vault B for subsequent tests
+    // Re-register Vault B for subsequent tests. Reuse the existing
+    // haex_devices stub so the FK + UNIQUE(endpoint_id) constraints pass.
+    const existingStubB = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdB],
+    });
+    const deviceIdB = existingStubB.length > 0 ? existingStubB[0][0] : crypto.randomUUID();
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_space_devices (id, space_id, device_endpoint_id, device_name)
-            VALUES (?1, ?2, ?3, ?4)`,
-      params: [crypto.randomUUID(), spaceId, nodeIdB, "VaultB"],
+      sql: `INSERT INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [crypto.randomUUID(), spaceId, deviceIdB, nodeIdB, "VaultB", "desktop", ownDidB],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
   });
@@ -537,10 +606,15 @@ test.describe("storage: P2P connectivity between vaults", () => {
       path: `${otherDir}/secret.txt`,
       data: Buffer.from("secret data").toString("base64"),
     });
+    const ownDeviceForShare = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+      params: [nodeIdA],
+    });
+    expect(ownDeviceForShare.length).toBe(1);
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_peer_shares (id, space_id, device_endpoint_id, name, local_path)
-            VALUES (?1, ?2, ?3, ?4, ?5)`,
-      params: [otherShareId, otherSpaceId, nodeIdA, "SecretShare", otherDir],
+      sql: `INSERT INTO haex_peer_shares (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+      params: [otherShareId, otherSpaceId, ownDeviceForShare[0][0], nodeIdA, "SecretShare", otherDir, ownDidA],
     });
     await vaultA.invokeTauriCommand("peer_storage_reload_shares", {});
 
