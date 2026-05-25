@@ -95,49 +95,53 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
     await setInvitePolicyViaUI(vaultB, "nobody");
     console.log(`[QUIC-DEBUG] setInvitePolicyViaUI took ${Date.now() - t0Policy}ms`);
 
-    // Verify policy was applied
-    const policy = await sqlQuery<{ policy: string }>(
-      vaultB,
-      `SELECT policy FROM haex_invite_policy WHERE id = 'default'`,
-    );
-    expect(policy.length).toBe(1);
-    expect(policy[0].policy).toBe("nobody");
-    console.log(`[QUIC-DEBUG] Policy confirmed: ${policy[0].policy}`);
+    // try/finally: the policy MUST be reset to 'all' even when assertions
+    // below throw, otherwise downstream serial tests run under a "nobody"
+    // policy and fail with confusing errors far from this test.
+    try {
+      // Verify policy was applied
+      const policy = await sqlQuery<{ policy: string }>(
+        vaultB,
+        `SELECT policy FROM haex_invite_policy WHERE id = 'default'`,
+      );
+      expect(policy.length).toBe(1);
+      expect(policy[0].policy).toBe("nobody");
+      console.log(`[QUIC-DEBUG] Policy confirmed: ${policy[0].policy}`);
 
-    // Attempt to send an invite — should be rejected
-    const newSpaceId = crypto.randomUUID();
-    console.log(`[QUIC-DEBUG] Sending blocked invite from A→B (spaceId=${newSpaceId.slice(0, 8)}…, target=${nodeIdB?.slice(0, 12)}…)`);
-    const t0Invite = Date.now();
-    const accepted = await vaultA.invokeTauriCommand<boolean>(
-      "local_delivery_push_invite",
-      {
-        targetEndpointId: nodeIdB,
-        spaceId: newSpaceId,
-        spaceName: "Blocked Space",
-        spaceType: "local",
-        tokenId: crypto.randomUUID(),
-        capabilities: ["space/read"],
-        includeHistory: false,
-        inviterDid: identityA.did,
-        inviterLabel: "Vault A",
-        spaceEndpoints: [nodeIdA],
-        originUrl: null,
-        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-      },
-    );
-    console.log(`[QUIC-DEBUG] local_delivery_push_invite returned: ${accepted} (took ${Date.now() - t0Invite}ms)`);
-    expect(accepted).toBe(false);
+      // Attempt to send an invite — should be rejected
+      const newSpaceId = crypto.randomUUID();
+      console.log(`[QUIC-DEBUG] Sending blocked invite from A→B (spaceId=${newSpaceId.slice(0, 8)}…, target=${nodeIdB?.slice(0, 12)}…)`);
+      const t0Invite = Date.now();
+      const accepted = await vaultA.invokeTauriCommand<boolean>(
+        "local_delivery_push_invite",
+        {
+          targetEndpointId: nodeIdB,
+          spaceId: newSpaceId,
+          spaceName: "Blocked Space",
+          spaceType: "local",
+          tokenId: crypto.randomUUID(),
+          capabilities: ["space/read"],
+          includeHistory: false,
+          inviterDid: identityA.did,
+          inviterLabel: "Vault A",
+          spaceEndpoints: [nodeIdA],
+          originUrl: null,
+          expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        },
+      );
+      console.log(`[QUIC-DEBUG] local_delivery_push_invite returned: ${accepted} (took ${Date.now() - t0Invite}ms)`);
+      expect(accepted).toBe(false);
 
-    // No pending invite should have been created
-    const blocked = await sqlQuery<{ id: string }>(
-      vaultB,
-      `SELECT id FROM haex_pending_invites WHERE space_id = ?1`,
-      [newSpaceId],
-    );
-    expect(blocked.length).toBe(0);
-
-    // Reset policy back to 'all'
-    await setInvitePolicyViaUI(vaultB, "all");
+      // No pending invite should have been created
+      const blocked = await sqlQuery<{ id: string }>(
+        vaultB,
+        `SELECT id FROM haex_pending_invites WHERE space_id = ?1`,
+        [newSpaceId],
+      );
+      expect(blocked.length).toBe(0);
+    } finally {
+      await setInvitePolicyViaUI(vaultB, "all");
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -263,9 +267,13 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
         vaultB,
         `SELECT id FROM haex_pending_invites WHERE space_id = 'default' AND status = 'pending'`,
       );
-      // This SHOULD have a pending invite, but with hardcoded 'default' ID it won't.
-      // If this assertion fails, it means the default space still uses 'default' as ID.
+      // The whole point of this regression check is the ID-collision case:
+      // the hardcoded 'default' spaceId clashes with B's existing default
+      // space and the invite gets dropped on B's side. Assert that — without
+      // the assertion this branch was a silent no-op that would never
+      // surface a regression.
       console.log(`[QUIC] Default space invite: pending=${pendingDefault.length} (0 = ID collision bug)`);
+      expect(pendingDefault.length).toBe(0);
     } else {
       // New-style vault: default space has a random UUID → no collision possible
       console.log("[QUIC] Default space has unique ID — no collision risk");

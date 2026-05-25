@@ -122,17 +122,26 @@ export function registerSetupPhase(state: QuicTestState): void {
       claims: [{ type: "endpointId", value: nodeIdB }],
     });
 
+    // Ensure this test validates a fresh import, not a leftover row from a
+    // prior run in the same session. Without this, the DB-side assertions
+    // below would pass trivially even if every UI step was a no-op.
+    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: `DELETE FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
+      params: [identityB.did],
+    });
+
     // Navigate to Settings → Contacts
     await openSettingsCategory(vaultA, "contacts");
     await wait(500);
 
-    // Click "Add" button
+    // Click "Add" button — every step from here is required for the import to
+    // land, so a false return value means the import never happened.
     const addClicked = await clickTestId(vaultA, "contacts-add-trigger");
-    console.log(`[QUIC] Add contact button clicked: ${addClicked}`);
+    expect(addClicked).toBe(true);
     await wait(800);
 
     const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
-    console.log(`[QUIC] Add contact dialog open: ${dialogOpen}`);
+    expect(dialogOpen).toBe(true);
 
     // Click the "From file" tab explicitly
     // reka-ui TabsTrigger activates on mousedown.left, NOT click — .click() won't work
@@ -148,7 +157,7 @@ export function registerSetupPhase(state: QuicTestState): void {
       fileTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
       return true;
     `);
-    console.log(`[QUIC] File tab switched: ${tabSwitched}`);
+    expect(tabSwitched).toBe(true);
     await wait(300);
 
     // Paste JSON into the textarea
@@ -161,17 +170,17 @@ export function registerSetupPhase(state: QuicTestState): void {
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
       return true;
     `);
-    console.log(`[QUIC] JSON pasted into textarea: ${pasted}`);
+    expect(pasted).toBe(true);
     await wait(300);
 
     // Click "Preview"
     const previewClicked = await clickTestId(vaultA, "contacts-import-preview");
-    console.log(`[QUIC] Preview button clicked: ${previewClicked}`);
+    expect(previewClicked).toBe(true);
     await wait(500);
 
     // Click "Add" to confirm import
     const submitClicked = await clickTestId(vaultA, "contacts-import-submit");
-    console.log(`[QUIC] Import submit clicked: ${submitClicked}`);
+    expect(submitClicked).toBe(true);
     await wait(1000);
 
     // Verify contact exists in DB

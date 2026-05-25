@@ -108,6 +108,9 @@ export async function sendInviteViaUI(
     return false;
   `);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
+  if (!contactSelected) {
+    throw new Error(`[QUIC] Could not select contact "${contactLabel}" in invite dialog`);
+  }
   await wait(300);
 
   // Close dropdown
@@ -174,9 +177,7 @@ export async function acceptInviteViaUI(
       return rows.length > 0 && rows[0].status === "accepted";
     },
     { timeout: 45_000, interval: 1_000, label: "invite accepted" },
-  ).catch(() => {
-    console.log("[QUIC] Invite not yet accepted after polling — proceeding");
-  });
+  );
 }
 
 /**

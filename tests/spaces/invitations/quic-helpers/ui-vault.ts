@@ -271,12 +271,39 @@ export async function startP2PEndpoint(vault: VaultAutomation): Promise<string> 
     { timeout: 30_000, interval: 1_000, label: "P2P running" },
   );
 
-  // 5. Wait for leaders to initialize (startLocalSpaceLeadersAsync is part of startAsync)
-  await wait(3000);
+  // 5. If the vault already has local spaces, the leader for at least one of
+  // them must come up after `startAsync`. Poll until that's true so later
+  // QUIC steps don't run on a half-initialized peer. A fresh vault with no
+  // local spaces yet legitimately has isLeader=false, so skip the wait there.
+  const localSpaceCount = await vault
+    .invokeTauriCommand<Array<[number]>>("sql_select_with_crdt", {
+      sql: `SELECT COUNT(*) FROM haex_spaces WHERE type = 'local'`,
+      params: [],
+    })
+    .then((rows) => Number(rows?.[0]?.[0] ?? 0))
+    .catch(() => 0);
 
-  // 6. Verify leaders are running
-  const ds = await vault.invokeTauriCommand<{ isLeader: boolean; activeSpaces: string[] }>("local_delivery_status", {});
-  console.log(`[QUIC] After UI start: is_leader=${ds.isLeader}, active_spaces=[${ds.activeSpaces?.join(', ')}]`);
+  if (localSpaceCount > 0) {
+    const ds = await pollUntil(
+      async () => {
+        const current = await vault.invokeTauriCommand<{ isLeader: boolean; activeSpaces: string[] }>(
+          "local_delivery_status",
+          {},
+        );
+        return current.isLeader && (current.activeSpaces?.length ?? 0) > 0 ? current : null;
+      },
+      { timeout: 15_000, interval: 500, label: "local delivery leader ready" },
+    );
+    console.log(`[QUIC] After UI start: is_leader=${ds!.isLeader}, active_spaces=[${ds!.activeSpaces?.join(', ')}]`);
+  } else {
+    // No local spaces yet — leader is expected to be inactive. Log once for
+    // visibility and move on.
+    const ds = await vault.invokeTauriCommand<{ isLeader: boolean; activeSpaces: string[] }>(
+      "local_delivery_status",
+      {},
+    );
+    console.log(`[QUIC] After UI start: is_leader=${ds.isLeader} (no local spaces yet, expected)`);
+  }
 
   return info!.nodeId;
 }

@@ -343,6 +343,11 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
       };
     `);
     console.log(`[QUIC] Detail-view state: create_btn_visible=${inDetail.createVisible} back_btn=${inDetail.backVisible} header="${inDetail.title}"`);
+    // The list view's "Create" button vanishes and a back button appears once
+    // we're in the detail view. Without these the share-visibility check
+    // would match against the still-mounted list view's text.
+    expect(inDetail.backVisible).toBe(true);
+    expect(inDetail.createVisible).toBe(false);
 
     // SpaceShares renders shares grouped by device. The share's `name`
     // appears as visible text somewhere in the detail view. Poll a

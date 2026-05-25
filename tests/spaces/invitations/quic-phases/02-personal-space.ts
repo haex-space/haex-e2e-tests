@@ -82,21 +82,34 @@ export function registerPersonalSpacePhase(state: QuicTestState): void {
     // correctly skips and never writes haex_pending_invites, and the poll
     // below would time out by design. Cleaning state restores the test's
     // precondition so each run sees a fresh delivery.
+    //
+    // The DELETEs must succeed — silently swallowing a failure here would
+    // leave stale rows that satisfy the poll for the *previous* invite,
+    // hiding genuine PushInvite delivery regressions. The `local_delivery_stop`
+    // call is best-effort because the sync loop may not be running yet.
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `DELETE FROM haex_pending_invites WHERE space_id = ?1`,
       params: [personalSpaceId],
-    }).catch(() => { /* best effort */ });
+    });
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `DELETE FROM haex_spaces WHERE id = ?1`,
       params: [personalSpaceId],
-    }).catch(() => { /* best effort */ });
-    // Also stop any sync loop tied to this space on B and drop any
-    // outbox entry on A that could double-fire ahead of the new invite.
+    });
     try { await vaultB.invokeTauriCommand("local_delivery_stop", { spaceId: personalSpaceId }); } catch { /* ok */ }
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `DELETE FROM haex_invite_outbox WHERE space_id = ?1`,
       params: [personalSpaceId],
-    }).catch(() => { /* best effort */ });
+    });
+
+    // Confirm the precondition holds before sending the new invite — if a
+    // stale pending row is still around the poll below would just observe it
+    // and return spurious success.
+    const stalePending = await sqlQuery<{ id: string }>(
+      vaultB,
+      `SELECT id FROM haex_pending_invites WHERE space_id = ?1`,
+      [personalSpaceId],
+    );
+    expect(stalePending.length).toBe(0);
 
     // Debug: check QUIC connectivity before invite
     console.log(`[QUIC-DEBUG] Personal space invite — nodeIdA=${nodeIdA?.slice(0, 12)}… nodeIdB=${nodeIdB?.slice(0, 12)}…`);
