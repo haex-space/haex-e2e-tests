@@ -96,28 +96,139 @@ export async function sendInviteViaUI(
   await clickTestId(vault, `space-invite-option-contact-${targetSpaceId}`);
   await wait(1000);
 
-  // Select contact. The dropdown is populated async from the Pinia
-  // contacts store, so the single-shot query used to race the load. Poll
-  // until the item appears, but treat a non-match as a soft warning
-  // rather than a hard fail — the invite flow has its own end-to-end
-  // assertions (poll for invite delivery on Vault B); enforcing the
-  // dropdown match here turned out to be locale- and Nuxt-UI-version
-  // sensitive enough that the throw masked unrelated UI variants. The
-  // log line still flags the regression when something genuinely breaks.
-  await clickTestId(vault, "invite-contact-select");
+  // Select contact. Two things have historically broken this step:
+  //   1) The Pinia contacts store had stale data right after the import flow
+  //      (no DB subscription). The store now reloads on dialog open
+  //      (SpaceInviteDialog.vue watch(open)), so this is no longer racy.
+  //   2) The combobox trigger uses reka-ui, which activates on `mousedown`
+  //      not `click()`. `data-testid="invite-contact-select"` lives on the
+  //      Nuxt-UI wrapper, so `el.click()` on it does NOT open the popup —
+  //      the ComboboxPortal stays unmounted and no `[data-slot="item"]`
+  //      ever appears. We dispatch mousedown on the inner `role=combobox`
+  //      element (same gotcha as the Tabs trigger in 01-setup.ts).
+  //
+  // Logging is deliberately verbose: when this breaks again in CI, the
+  // failure mode (store empty? popup not open? item label mismatch?)
+  // must be unambiguous from the log alone — debugging Playwright traces
+  // from CI is painful.
+
+  // Pre-flight: what does the app think we have to choose from?
+  const preflight = await vault.executeScript<{
+    dialogCount: number;
+    triggerFound: boolean;
+    triggerTag: string | null;
+    comboboxFound: boolean;
+    storeContacts: { id: string; name: string; did: string }[];
+  }>(`
+    const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
+    const combobox = wrapper?.querySelector('[role="combobox"]')
+      ?? document.querySelector('[data-testid="invite-contact-select"] [role="combobox"]');
+    let storeContacts = [];
+    try {
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const identityStore = pinia?._s?.get('identityStore');
+      const list = identityStore?.contacts ?? [];
+      storeContacts = list.map(c => ({ id: c.id, name: c.name, did: (c.did || '').slice(0, 30) }));
+    } catch (e) { /* best-effort */ }
+    return {
+      dialogCount: document.querySelectorAll('[role="dialog"]').length,
+      triggerFound: !!wrapper,
+      triggerTag: wrapper?.tagName ?? null,
+      comboboxFound: !!combobox,
+      storeContacts,
+    };
+  `);
+  console.log(`[QUIC-DEBUG] preflight: dialogs=${preflight.dialogCount} trigger=${preflight.triggerFound}(${preflight.triggerTag}) combobox=${preflight.comboboxFound} contacts=${JSON.stringify(preflight.storeContacts)}`);
+
+  // Open the combobox via reka-ui-compatible events (mousedown), with a
+  // click() fallback. The trigger lives inside the wrapper that carries
+  // the testid.
+  const popupOpened = await vault.executeScript<{ used: string; expanded: boolean }>(`
+    const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
+    if (!wrapper) return { used: 'none', expanded: false };
+    const trigger = wrapper.querySelector('[role="combobox"]') ?? wrapper.querySelector('button') ?? wrapper;
+    // reka-ui's ComboboxTrigger listens to pointerdown/mousedown.
+    trigger.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+    trigger.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    trigger.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+    trigger.click?.();
+    return {
+      used: trigger.tagName + (trigger.getAttribute('role') ? '['+trigger.getAttribute('role')+']' : ''),
+      expanded: trigger.getAttribute('aria-expanded') === 'true' || trigger.getAttribute('data-state') === 'open',
+    };
+  `);
+  console.log(`[QUIC-DEBUG] open-trigger: used=${popupOpened.used} expanded=${popupOpened.expanded}`);
   await wait(500);
+
+  // Snapshot the portal: combobox-content gets teleported under <body>.
+  const portalState = await vault.executeScript<{ contentFound: boolean; itemCount: number; itemLabels: string[]; listboxRole: boolean }>(`
+    // reka-ui Combobox renders ComboboxContent in a portal under body.
+    const items = [...document.querySelectorAll('[data-slot="item"]')];
+    const listbox = !!document.querySelector('[role="listbox"]');
+    const content = !!document.querySelector('[data-reka-popper-content-wrapper], [role="listbox"]');
+    return {
+      contentFound: content,
+      itemCount: items.length,
+      itemLabels: items.slice(0, 10).map(el => (el.textContent || '').trim().slice(0, 40)),
+      listboxRole: listbox,
+    };
+  `);
+  console.log(`[QUIC-DEBUG] portal: content=${portalState.contentFound} listbox=${portalState.listboxRole} items=${portalState.itemCount} labels=${JSON.stringify(portalState.itemLabels)}`);
 
   const contactSelected = await pollUntil(
     () => vault.executeScript<boolean>(`
       const label = ${JSON.stringify(contactLabel)};
       const items = [...document.querySelectorAll('[data-slot="item"]')];
       const match = items.find(el => el.textContent?.includes(label));
-      if (match) { match.click(); return true; }
+      if (match) {
+        // reka-ui ComboboxItem responds to pointerup/click. Send both for safety.
+        match.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+        match.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+        match.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+        match.click();
+        return true;
+      }
       return false;
     `),
     { timeout: 10_000, interval: 500, label: `contact "${contactLabel}" visible in dropdown` },
   ).catch(() => false);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
+
+  // Re-snapshot AFTER selection to confirm the model picked it up.
+  const postSelect = await vault.executeScript<{ selectedIds: string[]; submitEnabled: boolean }>(`
+    let selectedIds = [];
+    try {
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      // The dialog state isn't in Pinia — fall back to checking the rendered
+      // chips/badges inside the wrapper. SelectMenu shows selected entries
+      // as pill-style children of the trigger.
+      const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
+      selectedIds = wrapper
+        ? [...wrapper.querySelectorAll('[data-slot="value"], [data-slot="chip"], button span')].map(el => (el.textContent || '').trim()).filter(Boolean).slice(0, 5)
+        : [];
+    } catch (e) { /* best-effort */ }
+    const submit = document.querySelector('[data-testid="invite-submit"]');
+    return {
+      selectedIds,
+      submitEnabled: !!submit && !(submit instanceof HTMLButtonElement && submit.disabled),
+    };
+  `);
+  console.log(`[QUIC-DEBUG] post-select: visible=${JSON.stringify(postSelect.selectedIds)} submitEnabled=${postSelect.submitEnabled}`);
+
+  if (!contactSelected) {
+    // No silent pass: hide-the-failure bit us before (test reported success
+    // while invite-submit fired with empty selection → empty outbox → 120s
+    // delivery timeout downstream). The diagnostic dumps above make the
+    // failure mode visible in the log.
+    throw new Error(
+      `[QUIC] Contact "${contactLabel}" not selectable in invite dialog. ` +
+      `Store had ${preflight.storeContacts.length} contacts (${preflight.storeContacts.map(c => c.name).join(', ')}); ` +
+      `portal mounted: ${portalState.contentFound}; items rendered: ${portalState.itemCount}; ` +
+      `labels seen: ${JSON.stringify(portalState.itemLabels)}.`,
+    );
+  }
   await wait(300);
 
   // Close dropdown

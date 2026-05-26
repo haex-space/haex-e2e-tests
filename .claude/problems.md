@@ -708,3 +708,32 @@ pnpm test:headed
 # oder
 pnpm test:debug  # Mit Playwright Inspector
 ```
+
+---
+
+## Problem 8: QUIC Personal-Invite Pipeline-Fail — Contact-Dropdown öffnet nicht (2026-05-26)
+
+**Symptom:** `tests/spaces/invitations/quic-phases/02-personal-space.ts:71` "send invite to Personal space" timeoutet nach 120s × 3 Retries.
+
+**Trügerische Befunde im Log:**
+- Poll `haex_pending_invites` auf Vault B bleibt leer
+- `Outbox for Personal space: []` direkt nach `sendInviteViaUI` — keine Delivery-Frage!
+- `[QUIC] Contact selected: false` — Helper hat Kontakt nicht ausgewählt
+- Contact-Import in Phase 01 IS grün (`haex_identities` + `haex_identity_claims` korrekt)
+
+**Root Cause:** `clickTestId(vault, "invite-contact-select")` → `el.click()`. Aber `data-testid="invite-contact-select"` liegt auf dem `UiSelectMenu`-Wrapper, der reka-ui's `ComboboxRoot` umgibt. **reka-ui-Combobox-Trigger reagieren auf `mousedown`/`pointerdown`, nicht auf `click()`** — derselbe Gotcha wie der `TabsTrigger` (siehe Kommentar in `01-setup.ts:156`). Folge: ComboboxPortal mountet nie, `[data-slot="item"]` matcht nichts, Polling läuft 10s leer, Invite-Submit feuert mit leerer Selection → Backend schreibt keine `haex_invite_outbox`-Row.
+
+**Store-Seite (haex-vault) ist NICHT das Problem:**
+- `useIdentityStore` reloaded `identities.value` explizit nach jeder Mutation
+- `SpaceInviteDialog.vue:287-297` ruft `loadIdentitiesAsync()` im `watch(open)`, d.h. beim Öffnen des Dialogs nochmal aus DB
+
+**Fix:** [tests/spaces/invitations/quic-helpers/ui-spaces.ts](tests/spaces/invitations/quic-helpers/ui-spaces.ts) — `sendInviteViaUI` öffnet das Combobox jetzt via `mousedown`+`pointerdown`+`click` auf `[role="combobox"]` innerhalb des testid-Wrappers; dasselbe Event-Trio für die ComboboxItem-Auswahl; ausführliche Diagnose-Dumps (Store-Inhalte, Portal-Mount-State, Item-Labels) damit ein zukünftiger Failure die Ursache direkt loggt; `contactSelected=false` ist wieder Hard-Fail.
+
+**Maskierende Commits (alle rückblickend Workarounds, nicht Fixes):**
+- `fe7c04f` downgrade throw → soft warning
+- `aa44a60` poll for dropdown
+- `a7dcb1a` fail fast on UI preconditions
+
+**Lehre:** Bei reka-ui-Komponenten (Tabs, Combobox, Select, Dropdown) immer `mousedown`+`pointerdown` dispatchen, nicht `el.click()`.
+
+**Status:** Fix im Branch `refactor/split-quic-invite-flow`, wartet auf nächsten CI-Run.
