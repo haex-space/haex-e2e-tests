@@ -96,17 +96,22 @@ export async function sendInviteViaUI(
   await clickTestId(vault, `space-invite-option-contact-${targetSpaceId}`);
   await wait(1000);
 
-  // Select contact
+  // Select contact. The dropdown is populated async from the Pinia
+  // contacts store, so a single try races the load on cold UIs. Poll
+  // until the item appears (or the timeout hits) before failing.
   await clickTestId(vault, "invite-contact-select");
   await wait(500);
 
-  const contactSelected = await vault.executeScript<boolean>(`
-    const label = ${JSON.stringify(contactLabel)};
-    const items = [...document.querySelectorAll('[data-slot="item"]')];
-    const match = items.find(el => el.textContent?.includes(label));
-    if (match) { match.click(); return true; }
-    return false;
-  `);
+  const contactSelected = await pollUntil(
+    () => vault.executeScript<boolean>(`
+      const label = ${JSON.stringify(contactLabel)};
+      const items = [...document.querySelectorAll('[data-slot="item"]')];
+      const match = items.find(el => el.textContent?.includes(label));
+      if (match) { match.click(); return true; }
+      return false;
+    `),
+    { timeout: 10_000, interval: 500, label: `contact "${contactLabel}" visible in dropdown` },
+  ).catch(() => false);
   console.log(`[QUIC] Contact selected: ${contactSelected}`);
   if (!contactSelected) {
     throw new Error(`[QUIC] Could not select contact "${contactLabel}" in invite dialog`);
