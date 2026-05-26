@@ -69,32 +69,40 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     expect(ucanRows.length).toBeGreaterThanOrEqual(1);
     console.log(`[QUIC] Vault B has UCAN for space (capability=${ucanRows[0].capability}) ✓`);
 
-    // 4. Sanity check: root listing must NOT throw. If this fails, the
-    //    regression is even worse than the user reported (no UCAN at all,
-    //    not just for the subpath case).
-    const rootResult = await vaultB.executeScript<{ ok: boolean; data: string }>(`
-      const app = document.getElementById('__nuxt')?.__vue_app__;
-      const pinia = app?.config?.globalProperties?.$pinia;
-      // Pinia store id is 'peerStorageStore' (see usePeerStorageStore in
-      // src/stores/peer-storage.ts). Earlier diagnostic blocks in phase 4
-      // use 'peerStorage' which silently returns undefined — works there
-      // because the assertions look at DOM text, not the store value.
-      const peerStore = pinia?._s?.get('peerStorageStore');
-      if (!peerStore) {
-        return { ok: false, data: 'peerStorageStore not found in pinia' };
-      }
-      try {
-        // Make sure the in-memory shares list reflects the DB before the
-        // resolver runs. The orchestrator's CRDT subscription does this
-        // automatically when the share row arrives, but the test rig races
-        // with that subscription so a manual reload removes the flake.
-        await peerStore.loadSharesAsync();
-        const entries = await peerStore.remoteListAsync(${JSON.stringify(nodeIdA)}, '/');
-        return { ok: true, data: entries.map(e => e.name).join(',') };
-      } catch (e) {
-        return { ok: false, data: e?.message ?? String(e) };
-      }
-    `);
+    // 4. Sanity check: root listing must NOT throw AND must include the
+    //    share. If this fails, the regression is even worse than the user
+    //    reported (no UCAN at all, not just for the subpath case).
+    //
+    //    Polled because the share row reaches Vault B via CRDT, but the
+    //    leader on Vault A also needs its in-memory `shares` cache to
+    //    reflect the new row — which is asynchronous on both sides. A
+    //    one-shot `loadSharesAsync()` on B can fire before A's cache
+    //    catches up; we poll the leader's response instead.
+    const rootResult = (await pollUntil(
+      async () => {
+        const r = await vaultB.executeScript<{ ok: boolean; data: string }>(`
+          const app = document.getElementById('__nuxt')?.__vue_app__;
+          const pinia = app?.config?.globalProperties?.$pinia;
+          // Pinia store id is 'peerStorageStore' (see usePeerStorageStore in
+          // src/stores/peer-storage.ts). Earlier diagnostic blocks in phase 4
+          // use 'peerStorage' which silently returns undefined — works there
+          // because the assertions look at DOM text, not the store value.
+          const peerStore = pinia?._s?.get('peerStorageStore');
+          if (!peerStore) {
+            return { ok: false, data: 'peerStorageStore not found in pinia' };
+          }
+          try {
+            await peerStore.loadSharesAsync();
+            const entries = await peerStore.remoteListAsync(${JSON.stringify(nodeIdA)}, '/');
+            return { ok: true, data: entries.map(e => e.name).join(',') };
+          } catch (e) {
+            return { ok: false, data: e?.message ?? String(e) };
+          }
+        `);
+        return r.ok && r.data.includes(shareName) ? r : null;
+      },
+      { timeout: 30_000, interval: 1_000, label: `root listing on Vault B contains "${shareName}"` },
+    ))!;
     console.log(`[QUIC] Vault B root listing result: ok=${rootResult.ok} data="${rootResult.data}"`);
     expect(rootResult.ok).toBe(true);
     expect(rootResult.data).toContain(shareName);
@@ -103,24 +111,43 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     //    present this throws synchronously inside `remoteListAsync` with
     //    "No valid UCAN token for this peer's space". With the fix the
     //    leader returns the marker file we wrote in step 1.
-    const subpathResult = await vaultB.executeScript<{ ok: boolean; data: string }>(`
-      const app = document.getElementById('__nuxt')?.__vue_app__;
-      const pinia = app?.config?.globalProperties?.$pinia;
-      const peerStore = pinia?._s?.get('peerStorageStore');
-      if (!peerStore) {
-        return { ok: false, data: 'peerStorageStore not found in pinia' };
-      }
-      try {
-        await peerStore.loadSharesAsync();
-        const entries = await peerStore.remoteListAsync(
-          ${JSON.stringify(nodeIdA)},
-          '/' + ${JSON.stringify(shareName)},
-        );
-        return { ok: true, data: entries.map(e => e.name).join(',') };
-      } catch (e) {
-        return { ok: false, data: e?.message ?? String(e) };
-      }
-    `);
+    //
+    //    Polled for the same reason as root listing above: the leader's
+    //    in-memory share cache and Vault B's UCAN-cache hydration race
+    //    against the test rig. Once the marker file is visible at the
+    //    subpath, the regression is unambiguously not present.
+    //
+    //    UCAN failures are surfaced explicitly (returning `null` would let
+    //    the test silently time out with a generic message); pollUntil
+    //    returns the result the moment the assertion would pass.
+    const subpathResult = (await pollUntil(
+      async () => {
+        const r = await vaultB.executeScript<{ ok: boolean; data: string }>(`
+          const app = document.getElementById('__nuxt')?.__vue_app__;
+          const pinia = app?.config?.globalProperties?.$pinia;
+          const peerStore = pinia?._s?.get('peerStorageStore');
+          if (!peerStore) {
+            return { ok: false, data: 'peerStorageStore not found in pinia' };
+          }
+          try {
+            await peerStore.loadSharesAsync();
+            const entries = await peerStore.remoteListAsync(
+              ${JSON.stringify(nodeIdA)},
+              '/' + ${JSON.stringify(shareName)},
+            );
+            return { ok: true, data: entries.map(e => e.name).join(',') };
+          } catch (e) {
+            return { ok: false, data: e?.message ?? String(e) };
+          }
+        `);
+        // Fail fast on the UCAN error — polling won't change the verdict
+        // because the resolver throws synchronously on (endpointId, share)
+        // misses, and that's the regression we're hunting.
+        if (!r.ok && r.data.includes("No valid UCAN token")) return r;
+        return r.ok && r.data.includes("ucan-regression-marker.txt") ? r : null;
+      },
+      { timeout: 30_000, interval: 1_000, label: `subpath listing on Vault B contains marker file` },
+    ))!;
     console.log(`[QUIC] Vault B subpath listing result: ok=${subpathResult.ok} data="${subpathResult.data}"`);
 
     // The specific regression assertion — fails the moment the resolver
