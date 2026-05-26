@@ -727,7 +727,7 @@ pnpm test:debug  # Mit Playwright Inspector
 - `useIdentityStore` reloaded `identities.value` explizit nach jeder Mutation
 - `SpaceInviteDialog.vue:287-297` ruft `loadIdentitiesAsync()` im `watch(open)`, d.h. beim Öffnen des Dialogs nochmal aus DB
 
-**Fix:** [tests/spaces/invitations/quic-helpers/ui-spaces.ts](tests/spaces/invitations/quic-helpers/ui-spaces.ts) — `sendInviteViaUI` öffnet das Combobox jetzt via `mousedown`+`pointerdown`+`click` auf `[role="combobox"]` innerhalb des testid-Wrappers; dasselbe Event-Trio für die ComboboxItem-Auswahl; ausführliche Diagnose-Dumps (Store-Inhalte, Portal-Mount-State, Item-Labels) damit ein zukünftiger Failure die Ursache direkt loggt; `contactSelected=false` ist wieder Hard-Fail.
+**Fix:** [`tests/spaces/invitations/quic-helpers/ui-spaces.ts`](../tests/spaces/invitations/quic-helpers/ui-spaces.ts) — `sendInviteViaUI` öffnet das Combobox jetzt via `mousedown`+`pointerdown`+`click` auf `[role="combobox"]` innerhalb des testid-Wrappers; dasselbe Event-Trio für die ComboboxItem-Auswahl; ausführliche Diagnose-Dumps (Store-Inhalte, Portal-Mount-State, Item-Labels) damit ein zukünftiger Failure die Ursache direkt loggt; `contactSelected=false` ist wieder Hard-Fail.
 
 **Maskierende Commits (alle rückblickend Workarounds, nicht Fixes):**
 - `fe7c04f` downgrade throw → soft warning

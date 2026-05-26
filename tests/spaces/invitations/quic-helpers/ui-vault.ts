@@ -275,13 +275,16 @@ export async function startP2PEndpoint(vault: VaultAutomation): Promise<string> 
   // them must come up after `startAsync`. Poll until that's true so later
   // QUIC steps don't run on a half-initialized peer. A fresh vault with no
   // local spaces yet legitimately has isLeader=false, so skip the wait there.
-  const localSpaceCount = await vault
-    .invokeTauriCommand<Array<[number]>>("sql_select_with_crdt", {
-      sql: `SELECT COUNT(*) FROM haex_spaces WHERE type = 'local'`,
-      params: [],
-    })
-    .then((rows) => Number(rows?.[0]?.[0] ?? 0))
-    .catch(() => 0);
+  // Note: do NOT swallow SQL/IPC errors here with `.catch(() => 0)`. A real
+  // backend failure would silently take the "fresh vault" branch below and
+  // skip the leader-ready wait, returning a half-initialized peer that
+  // breaks later QUIC steps far from the root cause. Any error here is a
+  // genuine precondition failure and should surface immediately.
+  const localSpaceRows = await vault.invokeTauriCommand<Array<[number]>>("sql_select_with_crdt", {
+    sql: `SELECT COUNT(*) FROM haex_spaces WHERE type = 'local'`,
+    params: [],
+  });
+  const localSpaceCount = Number(localSpaceRows?.[0]?.[0] ?? 0);
 
   if (localSpaceCount > 0) {
     const ds = await pollUntil(
