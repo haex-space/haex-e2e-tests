@@ -105,12 +105,30 @@ export function registerLocalSpacePhase(state: QuicTestState): void {
       [nodeIdA],
     );
     expect(ownDeviceRows.length).toBe(1);
+
+    // The share folder MUST exist on disk before the row is attached:
+    // when Vault B accepts, its device row syncs to Vault A and triggers
+    // `peer_storage_reload_shares`, whose `reload_state_from_db` skips any
+    // share whose `local_path` is missing on disk. A share attached to a
+    // not-yet-created folder would silently drop out of Vault A's in-memory
+    // `shares` map and never be served — root listing on B comes back empty.
+    // (The working peer-connectivity spec creates its folder first for the
+    // same reason; Phase 5 only adds a marker file inside this folder.)
+    await vaultA.invokeTauriCommand("filesystem_mkdir", { path: shareLocalPath });
+
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_peer_shares
               (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
       params: [state.shareId, spaceId, ownDeviceRows[0].id, nodeIdA, shareName, shareLocalPath, identityA.did],
     });
+
+    // Mirror `peerStorageStore.addShareAsync`, which calls
+    // peer_storage_reload_shares after the insert. The raw-SQL path above
+    // fires the CRDT triggers but NOT this reload, so without it Vault A's
+    // in-memory `shares` map wouldn't pick up the new share until the next
+    // incidental reload — leaving the leader unable to serve it.
+    await vaultA.invokeTauriCommand("peer_storage_reload_shares");
 
     const rows = await sqlQuery<{ id: string; name: string; endpoint_id: string }>(
       vaultA,
