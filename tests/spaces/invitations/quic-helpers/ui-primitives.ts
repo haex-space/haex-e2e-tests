@@ -50,6 +50,69 @@ export async function clickTestId(vault: VaultAutomation, testId: string): Promi
   `);
 }
 
+// Shared JS snippet that dispatches the full reka-ui-compatible activation
+// sequence on `el`. reka-ui primitives (DropdownMenuTrigger, ComboboxTrigger,
+// ComboboxItem, TabsTrigger, …) react to pointerdown/mousedown — not to
+// `.click()` — and items additionally need pointerup before mouseup for the
+// selection to register. Keeping all five events here means we only get this
+// gotcha right in one place.
+const REKA_CLICK_SEQUENCE = `
+  el.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+  el.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+  el.dispatchEvent(new MouseEvent('pointerup', { button: 0, bubbles: true }));
+  el.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+  el.click?.();
+`;
+
+/**
+ * Activate a reka-ui primitive (trigger/item) via the full mousedown+click
+ * sequence. Use this instead of `clickTestId` for ComboboxTrigger,
+ * DropdownMenuTrigger, TabsTrigger, ComboboxItem, MenuItem, etc.
+ */
+export async function mousedownClickTestId(
+  vault: VaultAutomation,
+  testId: string,
+): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const el = document.querySelector('[data-testid="${testId}"]');
+    if (!el) return false;
+    ${REKA_CLICK_SEQUENCE}
+    return true;
+  `);
+}
+
+/** Same as `mousedownClickTestId` but takes an arbitrary CSS selector. */
+export async function mousedownClickSelector(
+  vault: VaultAutomation,
+  selector: string,
+): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return false;
+    ${REKA_CLICK_SEQUENCE}
+    return true;
+  `);
+}
+
+/**
+ * Like `mousedownClickSelector` but resolves the target element inside an
+ * `executeScript` block — useful when the element must be located by a
+ * predicate (e.g. textContent match) rather than a static selector.
+ *
+ * `finderExpression` runs in the page and must evaluate to an Element or null.
+ */
+export async function mousedownClickFound(
+  vault: VaultAutomation,
+  finderExpression: string,
+): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const el = (() => { ${finderExpression} })();
+    if (!el) return false;
+    ${REKA_CLICK_SEQUENCE}
+    return true;
+  `);
+}
+
 /** Set the value of an <input> using the native setter (triggers Vue reactivity). */
 export async function setInputValue(
   vault: VaultAutomation,
