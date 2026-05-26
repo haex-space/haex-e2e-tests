@@ -115,44 +115,49 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     //    share. If this fails, the regression is even worse than the user
     //    reported (no UCAN at all, not just for the subpath case).
     //
-    //    Polled because the share row reaches Vault B via CRDT, but the
-    //    leader on Vault A also needs its in-memory `shares` cache to
-    //    reflect the new row — which is asynchronous on both sides. A
-    //    one-shot `loadSharesAsync()` on B can fire before A's cache
-    //    catches up; we poll the leader's response instead.
-    let lastRootResult: { ok: boolean; data: string } = { ok: false, data: 'no attempt' };
-    const rootResult = (await pollUntil(
+    //    MUST use `remoteListAllSharesAsync`, NOT `remoteListAsync(node, '/')`.
+    //    By this point Vault A shares MULTIPLE spaces with B (the personal
+    //    space from phase 2 + this local space). For a root path the resolver
+    //    (`resolveRequestContext`) picks ONE space's UCAN non-deterministically
+    //    — see the comment on `remoteListAllSharesAsync` in
+    //    src/stores/peer-storage.ts. If it picks the other space, the leader
+    //    returns that space's (empty) share set: ok=true, data="". The
+    //    file-browser-root view uses `remoteListAllSharesAsync` for exactly
+    //    this reason; it fans out one request per shared space and tags each
+    //    entry with its origin spaceId.
+    //
+    //    Polled because the share row reaches Vault B via CRDT and the leader
+    //    needs its in-memory `shares` cache to reflect the new row — async on
+    //    both sides; a one-shot call can fire before the caches converge.
+    let lastRootData = 'no attempt';
+    const rootEntries = await pollUntil(
       async () => {
-        const r = await vaultB.executeScript<{ ok: boolean; data: string }>(`
+        const r = await vaultB.executeScript<{ ok: boolean; names: string[]; data: string }>(`
           const app = document.getElementById('__nuxt')?.__vue_app__;
           const pinia = app?.config?.globalProperties?.$pinia;
-          // Pinia store id is 'peerStorageStore' (see usePeerStorageStore in
-          // src/stores/peer-storage.ts). Earlier diagnostic blocks in phase 4
-          // use 'peerStorage' which silently returns undefined — works there
-          // because the assertions look at DOM text, not the store value.
           const peerStore = pinia?._s?.get('peerStorageStore');
           if (!peerStore) {
-            return { ok: false, data: 'peerStorageStore not found in pinia' };
+            return { ok: false, names: [], data: 'peerStorageStore not found in pinia' };
           }
           try {
             await peerStore.loadSharesAsync();
-            const entries = await peerStore.remoteListAsync(${JSON.stringify(nodeIdA)}, '/');
-            return { ok: true, data: entries.map(e => e.name).join(',') };
+            const entries = await peerStore.remoteListAllSharesAsync(${JSON.stringify(nodeIdA)});
+            const names = entries.map(e => e.name);
+            return { ok: true, names, data: names.join(',') };
           } catch (e) {
-            return { ok: false, data: e?.message ?? String(e) };
+            return { ok: false, names: [], data: e?.message ?? String(e) };
           }
         `);
-        lastRootResult = r;
-        return r.ok && r.data.includes(shareName) ? r : null;
+        lastRootData = `ok=${r.ok} data="${r.data}"`;
+        return r.ok && r.names.includes(shareName) ? r : null;
       },
       { timeout: 30_000, interval: 1_000, label: `root listing on Vault B contains "${shareName}"` },
     ).catch((err) => {
-      console.log(`[QUIC-DIAG] root listing never contained share. Last result: ok=${lastRootResult.ok} data="${lastRootResult.data}"`);
+      console.log(`[QUIC-DIAG] root listing never contained share. Last result: ${lastRootData}`);
       throw err;
-    }))!;
-    console.log(`[QUIC] Vault B root listing result: ok=${rootResult.ok} data="${rootResult.data}"`);
-    expect(rootResult.ok).toBe(true);
-    expect(rootResult.data).toContain(shareName);
+    });
+    console.log(`[QUIC] Vault B root listing result: names=${JSON.stringify(rootEntries!.names)}`);
+    expect(rootEntries!.names).toContain(shareName);
 
     // 5. THE REGRESSION REPRO — navigate INTO the share. With the bug
     //    present this throws synchronously inside `remoteListAsync` with
@@ -178,9 +183,14 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
           }
           try {
             await peerStore.loadSharesAsync();
+            // Pass the spaceId hint so resolveRequestContext picks THIS
+            // space's UCAN. Without it, the by-name lookup is ambiguous when
+            // the peer hosts shares in multiple spaces (personal + local
+            // here) and could resolve the wrong space's UCAN.
             const entries = await peerStore.remoteListAsync(
               ${JSON.stringify(nodeIdA)},
               '/' + ${JSON.stringify(shareName)},
+              ${JSON.stringify(spaceId)},
             );
             return { ok: true, data: entries.map(e => e.name).join(',') };
           } catch (e) {
