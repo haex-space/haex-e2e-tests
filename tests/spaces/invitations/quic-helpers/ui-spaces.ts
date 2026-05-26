@@ -91,10 +91,58 @@ export async function sendInviteViaUI(
     throw new Error(`[QUIC] Space "${spaceName}" not found in haex_spaces`);
   }
 
-  await clickTestId(vault, `space-invite-trigger-${targetSpaceId}`);
-  await wait(300);
-  await clickTestId(vault, `space-invite-option-contact-${targetSpaceId}`);
-  await wait(1000);
+  // The invite trigger is a UDropdownMenu (reka-ui). Same gotcha as
+  // the combobox below: reka-ui's DropdownMenuTrigger reacts to
+  // pointerdown/mousedown, not `click()`. Previous CI runs showed
+  // `preflight: dialogs=0 trigger=false` on first attempt and only
+  // recovered on Playwright retries — exactly this pattern.
+  const triggerOpened = await vault.executeScript<{ found: boolean; expanded: boolean }>(`
+    const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+    if (!el) return { found: false, expanded: false };
+    el.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+    el.click?.();
+    return {
+      found: true,
+      expanded: el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open',
+    };
+  `);
+  console.log(`[QUIC-DEBUG] invite-trigger: found=${triggerOpened.found} expanded=${triggerOpened.expanded}`);
+  // Poll for the menu portal to actually mount the contact option, so we
+  // don't race the click below. reka-ui mounts/unmounts the portal on each
+  // open; the item element won't exist until then.
+  const optionMounted = await pollUntil(
+    () => vault.executeScript<boolean>(`
+      return !!document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+    `),
+    { timeout: 5_000, interval: 200, label: "invite-option-contact mounted" },
+  ).catch(() => false);
+  console.log(`[QUIC-DEBUG] invite-option mounted: ${optionMounted}`);
+
+  // Click the contact option using the same event trio. The testid is on
+  // the slot <span>; the actual reka-ui MenuItem is its parent.
+  const optionClicked = await vault.executeScript<boolean>(`
+    const span = document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+    if (!span) return false;
+    const item = span.closest('[role="menuitem"]') ?? span.parentElement ?? span;
+    item.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+    item.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+    item.dispatchEvent(new MouseEvent('pointerup', { button: 0, bubbles: true }));
+    item.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+    item.click?.();
+    return true;
+  `);
+  console.log(`[QUIC-DEBUG] invite-option click: ${optionClicked}`);
+
+  // Wait for the invite dialog itself to appear before continuing.
+  const dialogOpen = await pollUntil(
+    () => vault.executeScript<boolean>(`
+      return !!document.querySelector('[data-testid="invite-contact-select"]');
+    `),
+    { timeout: 5_000, interval: 200, label: "invite dialog open" },
+  ).catch(() => false);
+  console.log(`[QUIC-DEBUG] invite dialog open: ${dialogOpen}`);
 
   // Select contact. Two things have historically broken this step:
   //   1) The Pinia contacts store had stale data right after the import flow
