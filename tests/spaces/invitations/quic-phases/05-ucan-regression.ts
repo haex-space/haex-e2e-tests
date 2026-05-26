@@ -26,6 +26,7 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     const vaultA = state.vaultA!;
     const vaultB = state.vaultB!;
     const nodeIdA = state.nodeIdA!;
+    const nodeIdB = state.nodeIdB!;
     const spaceId = state.spaceId!;
     const shareId = state.shareId!;
 
@@ -69,6 +70,47 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     expect(ucanRows.length).toBeGreaterThanOrEqual(1);
     console.log(`[QUIC] Vault B has UCAN for space (capability=${ucanRows[0].capability}) ✓`);
 
+    // 3b. CRITICAL PRECONDITION — Vault B's device row must reach Vault A.
+    //
+    //     The leader (Vault A) only serves a share to Vault B if A's
+    //     `allowed_peers[B]` contains the share's space. allowed_peers is
+    //     built from `haex_space_devices WHERE endpoint_id != self`, so it
+    //     needs Vault B's device row for this space to have propagated to A
+    //     via CRDT SyncPush. Invite-accept alone does NOT guarantee this:
+    //     B's local_delivery sync loop must be active and have pushed at
+    //     least once. Without this wait the root listing below races the
+    //     propagation and comes back empty (or "access denied") — this is the
+    //     same precondition the cross-vault-file-sharing spec waits on.
+    //
+    //     A's leader calls reload_allowed_peers synchronously when the
+    //     SyncPush carrying B's device row lands, so once the row is on A,
+    //     A is ready to authorize B with no extra step.
+    await vaultB
+      .invokeTauriCommand("local_delivery_start", { spaceId })
+      .catch(() => { /* already running / absent on older vault */ });
+    await pollUntil(
+      async () => {
+        const status = await vaultB.invokeTauriCommand<{ activeSpaces?: string[] }>(
+          "local_delivery_status", {},
+        );
+        return (status.activeSpaces ?? []).includes(spaceId);
+      },
+      { timeout: 60_000, interval: 1_000, label: "Vault B local_delivery active for space" },
+    );
+    await pollUntil(
+      async () => {
+        await vaultB
+          .invokeTauriCommand("local_delivery_force_sync", { spaceId })
+          .catch(() => { /* command absent on older vault */ });
+        const rows = await sqlQuery<{ endpoint_id: string }>(
+          vaultA, `SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1`, [spaceId],
+        );
+        return rows.some((r) => r.endpoint_id === nodeIdB);
+      },
+      { timeout: 90_000, interval: 500, label: "Vault B device row on Vault A" },
+    );
+    console.log(`[QUIC] Vault B device row reached Vault A — leader can authorize B ✓`);
+
     // 4. Sanity check: root listing must NOT throw AND must include the
     //    share. If this fails, the regression is even worse than the user
     //    reported (no UCAN at all, not just for the subpath case).
@@ -78,6 +120,7 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     //    reflect the new row — which is asynchronous on both sides. A
     //    one-shot `loadSharesAsync()` on B can fire before A's cache
     //    catches up; we poll the leader's response instead.
+    let lastRootResult: { ok: boolean; data: string } = { ok: false, data: 'no attempt' };
     const rootResult = (await pollUntil(
       async () => {
         const r = await vaultB.executeScript<{ ok: boolean; data: string }>(`
@@ -99,10 +142,14 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
             return { ok: false, data: e?.message ?? String(e) };
           }
         `);
+        lastRootResult = r;
         return r.ok && r.data.includes(shareName) ? r : null;
       },
       { timeout: 30_000, interval: 1_000, label: `root listing on Vault B contains "${shareName}"` },
-    ))!;
+    ).catch((err) => {
+      console.log(`[QUIC-DIAG] root listing never contained share. Last result: ok=${lastRootResult.ok} data="${lastRootResult.data}"`);
+      throw err;
+    }))!;
     console.log(`[QUIC] Vault B root listing result: ok=${rootResult.ok} data="${rootResult.data}"`);
     expect(rootResult.ok).toBe(true);
     expect(rootResult.data).toContain(shareName);
