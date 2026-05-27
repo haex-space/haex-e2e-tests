@@ -1,6 +1,6 @@
 import { expect, test, VaultAutomation } from "../../../fixtures";
 import { pollUntil, sqlQuery, wait } from "../quic-helpers/utils";
-import { clickTestId, elementExists } from "../quic-helpers/ui-primitives";
+import { clickTestId, elementExists, mousedownClickFound } from "../quic-helpers/ui-primitives";
 import { initializeVaultViaUI, openSettingsCategory, startP2PEndpoint } from "../quic-helpers/ui-vault";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 
@@ -152,20 +152,20 @@ export function registerSetupPhase(state: QuicTestState): void {
     const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
     expect(dialogOpen).toBe(true);
 
-    // Click the "From file" tab explicitly
-    // reka-ui TabsTrigger activates on mousedown.left, NOT click — .click() won't work
-    const tabSwitched = await vaultA.executeScript<boolean>(`
-      const container = document.querySelector('[data-testid="contacts-add-tabs"]');
-      if (!container) return false;
-      const tabs = [...container.querySelectorAll('[role="tab"]')];
-      const fileTab = tabs.find(t => {
-        const text = t.textContent?.toLowerCase() || '';
-        return text.includes('file') || text.includes('datei');
-      });
-      if (!fileTab) return false;
-      fileTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-      return true;
-    `);
+    // Click the "From file" tab. reka-ui TabsTrigger activates on
+    // mousedown.left, NOT click — see mousedownClickFound.
+    const tabSwitched = await mousedownClickFound(
+      vaultA,
+      `
+        const container = document.querySelector('[data-testid="contacts-add-tabs"]');
+        if (!container) return null;
+        const tabs = [...container.querySelectorAll('[role="tab"]')];
+        return tabs.find(t => {
+          const text = t.textContent?.toLowerCase() || '';
+          return text.includes('file') || text.includes('datei');
+        }) ?? null;
+      `,
+    );
     expect(tabSwitched).toBe(true);
     await wait(300);
 

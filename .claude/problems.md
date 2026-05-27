@@ -736,6 +736,13 @@ pnpm test:debug  # Mit Playwright Inspector
 - `aa44a60` poll for dropdown
 - `a7dcb1a` fail fast on UI preconditions
 
-**Lehre:** Bei reka-ui-Komponenten (Tabs, Combobox, Select, Dropdown, DropdownMenu) immer `pointerdown`+`mousedown`+`mouseup`+`click` dispatchen — nicht nur `el.click()`. Gilt überall im Test-Code, nicht nur in `sendInviteViaUI`.
+**Lehre:** Bei reka-ui-Komponenten (Tabs, Combobox, Select, Dropdown, DropdownMenu) immer `pointerdown`+`mousedown`+`pointerup`+`mouseup`+`click` dispatchen — nicht nur `el.click()`. Gilt überall im Test-Code, nicht nur in `sendInviteViaUI`.
+
+**Konsolidierungs-Fix (Run `26456815914`):** Drei der vier inline-Stellen hatten subtle Diff: bei der ComboboxItem-Auswahl fehlte `pointerup` — items wurden gefunden, Klick "ging durch" (`return true`), aber reka-ui registrierte die Selection nicht. Daraufhin alle reka-ui-Interaktionen über drei neue Helper in [`ui-primitives.ts`](../tests/spaces/invitations/quic-helpers/ui-primitives.ts) konsolidiert:
+- `mousedownClickTestId(vault, testId)` — für statische `[data-testid="..."]`-Selektoren
+- `mousedownClickSelector(vault, selector)` — für beliebige CSS-Selektoren
+- `mousedownClickFound(vault, finderExpression)` — wenn das Element per Predicate (z.B. textContent-Match, closest()) gefunden werden muss
+
+Alle drei dispatchen dieselbe vollständige Sequenz. **Konsequenz: Wer reka-ui-Primitives klickt, nimmt einen der Helper — `clickTestId` ist nur noch für native `<button>`-Elemente da.**
 
 **Status:** Fix im Branch `refactor/split-quic-invite-flow`, wartet auf nächsten CI-Run.
