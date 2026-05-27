@@ -1,5 +1,5 @@
 import * as crypto from "crypto";
-import { test, expect, VaultAutomation } from "../fixtures";
+import { test, expect, VaultAutomation, waitFor } from "../fixtures";
 import {
   createUcan,
   createWebCryptoSigner,
@@ -280,19 +280,30 @@ test.describe("storage: P2P connectivity between vaults", () => {
     // ensure-refs trigger would otherwise leave a stale stub from a previous
     // test run (random id, same endpoint_id) blocking the new stub, and the
     // new random device_id would have no FK parent.
-    const ownDeviceA = await vaultA.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
-      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-      params: [nodeIdA],
-    });
-    expect(ownDeviceA.length).toBe(1);
-    const ownDeviceIdA = ownDeviceA[0][0];
+    // The own device row is written to haex_devices via CRDT during device
+    // registration, which runs before peer_storage_start. The local CRDT
+    // materialization is not guaranteed to be readable the instant the
+    // endpoint reports its nodeId, so reading it immediately raced and failed
+    // the first attempt (only passing on a Playwright retry once the write had
+    // landed). Poll until the row is visible instead of asserting once.
+    const selectOwnDevice = (vault: VaultAutomation, nodeId: string) => () =>
+      vault
+        .invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
+          sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+          params: [nodeId],
+        })
+        .then((rows) => rows[0]?.[0] ?? null);
 
-    const ownDeviceB = await vaultB.invokeTauriCommand<[[string]]>("sql_select_with_crdt", {
-      sql: "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-      params: [nodeIdB],
+    const ownDeviceIdA = await waitFor(selectOwnDevice(vaultA, nodeIdA), {
+      timeout: 10000,
+      interval: 200,
+      message: "Vault A own device row (haex_devices.endpoint_id == nodeIdA) not visible",
     });
-    expect(ownDeviceB.length).toBe(1);
-    const ownDeviceIdB = ownDeviceB[0][0];
+    const ownDeviceIdB = await waitFor(selectOwnDevice(vaultB, nodeIdB), {
+      timeout: 10000,
+      interval: 200,
+      message: "Vault B own device row (haex_devices.endpoint_id == nodeIdB) not visible",
+    });
 
     // Register Vault A's device on Vault A
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
