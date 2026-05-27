@@ -1,6 +1,6 @@
 import { expect, test } from "../../../fixtures";
-import { pollUntil, sqlQuery, wait } from "../quic-helpers/utils";
-import { openSettingsCategory } from "../quic-helpers/ui-vault";
+import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
+import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 
 /**

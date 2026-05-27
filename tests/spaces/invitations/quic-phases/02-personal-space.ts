@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { expect, test } from "../../../fixtures";
-import { pollUntil, sqlQuery, wait } from "../quic-helpers/utils";
+import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
 import {
   acceptInviteViaUI,
   declineInviteViaUI,

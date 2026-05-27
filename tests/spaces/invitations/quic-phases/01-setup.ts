@@ -1,7 +1,7 @@
 import { expect, test, VaultAutomation } from "../../../fixtures";
-import { pollUntil, sqlQuery, wait } from "../quic-helpers/utils";
-import { clickTestId, elementExists, mousedownClickFound } from "../quic-helpers/ui-primitives";
-import { initializeVaultViaUI, openSettingsCategory, startP2PEndpoint } from "../quic-helpers/ui-vault";
+import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
+import { clickTestId, elementExists, mousedownClickFound } from "../../../helpers/ui/ui-primitives";
+import { initializeVaultViaUI, openSettingsCategory, startP2PEndpoint } from "../../../helpers/ui/ui-vault";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 
 /**

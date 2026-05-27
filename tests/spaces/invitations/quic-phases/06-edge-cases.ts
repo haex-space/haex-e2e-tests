@@ -1,6 +1,6 @@
 import * as crypto from "crypto";
 import { expect, test } from "../../../fixtures";
-import { sqlQuery } from "../quic-helpers/utils";
+import { sqlQuery } from "../../../helpers/ui/utils";
 import { setInvitePolicyViaUI } from "../quic-helpers/ui-spaces";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 

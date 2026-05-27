@@ -1,4 +1,4 @@
-import type { VaultAutomation } from "../../../fixtures";
+import type { VaultAutomation } from "../../fixtures";
 import type { PeerStorageStatus } from "./types";
 import { pollUntil, wait } from "./utils";
 import {

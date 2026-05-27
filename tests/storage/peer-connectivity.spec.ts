@@ -7,6 +7,7 @@ import {
   spaceResource,
   SpaceCapabilities,
 } from "@haex-space/ucan";
+import { initializeVaultViaUI } from "../helpers/ui/ui-vault";
 
 const { subtle } = crypto.webcrypto as unknown as Crypto;
 
@@ -38,6 +39,37 @@ interface FileEntry {
   modified: number | null;
 }
 
+/**
+ * Load this device's persistent ed25519 key into the peer endpoint before
+ * starting it. Both vaults are opened through the UI (Vault A by global-setup,
+ * Vault B in beforeAll), so initVaultAsync has registered the own haex_devices
+ * row — device_resolve_for_vault returns its id. Loading that key makes
+ * peer_storage_start advertise the device's persistent endpoint id, so the
+ * haex_devices row (endpoint_id == nodeId) the later tests read is guaranteed
+ * to match instead of racing the frontend's P2P autostart (which otherwise left
+ * the endpoint on an ephemeral key and the own-device-row poll flaky in CI).
+ */
+async function ensureDeviceKeyLoaded(vault: VaultAutomation): Promise<void> {
+  const matchedId = await waitFor(
+    () =>
+      vault
+        .invokeTauriCommand<{ matchedId?: string | null }>(
+          "device_resolve_for_vault",
+          {},
+        )
+        .then((r) => r.matchedId ?? null),
+    {
+      timeout: 30000,
+      interval: 500,
+      message:
+        "device_resolve_for_vault never returned a matchedId — own device row not registered",
+    },
+  );
+  await vault.invokeTauriCommand("endpoint_load_for_device", {
+    deviceRowId: matchedId,
+  });
+}
+
 test.describe("storage: P2P connectivity between vaults", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(30_000); // P2P connection can take a few seconds
@@ -60,24 +92,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
     await vaultA.createSession();
     await vaultB.createSession();
 
-    // Ensure Vault B has an open vault (Vault A is opened by global-setup,
-    // but Vault B starts fresh and needs its own vault)
-    try {
-      await vaultB.invokeTauriCommand("create_encrypted_database", {
-        vaultName: "P2P Test Vault B",
-        key: "test-password-b",
-        spaceId: null,
-      });
-    } catch {
-      // Vault may already exist, try opening it
-      const vaults = await vaultB.invokeTauriCommand<Array<{ name: string; path: string }>>("list_vaults", {});
-      if (vaults.length > 0) {
-        await vaultB.invokeTauriCommand("open_encrypted_database", {
-          vaultPath: vaults[0].path,
-          key: "test-password-b",
-        });
-      }
-    }
+    // Vault A is opened by global-setup; Vault B starts fresh and needs its own
+    // vault. Open it through the UI (not a raw create/open_encrypted_database)
+    // so the frontend initVaultAsync lifecycle runs and registers the own
+    // haex_devices row. Without it device_resolve_for_vault finds no match and
+    // peer_storage_start comes up on an ephemeral key that no device row carries.
+    await initializeVaultViaUI(vaultB, "P2P Test Vault B", "test-password-b");
 
     // Stop any running P2P endpoints
     for (const vault of [vaultA, vaultB]) {
@@ -221,6 +241,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
   // ===========================================================================
 
   test("start P2P endpoint on Vault A", async () => {
+    await ensureDeviceKeyLoaded(vaultA);
     const info = await vaultA.invokeTauriCommand<PeerStorageStartInfo>(
       "peer_storage_start",
       {}
@@ -232,6 +253,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
   });
 
   test("start P2P endpoint on Vault B", async () => {
+    await ensureDeviceKeyLoaded(vaultB);
     const info = await vaultB.invokeTauriCommand<PeerStorageStartInfo>(
       "peer_storage_start",
       {}

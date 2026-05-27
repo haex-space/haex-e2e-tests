@@ -1,13 +1,13 @@
 import { expect, type VaultAutomation } from "../../../fixtures";
-import { pollUntil, sqlQuery, wait } from "./utils";
+import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
 import {
   clickTestId,
   mousedownClickFound,
   mousedownClickSelector,
   mousedownClickTestId,
   setInputValue,
-} from "./ui-primitives";
-import { openSettingsCategory } from "./ui-vault";
+} from "../../../helpers/ui/ui-primitives";
+import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
 
 /**
  * Navigate to Settings → Spaces → Create a LOCAL space via the dialog.
