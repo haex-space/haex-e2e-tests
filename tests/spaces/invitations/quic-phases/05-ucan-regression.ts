@@ -1,5 +1,5 @@
 import { expect, test } from "../../../fixtures";
-import { pollUntil, sqlQuery } from "../quic-helpers/utils";
+import { pollUntil, sqlQuery } from "../../../helpers/ui/utils";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 
 /**

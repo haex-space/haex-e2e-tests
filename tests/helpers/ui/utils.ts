@@ -1,4 +1,4 @@
-import type { VaultAutomation } from "../../../fixtures";
+import type { VaultAutomation } from "../../fixtures";
 import type { JsonValue } from "./types";
 
 export const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

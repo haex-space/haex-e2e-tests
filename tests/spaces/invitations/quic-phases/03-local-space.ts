@@ -1,14 +1,14 @@
 import * as crypto from "crypto";
 import { expect, test } from "../../../fixtures";
-import { pollUntil, sqlQuery } from "../quic-helpers/utils";
+import { pollUntil, sqlQuery } from "../../../helpers/ui/utils";
 import {
   acceptInviteViaUI,
   createLocalSpaceViaUI,
   declineInviteViaUI,
   sendInviteViaUI,
 } from "../quic-helpers/ui-spaces";
-import { openSettingsCategory } from "../quic-helpers/ui-vault";
-import { wait } from "../quic-helpers/utils";
+import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
+import { wait } from "../../../helpers/ui/utils";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
 
 /**

@@ -1,4 +1,4 @@
-import type { VaultAutomation } from "../../../fixtures";
+import type { VaultAutomation } from "../../fixtures";
 
 /** Click a <button> whose visible text matches one of `labels`. */
 export async function clickButton(
