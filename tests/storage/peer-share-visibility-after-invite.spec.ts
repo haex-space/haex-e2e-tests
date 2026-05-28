@@ -708,6 +708,43 @@ test.describe("storage: P2P file visibility after QUIC invite accept", () => {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Step 8b — Regression: Vault A's nodeId is in Vault B's haex_space_devices
+  //
+  // Vault A may add shares (haex_peer_shares rows) without ever going through
+  // the SpacePublishingDialog — addShareAsync now writes the space_devices row
+  // upfront, but for already-deployed vaults that skipped publishing, only the
+  // peer_shares row syncs. Without a matching space_devices row, the invitee's
+  // file browser silently fails to render the inviter (it builds its peer list
+  // from haex_space_devices and contact-claims, not peer_shares).
+  //
+  // acceptLocalInviteAsync defensively stubs the inviter's row from the
+  // invite-token's `space_endpoints`. CRDT pull later replaces the stub with
+  // the inviter's authoritative row (HLC winner per column) — until then the
+  // stub is enough to power UI + auth.
+  //
+  // Asserted right after accept (no sync wait): the stub is synchronous.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  test("Vault A's nodeId is stubbed in Vault B's haex_space_devices (defensive)", async () => {
+    const devices = await sqlQuery<{ endpoint_id: string; authored_by_did: string | null }>(
+      vaultB,
+      `SELECT endpoint_id, authored_by_did FROM haex_space_devices WHERE space_id = ?1`,
+      [spaceId],
+    );
+
+    const inviterRow = devices.find((d) => d.endpoint_id === nodeIdA);
+    if (!inviterRow) {
+      throw new Error(
+        `Regression: inviter nodeId ${nodeIdA.slice(0, 16)}… not stubbed in Vault B's haex_space_devices ` +
+        `for space ${spaceId.slice(0, 8)}… — acceptLocalInviteAsync must seed an inviter stub from ` +
+        `the invite token's space_endpoints so the file browser can resolve the inviter without ` +
+        `relying on the inviter having published themselves first`,
+      );
+    }
+    expect(inviterRow.authored_by_did).toBe(identityA.did);
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Step 9 — CRDT sync: Vault A receives Vault B's device registration
   //
   // Vault B's sync loop (started in acceptLocalInviteAsync) pushes the new
