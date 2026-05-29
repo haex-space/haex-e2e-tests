@@ -149,6 +149,20 @@ export async function sendInviteViaUI(
   // see mousedownClickTestId. Previous CI runs showed
   // `preflight: dialogs=0 trigger=false` on first attempt and only
   // recovered on Playwright retries before we switched away from `.click()`.
+  //
+  // The space row exists in `haex_spaces` before the UI has rendered its
+  // card — Vue runs the list re-render on the next microtask. Polling for
+  // the testid first means we don't race the render: CI logs previously
+  // showed `invite-trigger: found=false` on the failing iteration and
+  // `found=true` only on retry #2, with everything downstream cascading
+  // off the missing trigger.
+  const triggerMounted = await pollUntil(
+    () => vault.executeScript<boolean>(`
+      return !!document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+    `),
+    { timeout: 5_000, interval: 200, label: `space-invite-trigger-${targetSpaceId} mounted` },
+  ).catch(() => false);
+  console.log(`[QUIC-DEBUG] invite-trigger-mounted: ${triggerMounted}`);
   const triggerFound = await mousedownClickTestId(
     vault,
     `space-invite-trigger-${targetSpaceId}`,
