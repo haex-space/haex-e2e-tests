@@ -744,3 +744,49 @@ export function makeSyncChange(overrides: Partial<SyncChange> & {
     ...overrides,
   };
 }
+
+// =============================================================================
+// Test-suite setup helpers
+// =============================================================================
+
+/**
+ * Health-check the sync-server, register a fresh admin user, and upload a
+ * vault key for `spaceId`. Used by sync API specs that operate on a single
+ * vault (push/pull/conflict/partial-row). Throws on health-check failure so
+ * callers do not need their own expect-assertion.
+ */
+export async function setupSyncTestWithVaultKey(
+  spaceId: string,
+): Promise<AuthContext> {
+  if (!(await checkSyncServerHealth())) {
+    throw new Error("Sync server health check failed");
+  }
+  const admin = await createAdminUser();
+  const auth = toAuthContext(admin);
+  await createVaultKey(auth, spaceId);
+  return auth;
+}
+
+/**
+ * Health-check the sync-server, register a fresh admin user (with identity
+ * public key), and create a shared `spaceId` labelled `label`. Used by
+ * realtime/broadcast specs that need both the AuthContext and the pusher's
+ * public key for membership tests. Throws on health-check or createSpace failure.
+ */
+export async function setupSyncTestWithSpace(
+  spaceId: string,
+  label: string,
+): Promise<{ auth: AuthContext; publicKey: string }> {
+  if (!(await checkSyncServerHealth())) {
+    throw new Error("Sync server health check failed");
+  }
+  const admin = await createAdminUserWithIdentity();
+  const auth = toAuthContext(admin);
+  const createRes = await createSpace(auth, spaceId, label);
+  if (createRes.status !== 201) {
+    throw new Error(
+      `createSpace returned ${createRes.status} (expected 201)`,
+    );
+  }
+  return { auth, publicKey: admin.publicKey };
+}

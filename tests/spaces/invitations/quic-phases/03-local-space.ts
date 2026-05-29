@@ -5,6 +5,7 @@ import {
   acceptInviteViaUI,
   createLocalSpaceViaUI,
   declineInviteViaUI,
+  ensureDeviceRegistered,
   sendInviteViaUI,
 } from "../quic-helpers/ui-spaces";
 import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
@@ -41,24 +42,7 @@ export function registerLocalSpacePhase(state: QuicTestState): void {
     const spaceId = state.spaceId!;
 
     // The UI might auto-register the device; if not, do it manually.
-    const devices = await sqlQuery<{ endpoint_id: string }>(
-      vaultA,
-      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
-      [spaceId],
-    );
-    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
-      const ownDeviceRows = await sqlQuery<{ id: string }>(
-        vaultA,
-        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-        [nodeIdA],
-      );
-      expect(ownDeviceRows.length).toBe(1);
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-        params: [crypto.randomUUID(), spaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
-      });
-    }
+    await ensureDeviceRegistered(vaultA, spaceId, nodeIdA, identityA.did);
 
     const updated = await sqlQuery<{ endpoint_id: string }>(
       vaultA,

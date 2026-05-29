@@ -1,14 +1,13 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
-  checkSyncServerHealth,
   createAdminUserWithIdentity,
-  createSpace,
   addSpaceMember,
   removeSpaceMember,
   signAndPushSpaceChanges,
   makeSyncChange,
   toAuthContext,
+  setupSyncTestWithSpace,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -37,15 +36,10 @@ test.describe("sync: realtime reconnection", () => {
   let memberDid: string;
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUserWithIdentity();
-    auth = toAuthContext(admin);
-    publicKey = admin.publicKey;
-
-    const createRes = await createSpace(auth, spaceId, "Reconnection Test Space");
-    expect(createRes.status).toBe(201);
+    ({ auth, publicKey } = await setupSyncTestWithSpace(
+      spaceId,
+      "Reconnection Test Space",
+    ));
 
     // Create a permanent member (listens for broadcasts when owner pushes)
     const member = await createAdminUserWithIdentity();

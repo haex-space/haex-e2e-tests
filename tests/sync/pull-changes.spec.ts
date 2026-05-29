@@ -2,14 +2,12 @@ import crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import type { AuthContext } from "../helpers";
 import {
-  checkSyncServerHealth,
-  createAdminUser,
   createVaultKey,
   deleteVault,
   pushChanges,
   pullChanges,
   makeSyncChange,
-  toAuthContext,
+  setupSyncTestWithVaultKey,
 } from "../helpers";
 
 test.describe("sync: pull-changes", () => {
@@ -20,12 +18,7 @@ test.describe("sync: pull-changes", () => {
   const deviceId = `e2e-pull-device-${Date.now()}`;
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUser();
-    auth = toAuthContext(admin);
-    await createVaultKey(auth, spaceId);
+    auth = await setupSyncTestWithVaultKey(spaceId);
   });
 
   test.afterAll(async () => {

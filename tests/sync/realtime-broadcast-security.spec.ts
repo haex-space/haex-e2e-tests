@@ -21,6 +21,7 @@ import {
   signAndPushSpaceChanges,
   makeSyncChange,
   toAuthContext,
+  setupSyncTestWithSpace,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -37,14 +38,7 @@ test.describe("security: token manipulation attacks", () => {
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUserWithIdentity();
-    auth = toAuthContext(admin);
-
-    const createRes = await createSpace(auth, spaceId, "Security Test Space");
-    expect(createRes.status).toBe(201);
+    ({ auth } = await setupSyncTestWithSpace(spaceId, "Security Test Space"));
   });
 
   test("completely fabricated token is rejected", async () => {

@@ -1,7 +1,6 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
-  checkSyncServerHealth,
   createAdminUserWithIdentity,
   createSpace,
   addSpaceMember,
@@ -9,6 +8,7 @@ import {
   signAndPushSpaceChanges,
   makeSyncChange,
   toAuthContext,
+  setupSyncTestWithSpace,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -34,15 +34,10 @@ test.describe("sync: realtime connection lifecycle", () => {
   const deviceId = `e2e-lifecycle-${Date.now()}`;
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUserWithIdentity();
-    auth = toAuthContext(admin);
-    publicKey = admin.publicKey;
-
-    const createRes = await createSpace(auth, spaceId, "Lifecycle Test Space");
-    expect(createRes.status).toBe(201);
+    ({ auth, publicKey } = await setupSyncTestWithSpace(
+      spaceId,
+      "Lifecycle Test Space",
+    ));
 
     // Permanent member for broadcast tests (owner pushes, member receives).
     // Individual tests create their own per-test member for realtime clients;

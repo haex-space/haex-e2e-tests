@@ -1,7 +1,6 @@
 import { test, expect, VaultAutomation } from "../fixtures";
 
-const E2E_VAULT_NAME = "e2e-test-vault";
-const E2E_VAULT_PASSWORD = "test-password-12345";
+import { restoreOriginalVault } from "./vault-constants";
 
 test.describe("vault-lifecycle: create-vault", () => {
   test.describe.configure({ mode: "serial" });
@@ -24,33 +23,7 @@ test.describe("vault-lifecycle: create-vault", () => {
   });
 
   test.afterAll(async () => {
-    // Clean up: delete test vault if it was created
-    try {
-      await vault.invokeTauriCommand("close_database", {});
-    } catch {
-      // May already be closed
-    }
-
-    if (createdVaultId) {
-      try {
-        await vault.invokeTauriCommand("delete_vault", { vaultName: testVaultName });
-      } catch {
-        // Best effort cleanup
-      }
-    }
-
-    // Reopen the original e2e-test-vault
-    const vaults = await vault.invokeTauriCommand<Array<{ name: string; path: string }>>(
-      "list_vaults",
-      {}
-    );
-    const e2eVault = vaults.find((v) => v.name === E2E_VAULT_NAME);
-    if (e2eVault) {
-      await vault.invokeTauriCommand("open_encrypted_database", {
-        vaultPath: e2eVault.path,
-        key: E2E_VAULT_PASSWORD,
-      });
-    }
+    await restoreOriginalVault(vault, testVaultName);
   });
 
   test("should create a new vault and return a valid ID", async () => {

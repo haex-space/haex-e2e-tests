@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import { expect, type VaultAutomation } from "../../../fixtures";
 import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
 import {
@@ -8,6 +9,52 @@ import {
   setInputValue,
 } from "../../../helpers/ui/ui-primitives";
 import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
+
+/**
+ * Insert a `haex_space_devices` row for the vault's own device in `spaceId`
+ * when the row is missing. Used at the start of personal/local space tests
+ * because the UI does not auto-register the device until an invite flow runs.
+ *
+ * `device_id` must point at the real `haex_devices.id` for the vault — the
+ * ensure-refs trigger collides on UNIQUE(endpoint_id) when a random UUID is
+ * used (see Phase 2 FK migration). Throws via `expect` when the own-device
+ * row is missing because that means peer storage was never started.
+ */
+export async function ensureDeviceRegistered(
+  vault: VaultAutomation,
+  spaceId: string,
+  nodeId: string,
+  identityDid: string,
+  deviceName: string = "Vault A Desktop",
+  platform: string = "desktop",
+): Promise<void> {
+  const devices = await sqlQuery<{ endpoint_id: string }>(
+    vault,
+    "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
+    [spaceId],
+  );
+  if (devices.some((d) => d.endpoint_id === nodeId)) return;
+
+  const ownDeviceRows = await sqlQuery<{ id: string }>(
+    vault,
+    "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
+    [nodeId],
+  );
+  expect(ownDeviceRows.length).toBe(1);
+  await vault.invokeTauriCommand("sql_execute_with_crdt", {
+    sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    params: [
+      crypto.randomUUID(),
+      spaceId,
+      ownDeviceRows[0].id,
+      nodeId,
+      deviceName,
+      platform,
+      identityDid,
+    ],
+  });
+}
 
 /**
  * Navigate to Settings → Spaces → Create a LOCAL space via the dialog.
