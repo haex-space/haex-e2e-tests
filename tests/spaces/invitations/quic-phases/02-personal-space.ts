@@ -4,6 +4,7 @@ import { pollUntil, sqlQuery, wait } from "../../../helpers/ui/utils";
 import {
   acceptInviteViaUI,
   declineInviteViaUI,
+  ensureDeviceRegistered,
   sendInviteViaUI,
 } from "../quic-helpers/ui-spaces";
 import { QUIC_CONSTANTS, type QuicTestState } from "./state";
@@ -40,28 +41,12 @@ export function registerPersonalSpacePhase(state: QuicTestState): void {
     console.log(`[QUIC] Personal space: ${state.personalSpaceId.slice(0, 8)}…`);
 
     // Ensure device is registered in Personal space
-    const devices = await sqlQuery<{ endpoint_id: string }>(
+    await ensureDeviceRegistered(
       vaultA,
-      "SELECT endpoint_id FROM haex_space_devices WHERE space_id = ?1",
-      [state.personalSpaceId],
+      state.personalSpaceId,
+      nodeIdA,
+      identityA.did,
     );
-    if (!devices.some((d) => d.endpoint_id === nodeIdA)) {
-      // device_id must point at the real haex_devices row of this vault.
-      // Phase 2 added a SQL FK on haex_devices.id; passing a random UUID here
-      // would make the ensure-refs trigger try to create a stub that
-      // collides with the own row on UNIQUE(endpoint_id).
-      const ownDeviceRows = await sqlQuery<{ id: string }>(
-        vaultA,
-        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-        [nodeIdA],
-      );
-      expect(ownDeviceRows.length).toBe(1);
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT OR IGNORE INTO haex_space_devices (id, space_id, device_id, endpoint_id, name, platform, authored_by_did)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-        params: [crypto.randomUUID(), state.personalSpaceId, ownDeviceRows[0].id, nodeIdA, "Vault A Desktop", "desktop", identityA.did],
-      });
-    }
 
     // No cleanup — test expects fresh vault containers. If Vault B already has
     // this space active from a prior run, the PushInvite handler correctly skips

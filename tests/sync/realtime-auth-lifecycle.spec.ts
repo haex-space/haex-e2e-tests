@@ -1,16 +1,15 @@
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
 import {
-  checkSyncServerHealth,
   createAdminUserWithIdentity,
   createTestIdentity,
   registerIdentity,
-  createSpace,
   addSpaceMember,
   removeSpaceMember,
   signAndPushSpaceChanges,
   makeSyncChange,
   toAuthContext,
+  setupSyncTestWithSpace,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -35,15 +34,10 @@ test.describe("sync: realtime auth lifecycle", () => {
   const spaceId = crypto.randomUUID();
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUserWithIdentity();
-    auth = toAuthContext(admin);
-    publicKey = admin.publicKey;
-
-    const createRes = await createSpace(auth, spaceId, "Auth Lifecycle Space");
-    expect(createRes.status).toBe(201);
+    ({ auth, publicKey } = await setupSyncTestWithSpace(
+      spaceId,
+      "Auth Lifecycle Space",
+    ));
   });
 
   test("connection succeeds with valid DID-Auth token", async () => {

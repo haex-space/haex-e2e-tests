@@ -153,7 +153,7 @@ async function acceptInviteViaUI(
       return rows.length > 0 && rows[0].status === "accepted";
     },
     { timeout: 45_000, interval: 1_000, label: "invite accepted" },
-  ).catch(() => console.log("[FileSyncRules] Invite not yet confirmed — proceeding"));
+  );
 }
 
 // ─── Test Suite ───────────────────────────────────────────────────────────────

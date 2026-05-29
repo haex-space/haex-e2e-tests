@@ -10,6 +10,7 @@ import {
   makeSyncChange,
   signAndPushSpaceChanges,
   toAuthContext,
+  setupSyncTestWithSpace,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -28,16 +29,10 @@ test.describe("sync: realtime broadcast delivery", () => {
   const deviceIdA = `e2e-device-a-${Date.now()}`;
 
   test.beforeAll(async () => {
-    const healthy = await checkSyncServerHealth();
-    expect(healthy).toBe(true);
-
-    const admin = await createAdminUserWithIdentity();
-    auth = toAuthContext(admin);
-    publicKey = admin.publicKey;
-
-    // Create a space (which auto-adds the creator as owner member)
-    const createRes = await createSpace(auth, spaceId, "Broadcast Test");
-    expect(createRes.status).toBe(201);
+    ({ auth, publicKey } = await setupSyncTestWithSpace(
+      spaceId,
+      "Broadcast Test",
+    ));
   });
 
   test("WebSocket connection succeeds with valid DID-Auth", async () => {
