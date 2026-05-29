@@ -41,5 +41,9 @@ export async function restoreOriginalVault(
       vaultPath: e2eVault.path,
       key: E2E_VAULT_PASSWORD,
     });
+  } else {
+    console.warn(
+      `[E2E] restoreOriginalVault: baseline "${E2E_VAULT_NAME}" not in list_vaults — downstream suites will run without it`,
+    );
   }
 }
