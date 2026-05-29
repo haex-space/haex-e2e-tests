@@ -164,7 +164,7 @@ async function acceptInviteViaUI(
       return rows.length > 0 && rows[0].status === "accepted";
     },
     { timeout: 30_000, interval: 500, label: "accept button clickable" },
-  ).catch(() => console.log("[FileSharing] Accept button not clickable within 30s"));
+  );
 
   await pollUntil(
     async () => {
@@ -176,7 +176,7 @@ async function acceptInviteViaUI(
       return rows.length > 0 && rows[0].status === "accepted";
     },
     { timeout: 45_000, interval: 500, label: "invite accepted" },
-  ).catch(() => console.log("[FileSharing] Invite not yet accepted after polling — proceeding"));
+  );
 }
 
 /**
