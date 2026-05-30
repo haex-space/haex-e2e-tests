@@ -267,27 +267,41 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     await acceptInviteViaUI(vaultB, spaceName, spaceId);
 
     // The actual assertion: exactly one UCAN for (space, B). Before the
-    // fix this was 2 — the stale one + the new one. Polled because the
-    // ClaimInvite handler writes via execute_with_crdt asynchronously
-    // wrt. the UI confirmation.
-    const rows = (await pollUntil(
+    // fix this was 2 — the stale one + the new one. The poll waits for the
+    // freshly-claimed row to arrive, then a settle window absorbs the case
+    // where the stale duplicate lands a moment AFTER the new one — without
+    // the settle, the test could see the transient single-row state and
+    // pass even though the regression is reproducing. ClaimInvite writes
+    // are async wrt. the UI confirmation, so the late-duplicate race is
+    // real (it's the exact bug we are guarding against).
+    await pollUntil(
       async () => {
-        const r = await sqlQuery<{ token: string; issued_at: number; capability: string }>(
+        const r = await sqlQuery<{ token: string }>(
           vaultB,
-          `SELECT token, issued_at, capability FROM haex_ucan_tokens
-           WHERE space_id = ?1 AND audience_did = ?2
-           ORDER BY issued_at DESC`,
+          `SELECT token FROM haex_ucan_tokens
+           WHERE space_id = ?1 AND audience_did = ?2`,
           [spaceId, identityB.did],
         );
-        return r.length >= 1 ? r : null;
+        return r.length >= 1;
       },
       { timeout: 30_000, interval: 500, label: "new UCAN row after re-invite" },
-    ))!;
+    );
+    // Settle so a late duplicate insert/replication has a chance to surface
+    // before we assert "exactly one". 2s matches the upper bound of
+    // ClaimInvite's UCAN-write tail observed on CI.
+    await wait(2_000);
+    const rows = await sqlQuery<{ token: string; issued_at: number; capability: string }>(
+      vaultB,
+      `SELECT token, issued_at, capability FROM haex_ucan_tokens
+       WHERE space_id = ?1 AND audience_did = ?2
+       ORDER BY issued_at DESC`,
+      [spaceId, identityB.did],
+    );
 
     // The bug we are guarding against: two coexisting rows for the same
     // (space_id, audience_did) — the stale leftover from before the leave
-    // and the freshly-claimed one. `persist_claimed_ucan` now DELETEs the
-    // prior row before INSERTing the new one.
+    // and the freshly-claimed one. `persist_claimed_ucan` now writes the
+    // new row first and then DELETEs older rows for the same audience.
     expect(rows.length).toBe(1);
     console.log(`[QUIC] Vault B UCAN count after re-invite = ${rows.length} (capability=${rows[0].capability}) ✓`);
 
