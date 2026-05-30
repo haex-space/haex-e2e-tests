@@ -27,7 +27,8 @@
  * - quic-phases/03-local-space.ts    Create local space, attach share, send invite
  * - quic-phases/04-post-accept.ts    Inviter attribution + post-accept assertions
  * - quic-phases/05-ucan-regression.ts Subpath listing regression guard
- * - quic-phases/06-edge-cases.ts     Self-invite, policy, capability, default-collision
+ * - quic-phases/06-data-consistency.ts authored_by_did + relay_url + UCAN cleanup
+ * - quic-phases/07-edge-cases.ts     Self-invite, policy, capability, default-collision
  *
  * Each phase exports a `registerXxxPhase(state)` function that mutates the
  * shared state object and registers `test()` blocks. They run in declaration
@@ -43,7 +44,8 @@ import { registerPersonalSpacePhase } from "./quic-phases/02-personal-space";
 import { registerLocalSpacePhase } from "./quic-phases/03-local-space";
 import { registerPostAcceptPhase } from "./quic-phases/04-post-accept";
 import { registerUcanRegressionPhase } from "./quic-phases/05-ucan-regression";
-import { registerEdgeCasesPhase } from "./quic-phases/06-edge-cases";
+import { registerDataConsistencyPhase } from "./quic-phases/06-data-consistency";
+import { registerEdgeCasesPhase } from "./quic-phases/07-edge-cases";
 
 test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   test.describe.configure({ mode: "serial" });
@@ -56,5 +58,6 @@ test.describe("QUIC: real invite flow between two vaults (UI-driven)", () => {
   registerLocalSpacePhase(state);
   registerPostAcceptPhase(state);
   registerUcanRegressionPhase(state);
+  registerDataConsistencyPhase(state);
   registerEdgeCasesPhase(state);
 });
