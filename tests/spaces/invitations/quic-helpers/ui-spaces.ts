@@ -150,12 +150,18 @@ export async function sendInviteViaUI(
   // `preflight: dialogs=0 trigger=false` on first attempt and only
   // recovered on Playwright retries before we switched away from `.click()`.
   //
-  // The space row exists in `haex_spaces` before the UI has rendered its
-  // card — Vue runs the list re-render on the next microtask. Polling for
-  // the testid first means we don't race the render: CI logs previously
-  // showed `invite-trigger: found=false` on the failing iteration and
-  // `found=true` only on retry #2, with everything downstream cascading
-  // off the missing trigger.
+  // Race that survived even after switching to mousedown: reka-ui's
+  // DropdownMenu auto-closes on click-outside / focus-loss between when
+  // we observe the option mounted and when we dispatch the click event.
+  // The option DOM node gets removed, the click finds nothing, and the
+  // dialog never opens. Retry the entire trigger→option→dialog cascade
+  // until either the dialog is up or we've exhausted 3 attempts.
+  //
+  // Also poll for the trigger testid to be mounted first — the space row
+  // exists in haex_spaces before Vue re-renders its card on the next
+  // microtask, and clicking before the trigger renders cascades into the
+  // same "dialog never opens" failure mode the loop is meant to guard
+  // against.
   const triggerMounted = await pollUntil(
     () => vault.executeScript<boolean>(`
       return !!document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
@@ -163,45 +169,69 @@ export async function sendInviteViaUI(
     { timeout: 5_000, interval: 200, label: `space-invite-trigger-${targetSpaceId} mounted` },
   ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite-trigger-mounted: ${triggerMounted}`);
-  const triggerFound = await mousedownClickTestId(
-    vault,
-    `space-invite-trigger-${targetSpaceId}`,
-  );
-  const triggerExpanded = await vault.executeScript<boolean>(`
-    const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
-    return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
-  `);
+
+  let triggerFound: boolean = false;
+  let triggerExpanded: boolean = false;
+  let optionMounted: boolean = false;
+  let optionClicked: boolean = false;
+  let dialogOpen: boolean = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await wait(800);
+    // Only (re)click the trigger when it isn't already open. Re-clicking an
+    // already-expanded reka-ui DropdownMenuTrigger via mousedown toggles it
+    // CLOSED, which unmounts the option portal and guarantees the option
+    // click below misses — turning a recoverable retry into a guaranteed
+    // failure for that attempt.
+    const alreadyExpanded = await vault.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+      return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
+    `);
+    if (!alreadyExpanded) {
+      triggerFound = await mousedownClickTestId(
+        vault,
+        `space-invite-trigger-${targetSpaceId}`,
+      );
+    } else {
+      triggerFound = true;
+    }
+    triggerExpanded = await vault.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+      return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
+    `);
+    // Poll for the menu portal to actually mount the contact option, so we
+    // don't race the click below. reka-ui mounts/unmounts the portal on each
+    // open; the item element won't exist until then.
+    optionMounted = await pollUntil(
+      () => vault.executeScript<boolean>(`
+        return !!document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+      `),
+      { timeout: 5_000, interval: 200, label: "invite-option-contact mounted" },
+    ).catch(() => false);
+
+    // Click the contact option. The testid is on the slot <span>; the actual
+    // reka-ui MenuItem is its parent.
+    optionClicked = await mousedownClickFound(
+      vault,
+      `
+        const span = document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+        if (!span) return null;
+        return span.closest('[role="menuitem"]') ?? span.parentElement ?? span;
+      `,
+    );
+
+    // Wait for the invite dialog itself to appear before continuing.
+    dialogOpen = await pollUntil(
+      () => vault.executeScript<boolean>(`
+        return !!document.querySelector('[data-testid="invite-contact-select"]');
+      `),
+      { timeout: 5_000, interval: 200, label: "invite dialog open" },
+    ).catch(() => false);
+    if (dialogOpen) break;
+    console.log(`[QUIC-DEBUG] dialog-open attempt ${attempt + 1} failed (trigger=${triggerFound}/${triggerExpanded} option=${optionMounted}/${optionClicked}) — retrying`);
+  }
   console.log(`[QUIC-DEBUG] invite-trigger: found=${triggerFound} expanded=${triggerExpanded}`);
-  // Poll for the menu portal to actually mount the contact option, so we
-  // don't race the click below. reka-ui mounts/unmounts the portal on each
-  // open; the item element won't exist until then.
-  const optionMounted = await pollUntil(
-    () => vault.executeScript<boolean>(`
-      return !!document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
-    `),
-    { timeout: 5_000, interval: 200, label: "invite-option-contact mounted" },
-  ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite-option mounted: ${optionMounted}`);
-
-  // Click the contact option. The testid is on the slot <span>; the actual
-  // reka-ui MenuItem is its parent.
-  const optionClicked = await mousedownClickFound(
-    vault,
-    `
-      const span = document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
-      if (!span) return null;
-      return span.closest('[role="menuitem"]') ?? span.parentElement ?? span;
-    `,
-  );
   console.log(`[QUIC-DEBUG] invite-option click: ${optionClicked}`);
-
-  // Wait for the invite dialog itself to appear before continuing.
-  const dialogOpen = await pollUntil(
-    () => vault.executeScript<boolean>(`
-      return !!document.querySelector('[data-testid="invite-contact-select"]');
-    `),
-    { timeout: 5_000, interval: 200, label: "invite dialog open" },
-  ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite dialog open: ${dialogOpen}`);
 
   // Select contact. Two things have historically broken this step:
@@ -251,39 +281,54 @@ export async function sendInviteViaUI(
 
   // Open the combobox via reka-ui-compatible events (mousedown+click).
   // The trigger lives inside the wrapper that carries the testid.
-  const triggerOpened = await mousedownClickFound(
-    vault,
-    `
+  //
+  // Flake guard: the first mousedown+click sometimes lands while the dialog
+  // is still settling its initial focus trap, in which case reka-ui swallows
+  // the event and `aria-expanded` stays `false` even though our test rig
+  // reported the click landed. We retry the click up to 3× until either the
+  // combobox reports expanded=true or the portal/listbox shows up in the DOM
+  // — `expanded` is the cleanest signal but `portal` is the post-condition
+  // we actually care about; either becoming truthy unblocks the flow.
+  let triggerOpened: unknown = false;
+  let popupOpened = { used: "none", expanded: false };
+  let portalState = { contentFound: false, itemCount: 0, itemLabels: [] as string[], listboxRole: false };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await wait(500);
+    triggerOpened = await mousedownClickFound(
+      vault,
+      `
+        const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
+        if (!wrapper) return null;
+        return wrapper.querySelector('[role="combobox"]') ?? wrapper.querySelector('button') ?? wrapper;
+      `,
+    );
+    popupOpened = await vault.executeScript<{ used: string; expanded: boolean }>(`
       const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
-      if (!wrapper) return null;
-      return wrapper.querySelector('[role="combobox"]') ?? wrapper.querySelector('button') ?? wrapper;
-    `,
-  );
-  const popupOpened = await vault.executeScript<{ used: string; expanded: boolean }>(`
-    const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
-    const trigger = wrapper?.querySelector('[role="combobox"]') ?? wrapper?.querySelector('button') ?? wrapper;
-    if (!trigger) return { used: 'none', expanded: false };
-    return {
-      used: trigger.tagName + (trigger.getAttribute('role') ? '['+trigger.getAttribute('role')+']' : ''),
-      expanded: trigger.getAttribute('aria-expanded') === 'true' || trigger.getAttribute('data-state') === 'open',
-    };
-  `);
+      const trigger = wrapper?.querySelector('[role="combobox"]') ?? wrapper?.querySelector('button') ?? wrapper;
+      if (!trigger) return { used: 'none', expanded: false };
+      return {
+        used: trigger.tagName + (trigger.getAttribute('role') ? '['+trigger.getAttribute('role')+']' : ''),
+        expanded: trigger.getAttribute('aria-expanded') === 'true' || trigger.getAttribute('data-state') === 'open',
+      };
+    `);
+    // Wait for the portal to mount before deciding whether to retry — the
+    // expansion-to-mount gap is async (Vue tick + reka portal teleport).
+    await wait(500);
+    portalState = await vault.executeScript<{ contentFound: boolean; itemCount: number; itemLabels: string[]; listboxRole: boolean }>(`
+      const items = [...document.querySelectorAll('[data-slot="item"]')];
+      const listbox = !!document.querySelector('[role="listbox"]');
+      const content = !!document.querySelector('[data-reka-popper-content-wrapper], [role="listbox"]');
+      return {
+        contentFound: content,
+        itemCount: items.length,
+        itemLabels: items.slice(0, 10).map(el => (el.textContent || '').trim().slice(0, 40)),
+        listboxRole: listbox,
+      };
+    `);
+    if (popupOpened.expanded || portalState.contentFound) break;
+    console.log(`[QUIC-DEBUG] open-trigger attempt ${attempt + 1} did not open the popup (expanded=${popupOpened.expanded} portal=${portalState.contentFound}) — retrying`);
+  }
   console.log(`[QUIC-DEBUG] open-trigger: clicked=${triggerOpened} used=${popupOpened.used} expanded=${popupOpened.expanded}`);
-  await wait(500);
-
-  // Snapshot the portal: combobox-content gets teleported under <body>.
-  const portalState = await vault.executeScript<{ contentFound: boolean; itemCount: number; itemLabels: string[]; listboxRole: boolean }>(`
-    // reka-ui Combobox renders ComboboxContent in a portal under body.
-    const items = [...document.querySelectorAll('[data-slot="item"]')];
-    const listbox = !!document.querySelector('[role="listbox"]');
-    const content = !!document.querySelector('[data-reka-popper-content-wrapper], [role="listbox"]');
-    return {
-      contentFound: content,
-      itemCount: items.length,
-      itemLabels: items.slice(0, 10).map(el => (el.textContent || '').trim().slice(0, 40)),
-      listboxRole: listbox,
-    };
-  `);
   console.log(`[QUIC-DEBUG] portal: content=${portalState.contentFound} listbox=${portalState.listboxRole} items=${portalState.itemCount} labels=${JSON.stringify(portalState.itemLabels)}`);
 
   const contactSelected = await pollUntil(
