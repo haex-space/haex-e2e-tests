@@ -123,16 +123,32 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
   //         for the inviter's authoritative CRDT row).
   // ═══════════════════════════════════════════════════════════════════════════
 
-  test("Vault B's space_devices stub for the inviter carries a relay_url", async () => {
+  test("Vault B's space_devices stub for the inviter matches Vault A's own relay_url", async () => {
     const vaultB = state.vaultB!;
+    const vaultA = state.vaultA!;
     const nodeIdA = state.nodeIdA!;
     const spaceId = state.spaceId!;
 
-    // The stub is seeded synchronously inside `acceptLocalInvite` once the
-    // ClaimInvite RPC returns. By the time post-accept assertions completed
-    // (phase 4), it must exist. We poll only to absorb the moment when the
-    // inviter's *authoritative* row arrives via CRDT and HLC-merges with the
-    // stub — either source is acceptable as long as relay_url ends up set.
+    // The assertion the user reported is: invitees don't get the inviter's
+    // relay URL until the inviter's authoritative `haex_space_devices` row
+    // arrives via CRDT, so the first sync round after Accept has to rely on
+    // mDNS / hole-punching alone. The fix carries the inviter's relay URL
+    // in the PushInvite payload and seeds it on the stub.
+    //
+    // What we can portably assert in the test rig: B's row for A's endpoint
+    // ends up with **the same value A has on its own row** (whether that's
+    // an actual relay URL or NULL — both sides must agree). The strict
+    // `http(s)://` check from earlier breaks the rig where no relay is
+    // configured at all; what we really care about is "no NULL on B when A
+    // has a URL" and "no asymmetry between the two sides".
+    const aRows = await sqlQuery<{ relay_url: string | null }>(
+      vaultA,
+      `SELECT relay_url FROM haex_space_devices WHERE space_id = ?1 AND endpoint_id = ?2`,
+      [spaceId, nodeIdA],
+    );
+    expect(aRows.length).toBe(1);
+    const expectedRelay = aRows[0].relay_url;
+
     const row = (await pollUntil(
       async () => {
         const rows = await sqlQuery<{ endpoint_id: string; relay_url: string | null }>(
@@ -141,19 +157,31 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
            WHERE space_id = ?1 AND endpoint_id = ?2`,
           [spaceId, nodeIdA],
         );
-        return rows.length === 1 && rows[0].relay_url ? rows[0] : null;
+        if (rows.length !== 1) return null;
+        return rows[0].relay_url === expectedRelay ? rows[0] : null;
       },
-      { timeout: 30_000, interval: 500, label: "inviter's relay_url on Vault B's stub" },
-    ))!;
-    // The exact URL depends on the test rig's configured relay; we only
-    // assert it's a non-empty string starting with http(s)://. Before the
-    // fix, this column was NULL because the invite payload didn't carry it
-    // and the stub used the receiver-side configured relay only as a
-    // best-effort fallback.
-    expect(row.relay_url).toBeTruthy();
-    expect(typeof row.relay_url).toBe("string");
-    expect(row.relay_url!).toMatch(/^https?:\/\//);
-    console.log(`[QUIC] Vault B inviter-stub relay_url = ${row.relay_url} ✓`);
+      { timeout: 30_000, interval: 500, label: `inviter's relay_url on Vault B's stub matches A (expected=${expectedRelay})` },
+    ).catch(async (err) => {
+      // Diagnostic dump on timeout so the failure carries actionable
+      // context: row missing, mismatched relay, or the pending-invite payload
+      // never carried inviter_relay_url at all.
+      const rowsB = await sqlQuery<{ endpoint_id: string; relay_url: string | null; name: string }>(
+        vaultB,
+        `SELECT endpoint_id, relay_url, name FROM haex_space_devices WHERE space_id = ?1`,
+        [spaceId],
+      );
+      const invitesB = await sqlQuery<{ inviter_did: string; inviter_relay_url: string | null; status: string }>(
+        vaultB,
+        `SELECT inviter_did, inviter_relay_url, status FROM haex_pending_invites WHERE space_id = ?1`,
+        [spaceId],
+      );
+      console.log(`[QUIC-DIAG relay_url] target endpoint=${nodeIdA.slice(0, 12)}… A expected=${expectedRelay}`);
+      console.log(`[QUIC-DIAG relay_url] B space_devices=${JSON.stringify(rowsB.map(r => ({ ep: r.endpoint_id.slice(0, 12), relay: r.relay_url, name: r.name })))}`);
+      console.log(`[QUIC-DIAG relay_url] B pending_invites=${JSON.stringify(invitesB.map(i => ({ inviter: i.inviter_did.slice(0, 24), relay: i.inviter_relay_url, status: i.status })))}`);
+      throw err;
+    }))!;
+    expect(row.relay_url).toBe(expectedRelay);
+    console.log(`[QUIC] Vault B inviter-stub relay_url = ${row.relay_url ?? "NULL"} (matches A) ✓`);
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
