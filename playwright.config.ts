@@ -29,9 +29,26 @@ export default defineConfig({
     video: "retain-on-failure",
   },
 
+  // Two projects, run sequentially because workers=1 and project order in
+  // this array is the run order:
+  //   1. `flake-prone-first` — the QUIC invite-flow suite (longest serial
+  //      block, frequent UI-race failures). Running it first means we see
+  //      its outcome in the first ~5 minutes of the e2e job instead of
+  //      after the full ~20 min suite — faster iteration on the regressions
+  //      that actually move.
+  //   2. `chromium` — every other test. testIgnore matches the same glob
+  //      flake-prone-first runs, so the two projects don't overlap.
   projects: [
     {
+      name: "flake-prone-first",
+      testMatch: /spaces\/invitations\/quic-invite-flow\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+      },
+    },
+    {
       name: "chromium",
+      testIgnore: /spaces\/invitations\/quic-invite-flow\.spec\.ts$/,
       use: {
         ...devices["Desktop Chrome"],
       },
