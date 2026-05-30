@@ -237,39 +237,54 @@ export async function sendInviteViaUI(
 
   // Open the combobox via reka-ui-compatible events (mousedown+click).
   // The trigger lives inside the wrapper that carries the testid.
-  const triggerOpened = await mousedownClickFound(
-    vault,
-    `
+  //
+  // Flake guard: the first mousedown+click sometimes lands while the dialog
+  // is still settling its initial focus trap, in which case reka-ui swallows
+  // the event and `aria-expanded` stays `false` even though our test rig
+  // reported the click landed. We retry the click up to 3× until either the
+  // combobox reports expanded=true or the portal/listbox shows up in the DOM
+  // — `expanded` is the cleanest signal but `portal` is the post-condition
+  // we actually care about; either becoming truthy unblocks the flow.
+  let triggerOpened: unknown = false;
+  let popupOpened = { used: "none", expanded: false };
+  let portalState = { contentFound: false, itemCount: 0, itemLabels: [] as string[], listboxRole: false };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await wait(500);
+    triggerOpened = await mousedownClickFound(
+      vault,
+      `
+        const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
+        if (!wrapper) return null;
+        return wrapper.querySelector('[role="combobox"]') ?? wrapper.querySelector('button') ?? wrapper;
+      `,
+    );
+    popupOpened = await vault.executeScript<{ used: string; expanded: boolean }>(`
       const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
-      if (!wrapper) return null;
-      return wrapper.querySelector('[role="combobox"]') ?? wrapper.querySelector('button') ?? wrapper;
-    `,
-  );
-  const popupOpened = await vault.executeScript<{ used: string; expanded: boolean }>(`
-    const wrapper = document.querySelector('[data-testid="invite-contact-select"]');
-    const trigger = wrapper?.querySelector('[role="combobox"]') ?? wrapper?.querySelector('button') ?? wrapper;
-    if (!trigger) return { used: 'none', expanded: false };
-    return {
-      used: trigger.tagName + (trigger.getAttribute('role') ? '['+trigger.getAttribute('role')+']' : ''),
-      expanded: trigger.getAttribute('aria-expanded') === 'true' || trigger.getAttribute('data-state') === 'open',
-    };
-  `);
+      const trigger = wrapper?.querySelector('[role="combobox"]') ?? wrapper?.querySelector('button') ?? wrapper;
+      if (!trigger) return { used: 'none', expanded: false };
+      return {
+        used: trigger.tagName + (trigger.getAttribute('role') ? '['+trigger.getAttribute('role')+']' : ''),
+        expanded: trigger.getAttribute('aria-expanded') === 'true' || trigger.getAttribute('data-state') === 'open',
+      };
+    `);
+    // Wait for the portal to mount before deciding whether to retry — the
+    // expansion-to-mount gap is async (Vue tick + reka portal teleport).
+    await wait(500);
+    portalState = await vault.executeScript<{ contentFound: boolean; itemCount: number; itemLabels: string[]; listboxRole: boolean }>(`
+      const items = [...document.querySelectorAll('[data-slot="item"]')];
+      const listbox = !!document.querySelector('[role="listbox"]');
+      const content = !!document.querySelector('[data-reka-popper-content-wrapper], [role="listbox"]');
+      return {
+        contentFound: content,
+        itemCount: items.length,
+        itemLabels: items.slice(0, 10).map(el => (el.textContent || '').trim().slice(0, 40)),
+        listboxRole: listbox,
+      };
+    `);
+    if (popupOpened.expanded || portalState.contentFound) break;
+    console.log(`[QUIC-DEBUG] open-trigger attempt ${attempt + 1} did not open the popup (expanded=${popupOpened.expanded} portal=${portalState.contentFound}) — retrying`);
+  }
   console.log(`[QUIC-DEBUG] open-trigger: clicked=${triggerOpened} used=${popupOpened.used} expanded=${popupOpened.expanded}`);
-  await wait(500);
-
-  // Snapshot the portal: combobox-content gets teleported under <body>.
-  const portalState = await vault.executeScript<{ contentFound: boolean; itemCount: number; itemLabels: string[]; listboxRole: boolean }>(`
-    // reka-ui Combobox renders ComboboxContent in a portal under body.
-    const items = [...document.querySelectorAll('[data-slot="item"]')];
-    const listbox = !!document.querySelector('[role="listbox"]');
-    const content = !!document.querySelector('[data-reka-popper-content-wrapper], [role="listbox"]');
-    return {
-      contentFound: content,
-      itemCount: items.length,
-      itemLabels: items.slice(0, 10).map(el => (el.textContent || '').trim().slice(0, 40)),
-      listboxRole: listbox,
-    };
-  `);
   console.log(`[QUIC-DEBUG] portal: content=${portalState.contentFound} listbox=${portalState.listboxRole} items=${portalState.itemCount} labels=${JSON.stringify(portalState.itemLabels)}`);
 
   const contactSelected = await pollUntil(
