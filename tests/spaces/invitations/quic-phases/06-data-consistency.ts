@@ -290,9 +290,71 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
       { timeout: 60_000, interval: 1_000, label: "re-invite delivery to Vault B" },
     );
 
-    // Accept the new invite via UI. After acceptInviteViaUI returns, the
-    // ClaimInvite RPC has persisted the new UCAN row.
-    await acceptInviteViaUI(vaultB, spaceName, spaceId);
+    // Accept via the Pinia store directly. The UI-driven helper
+    // (`acceptInviteViaUI`) fails here because after self-leave the space
+    // row is still on Vault B with status=LEAVING — both a leftover space
+    // card AND the new pending-invite card render with the same space
+    // name, and the helper's "find any card containing the name + Accept
+    // button" selector picks the wrong one (Accept button only exists on
+    // the pending-invite card). Driving the store action directly with
+    // the DB-loaded invite payload is the same call the UI button issues.
+    const pendingRows = await sqlQuery<{
+      id: string;
+      space_id: string;
+      space_name: string | null;
+      space_type: string | null;
+      origin_url: string | null;
+      inviter_did: string;
+      inviter_label: string | null;
+      inviter_avatar: string | null;
+      inviter_avatar_options: string | null;
+      inviter_relay_url: string | null;
+      space_endpoints: string | null;
+      token_id: string | null;
+    }>(
+      vaultB,
+      `SELECT id, space_id, space_name, space_type, origin_url,
+              inviter_did, inviter_label, inviter_avatar, inviter_avatar_options, inviter_relay_url,
+              space_endpoints, token_id
+       FROM haex_pending_invites
+       WHERE space_id = ?1 AND status = 'pending'
+       ORDER BY created_at DESC LIMIT 1`,
+      [spaceId],
+    );
+    expect(pendingRows.length).toBe(1);
+    const inviteRow = pendingRows[0];
+
+    const acceptResult = await vaultB.executeScript<{ ok: boolean; error: string | null }>(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const spacesStore = pinia?._s?.get('spacesStore');
+      if (!spacesStore) {
+        return { ok: false, error: 'spacesStore not found in pinia' };
+      }
+      try {
+        // Map snake_case DB column names → camelCase Drizzle field names
+        // that acceptLocalInviteAsync's invite-shape contract expects.
+        const invite = {
+          id: ${JSON.stringify(inviteRow.id)},
+          spaceId: ${JSON.stringify(inviteRow.space_id)},
+          spaceName: ${JSON.stringify(inviteRow.space_name)},
+          spaceType: ${JSON.stringify(inviteRow.space_type)},
+          originUrl: ${JSON.stringify(inviteRow.origin_url)},
+          inviterDid: ${JSON.stringify(inviteRow.inviter_did)},
+          inviterLabel: ${JSON.stringify(inviteRow.inviter_label)},
+          inviterAvatar: ${JSON.stringify(inviteRow.inviter_avatar)},
+          inviterAvatarOptions: ${JSON.stringify(inviteRow.inviter_avatar_options)},
+          inviterRelayUrl: ${JSON.stringify(inviteRow.inviter_relay_url)},
+          spaceEndpoints: ${JSON.stringify(inviteRow.space_endpoints)},
+          tokenId: ${JSON.stringify(inviteRow.token_id)},
+        };
+        await spacesStore.acceptLocalInviteAsync(invite);
+        return { ok: true, error: null };
+      } catch (e) {
+        return { ok: false, error: e?.message ?? String(e) };
+      }
+    `);
+    expect(acceptResult.ok, `acceptLocalInviteAsync failed: ${acceptResult.error}`).toBe(true);
 
     // The actual assertion: exactly one UCAN for (space, B). Before the
     // fix this was 2 — the stale one + the new one. The poll waits for the
