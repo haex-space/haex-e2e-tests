@@ -177,10 +177,23 @@ export async function sendInviteViaUI(
   let dialogOpen: boolean = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await wait(800);
-    triggerFound = await mousedownClickTestId(
-      vault,
-      `space-invite-trigger-${targetSpaceId}`,
-    );
+    // Only (re)click the trigger when it isn't already open. Re-clicking an
+    // already-expanded reka-ui DropdownMenuTrigger via mousedown toggles it
+    // CLOSED, which unmounts the option portal and guarantees the option
+    // click below misses — turning a recoverable retry into a guaranteed
+    // failure for that attempt.
+    const alreadyExpanded = await vault.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+      return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
+    `);
+    if (!alreadyExpanded) {
+      triggerFound = await mousedownClickTestId(
+        vault,
+        `space-invite-trigger-${targetSpaceId}`,
+      );
+    } else {
+      triggerFound = true;
+    }
     triggerExpanded = await vault.executeScript<boolean>(`
       const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
       return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
