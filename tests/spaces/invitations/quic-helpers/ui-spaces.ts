@@ -150,12 +150,18 @@ export async function sendInviteViaUI(
   // `preflight: dialogs=0 trigger=false` on first attempt and only
   // recovered on Playwright retries before we switched away from `.click()`.
   //
-  // The space row exists in `haex_spaces` before the UI has rendered its
-  // card — Vue runs the list re-render on the next microtask. Polling for
-  // the testid first means we don't race the render: CI logs previously
-  // showed `invite-trigger: found=false` on the failing iteration and
-  // `found=true` only on retry #2, with everything downstream cascading
-  // off the missing trigger.
+  // Race that survived even after switching to mousedown: reka-ui's
+  // DropdownMenu auto-closes on click-outside / focus-loss between when
+  // we observe the option mounted and when we dispatch the click event.
+  // The option DOM node gets removed, the click finds nothing, and the
+  // dialog never opens. Retry the entire trigger→option→dialog cascade
+  // until either the dialog is up or we've exhausted 3 attempts.
+  //
+  // Also poll for the trigger testid to be mounted first — the space row
+  // exists in haex_spaces before Vue re-renders its card on the next
+  // microtask, and clicking before the trigger renders cascades into the
+  // same "dialog never opens" failure mode the loop is meant to guard
+  // against.
   const triggerMounted = await pollUntil(
     () => vault.executeScript<boolean>(`
       return !!document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
@@ -163,45 +169,56 @@ export async function sendInviteViaUI(
     { timeout: 5_000, interval: 200, label: `space-invite-trigger-${targetSpaceId} mounted` },
   ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite-trigger-mounted: ${triggerMounted}`);
-  const triggerFound = await mousedownClickTestId(
-    vault,
-    `space-invite-trigger-${targetSpaceId}`,
-  );
-  const triggerExpanded = await vault.executeScript<boolean>(`
-    const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
-    return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
-  `);
+
+  let triggerFound: boolean = false;
+  let triggerExpanded: boolean = false;
+  let optionMounted: boolean = false;
+  let optionClicked: boolean = false;
+  let dialogOpen: boolean = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await wait(800);
+    triggerFound = await mousedownClickTestId(
+      vault,
+      `space-invite-trigger-${targetSpaceId}`,
+    );
+    triggerExpanded = await vault.executeScript<boolean>(`
+      const el = document.querySelector('[data-testid="space-invite-trigger-${targetSpaceId}"]');
+      return !!el && (el.getAttribute('aria-expanded') === 'true' || el.getAttribute('data-state') === 'open');
+    `);
+    // Poll for the menu portal to actually mount the contact option, so we
+    // don't race the click below. reka-ui mounts/unmounts the portal on each
+    // open; the item element won't exist until then.
+    optionMounted = await pollUntil(
+      () => vault.executeScript<boolean>(`
+        return !!document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+      `),
+      { timeout: 5_000, interval: 200, label: "invite-option-contact mounted" },
+    ).catch(() => false);
+
+    // Click the contact option. The testid is on the slot <span>; the actual
+    // reka-ui MenuItem is its parent.
+    optionClicked = await mousedownClickFound(
+      vault,
+      `
+        const span = document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
+        if (!span) return null;
+        return span.closest('[role="menuitem"]') ?? span.parentElement ?? span;
+      `,
+    );
+
+    // Wait for the invite dialog itself to appear before continuing.
+    dialogOpen = await pollUntil(
+      () => vault.executeScript<boolean>(`
+        return !!document.querySelector('[data-testid="invite-contact-select"]');
+      `),
+      { timeout: 5_000, interval: 200, label: "invite dialog open" },
+    ).catch(() => false);
+    if (dialogOpen) break;
+    console.log(`[QUIC-DEBUG] dialog-open attempt ${attempt + 1} failed (trigger=${triggerFound}/${triggerExpanded} option=${optionMounted}/${optionClicked}) — retrying`);
+  }
   console.log(`[QUIC-DEBUG] invite-trigger: found=${triggerFound} expanded=${triggerExpanded}`);
-  // Poll for the menu portal to actually mount the contact option, so we
-  // don't race the click below. reka-ui mounts/unmounts the portal on each
-  // open; the item element won't exist until then.
-  const optionMounted = await pollUntil(
-    () => vault.executeScript<boolean>(`
-      return !!document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
-    `),
-    { timeout: 5_000, interval: 200, label: "invite-option-contact mounted" },
-  ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite-option mounted: ${optionMounted}`);
-
-  // Click the contact option. The testid is on the slot <span>; the actual
-  // reka-ui MenuItem is its parent.
-  const optionClicked = await mousedownClickFound(
-    vault,
-    `
-      const span = document.querySelector('[data-testid="space-invite-option-contact-${targetSpaceId}"]');
-      if (!span) return null;
-      return span.closest('[role="menuitem"]') ?? span.parentElement ?? span;
-    `,
-  );
   console.log(`[QUIC-DEBUG] invite-option click: ${optionClicked}`);
-
-  // Wait for the invite dialog itself to appear before continuing.
-  const dialogOpen = await pollUntil(
-    () => vault.executeScript<boolean>(`
-      return !!document.querySelector('[data-testid="invite-contact-select"]');
-    `),
-    { timeout: 5_000, interval: 200, label: "invite dialog open" },
-  ).catch(() => false);
   console.log(`[QUIC-DEBUG] invite dialog open: ${dialogOpen}`);
 
   // Select contact. Two things have historically broken this step:
