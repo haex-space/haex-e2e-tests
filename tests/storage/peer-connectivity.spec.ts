@@ -182,7 +182,14 @@ test.describe("storage: P2P connectivity between vaults", () => {
       });
     }
 
-    // Generate a signed UCAN token for P2P authorization
+    // Generate a signed UCAN token for P2P authorization.
+    //
+    // The audience must equal the DID Vault B will sign its quic_did_auth
+    // handshake with — peer_storage's Layer 1.25 check rejects any UCAN
+    // whose `aud` does not match the cryptographically verified peer DID
+    // bound to the connection. Vault B signs with the identity row joined
+    // to its device row (i.did = d.owner_did), which is the same row this
+    // beforeAll captured into `ownDidB`.
     const keyPair = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
     const rawPublicKey = new Uint8Array(await subtle.exportKey("raw", keyPair.publicKey));
     const issuerDid = publicKeyToDid(rawPublicKey);
@@ -190,7 +197,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
     ucanToken = await createUcan(
       {
         issuer: issuerDid,
-        audience: issuerDid,
+        audience: ownDidB,
         capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
         expiration: Math.floor(Date.now() / 1000) + 86400,
       },
