@@ -65,13 +65,18 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
   });
 
   test.afterAll(async () => {
-    // Order matters: stop the leader for the test space, then DELETE the
-    // space row on Vault A before peer_storage_stop. Vault A is shared
-    // across all suites and never gets close_database, so a leftover
-    // haex_spaces row with status='active' would cause the frontend's
-    // startLocalSpaceLeadersAsync (triggered by the next startP2PEndpoint)
-    // to try to start a leader for this defunct test space — which slows
-    // every subsequent spec's P2P startup and accumulates over the run.
+    // Vault A is shared across every suite in this shard and never gets
+    // close_database — its Pinia `spacesStore.spaces` and the haex_spaces
+    // table both have to be left clean. Cleanup order:
+    //   1. local_delivery_stop — remove the leader from the multi-leader map.
+    //   2. DELETE FROM haex_spaces (FK cascade handles space_devices,
+    //      invite_tokens, pending_invites, ucan_tokens, mls_sync_keys, etc.).
+    //   3. spacesStore.loadSpacesFromDbAsync — refresh Pinia. Without this,
+    //      the next spec's startP2PEndpoint(vaultA) triggers the frontend's
+    //      startLocalSpaceLeadersAsync, which iterates spaces.value (the
+    //      Pinia ref, NOT the DB) and revives a zombie leader for the now-
+    //      deleted space. Confirmed via cross-vault-file-sharing's "After UI
+    //      start: active_spaces=[<my-deleted-space-ids>]" diagnostic.
     if (spaceId) {
       try { await vaultA.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
       try {
@@ -89,6 +94,16 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
         });
       } catch { /* best effort */ }
     }
+    try {
+      await vaultA.executeScript(`
+        const app = document.getElementById('__nuxt')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const spacesStore = pinia?._s?.get('spacesStore');
+        if (spacesStore?.loadSpacesFromDbAsync) {
+          await spacesStore.loadSpacesFromDbAsync();
+        }
+      `);
+    } catch { /* best effort */ }
     for (const v of [vaultA, vaultB]) {
       if (!v) continue;
       try { await v.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ignore */ }
