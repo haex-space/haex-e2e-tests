@@ -47,6 +47,17 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
   test.beforeAll(async () => {
     vault = new VaultAutomation("A");
     await vault.createSession();
+
+    // Vault A is shared across the workflow shard. The previous suite may
+    // have left the WebView URL at /vault/ but closed the underlying DB
+    // (vault-lifecycle's open-close suite + restoreOriginalVault both
+    // touch close_database). `initializeVaultViaUI` only checks the URL
+    // for early-return, so without an explicit reset we'd skip the open
+    // and hit "Connection to vault failed" on the first sqlQuery.
+    // Force-close + navigate-back so the next initializeVaultViaUI call
+    // takes the real create/open path against a known clean state.
+    try { await vault.invokeTauriCommand("close_database", {}); } catch { /* may already be closed */ }
+    try { await vault.navigateTo("/"); } catch { /* best effort */ }
   });
 
   test("open Vault A via UI", async () => {
