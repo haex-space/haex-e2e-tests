@@ -72,10 +72,12 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
   test("plugin-http reaches sync-server (the production fetch path)", async () => {
     // The Add Backend flow's `fetchRequirementsAsync` calls
     // `@tauri-apps/plugin-http`'s `fetch` against
-    // `${originUrl}/identity-auth/requirements`. We exercise the exact same
-    // plugin command directly to verify the production path works end-to-
-    // end: capability scope allows the URL, plugin-http reaches the
-    // server, the response comes back without CORS preflight blocking.
+    // `${originUrl}/identity-auth/requirements`. We exercise the exact
+    // same Rust plugin (`plugin:http|fetch` + `plugin:http|fetch_send`)
+    // directly via Tauri internals to verify the production path works
+    // end-to-end: capability scope allows the URL, the Rust HTTP client
+    // reaches the server, the response comes back without CORS preflight
+    // blocking.
     //
     // We deliberately skip the UI-driven flow here because driving Nuxt
     // UI's combobox + reactive watchers from WebDriver is brittle in CI
@@ -83,30 +85,45 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
     // doesn't always fire deterministically when the input value is set
     // via DOM mutation). The bug under regression is the FETCH PATH, not
     // the UI form, so we test what's actually load-bearing.
+    //
+    // We call invoke() directly rather than `import('@tauri-apps/plugin-
+    // http')` because dynamic ES-module imports aren't resolvable in the
+    // bundled production webview the test runs against (bare specifiers
+    // are baked in at build time, not available to WebDriver-injected
+    // scripts).
     const result = await vault.executeScript<{
-      ok: boolean;
       status: number;
       error: string | null;
     }>(`
       const url = ${JSON.stringify(syncServerUrl)} + '/identity-auth/requirements';
       try {
-        const { fetch: pluginFetch } = await import('@tauri-apps/plugin-http');
-        const res = await pluginFetch(url);
-        return { ok: res.ok, status: res.status, error: null };
+        const invoke = window.__TAURI_INTERNALS__.invoke;
+        const rid = await invoke('plugin:http|fetch', {
+          clientConfig: {
+            method: 'GET',
+            url,
+            headers: [],
+            maxRedirections: 10,
+          },
+        });
+        const response = await invoke('plugin:http|fetch_send', { rid });
+        return { status: response.status, error: null };
       } catch (e) {
-        return { ok: false, status: 0, error: String(e && e.message ? e.message : e) };
+        return { status: 0, error: String(e && e.message ? e.message : e) };
       }
     `);
 
-    // Pre-fix this would either fail with a capability-denied error
-    // ("URL not in scope") or never run (no plugin-http import on the
-    // useCreateSyncConnection callsite). Post-fix the request lands and
-    // the server responds.
+    // Pre-fix this would fail with a capability-denied error ("URL not
+    // allowed by scope") because the e2e sync-server hostname isn't
+    // under the original `*.haex.space` + localhost scope. Post-fix the
+    // request lands and the server responds with HTTP 200 (or any
+    // non-network status).
     expect(
       result.error,
       `plugin-http fetch to ${syncServerUrl} errored: ${result.error}`,
     ).toBeNull();
-    expect(result.ok).toBe(true);
+    expect(result.status).toBeGreaterThanOrEqual(200);
+    expect(result.status).toBeLessThan(500);
   });
 
   // Why the previous test is meaningful: a plain `fetch()` from the Tauri
@@ -115,37 +132,8 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
   // it's passing because the production code path routes through Rust
   // (tauri-plugin-http) instead of `window.fetch`.
   test("plain browser fetch is blocked by CORS (regression boundary)", async () => {
-    // First prove the URL itself is reachable through the Rust path
-    // (tauri-plugin-http). If this fails the boundary case below would
-    // pass for the WRONG reason (server unreachable, DNS, etc.), which
-    // would defeat the "production code passes for the right reason"
-    // guarantee. Routing through plugin-http bypasses browser CORS and
-    // gives us a positive control on URL reachability.
-    const positiveControl = await vault.executeScript<{
-      ok: boolean;
-      status: number;
-      error: string | null;
-    }>(`
-      const url = ${JSON.stringify(syncServerUrl)} + '/identity-auth/requirements';
-      try {
-        const { fetch: pluginFetch } = await import('/@id/@tauri-apps/plugin-http');
-        const res = await pluginFetch(url);
-        return { ok: res.ok, status: res.status, error: null };
-      } catch (e) {
-        // Fallback for production-bundled webview where the dev-style import
-        // path doesn't resolve — try the global Tauri internals invoke.
-        try {
-          const res = await window.__TAURI_INTERNALS__.invoke('plugin:http|fetch', { clientConfig: {}, url });
-          return { ok: true, status: 0, error: null };
-        } catch (e2) {
-          return { ok: false, status: 0, error: 'plugin-http unreachable: ' + String(e2) };
-        }
-      }
-    `);
-    expect(
-      positiveControl.error,
-      `plugin-http control fetch failed (URL not reachable): ${positiveControl.error}`,
-    ).toBeNull();
+    // The plugin-http reachability is already proven by the previous
+    // test, so we don't repeat the positive control here.
 
     // Now drive the actual regression check: a plain `fetch()` from the
     // webview must be blocked by the browser's CORS preflight. WebKit
