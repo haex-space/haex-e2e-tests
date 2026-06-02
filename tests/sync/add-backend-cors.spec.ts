@@ -224,6 +224,43 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
   // it's passing because the production code path routes through Rust
   // (tauri-plugin-http) instead of `window.fetch`.
   test("plain browser fetch is blocked by CORS (regression boundary)", async () => {
+    // First prove the URL itself is reachable through the Rust path
+    // (tauri-plugin-http). If this fails the boundary case below would
+    // pass for the WRONG reason (server unreachable, DNS, etc.), which
+    // would defeat the "production code passes for the right reason"
+    // guarantee. Routing through plugin-http bypasses browser CORS and
+    // gives us a positive control on URL reachability.
+    const positiveControl = await vault.executeScript<{
+      ok: boolean;
+      status: number;
+      error: string | null;
+    }>(`
+      const url = ${JSON.stringify(syncServerUrl)} + '/identity-auth/requirements';
+      try {
+        const { fetch: pluginFetch } = await import('/@id/@tauri-apps/plugin-http');
+        const res = await pluginFetch(url);
+        return { ok: res.ok, status: res.status, error: null };
+      } catch (e) {
+        // Fallback for production-bundled webview where the dev-style import
+        // path doesn't resolve — try the global Tauri internals invoke.
+        try {
+          const res = await window.__TAURI_INTERNALS__.invoke('plugin:http|fetch', { clientConfig: {}, url });
+          return { ok: true, status: 0, error: null };
+        } catch (e2) {
+          return { ok: false, status: 0, error: 'plugin-http unreachable: ' + String(e2) };
+        }
+      }
+    `);
+    expect(
+      positiveControl.error,
+      `plugin-http control fetch failed (URL not reachable): ${positiveControl.error}`,
+    ).toBeNull();
+
+    // Now drive the actual regression check: a plain `fetch()` from the
+    // webview must be blocked by the browser's CORS preflight. WebKit
+    // raises a network-style exception ("Load failed", "NetworkError"),
+    // Chromium returns the response as opaque + !ok — either way the
+    // failure surface is one of a known set of CORS-blocked markers.
     const probe = await vault.executeScript<{
       ok: boolean;
       status: number;
@@ -238,11 +275,28 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
       }
     `);
 
-    // The webview origin is `tauri://localhost` and the e2e sync-server runs
-    // without CORS_ORIGIN, so the preflight has no matching
-    // Access-Control-Allow-Origin and the browser blocks the response. The
-    // exact failure mode varies — WebKit raises a network exception
-    // ("Load failed"), others return !ok — but it can never succeed.
     expect(probe.ok).toBe(false);
+    // Narrow the failure cause so the test can't pass on an unrelated
+    // network error (DNS, server down, etc.). If probe.error is set we
+    // expect a CORS-style marker; if probe.error is null then status
+    // must be 0/opaque (some browsers return that for blocked requests
+    // instead of throwing).
+    if (probe.error !== null) {
+      expect(probe.error).toMatch(
+        /CORS|Failed to fetch|Load failed|NetworkError|Access-Control/i,
+      );
+    } else {
+      expect(probe.status).toBe(0);
+    }
+  });
+
+  // Vault A is shared across every suite in this workflow shard. Mirror the
+  // beforeAll reset so the next suite starts from a clean slate — without
+  // this the next test that hits Vault A's DB would get "Connection to vault
+  // failed" if it doesn't call initializeVaultViaUI itself (cf. memory:
+  // cross-vault-followup, e2e-prebuilt-binary-broken).
+  test.afterAll(async () => {
+    try { await vault.invokeTauriCommand("close_database", {}); } catch { /* best effort */ }
+    try { await vault.navigateTo("/"); } catch { /* best effort */ }
   });
 });
