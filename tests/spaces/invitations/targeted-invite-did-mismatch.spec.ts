@@ -3,6 +3,7 @@ import { publicKeyToDid } from "@haex-space/ucan";
 import { test, expect, VaultAutomation } from "../../fixtures";
 import { pollUntil, sqlQuery, wait } from "../../helpers/ui/utils";
 import { initializeVaultViaUI } from "../../helpers/ui/ui-vault";
+import { createLocalSpaceViaUI } from "./quic-helpers/ui-spaces";
 
 /**
  * Regression: targeted invite must reject claims from a DID other than the
@@ -152,11 +153,11 @@ test.describe("invitations: targeted-invite DID mismatch is rejected", () => {
   });
 
   test("create local space on Vault A and start the leader", async () => {
-    spaceId = `e2e-targeted-mismatch-${Date.now()}`;
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
-      params: [spaceId, "local", "Targeted Mismatch Space", identityA.id],
-    });
+    // Create through the UI so the vault initializes the owner's admin UCAN —
+    // a raw SQL `INSERT INTO haex_spaces` skips UCAN generation and causes
+    // local_delivery_create_invite to fail with "No admin UCAN found for space".
+    // Same pattern as peer-share-visibility-after-invite.spec.ts.
+    spaceId = await createLocalSpaceViaUI(vaultA, `TargetedMismatch-${Date.now()}`);
 
     // Register Vault A's own device row in the space so leader election finds
     // the publisher device (same boilerplate the working invite specs use).
@@ -216,9 +217,11 @@ test.describe("invitations: targeted-invite DID mismatch is rejected", () => {
     // The claim path needs an haex_identities row for the inviter DID so the
     // pre-flight inviter-resolution check passes. private_key=NULL signals
     // "this is the other party's DID, we only know the public half".
+    // `name` is NOT NULL in the schema (src/database/schemas/identity.ts).
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_identities (id, did, private_key) VALUES (?1, ?2, NULL)`,
-      params: [crypto.randomUUID(), identityA.did],
+      sql: `INSERT OR IGNORE INTO haex_identities (id, did, name, source, private_key)
+            VALUES (?1, ?2, ?3, 'contact', NULL)`,
+      params: [crypto.randomUUID(), identityA.did, "Vault A"],
     });
 
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {

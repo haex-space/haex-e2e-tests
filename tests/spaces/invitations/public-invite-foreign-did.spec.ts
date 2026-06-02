@@ -3,6 +3,7 @@ import { publicKeyToDid } from "@haex-space/ucan";
 import { test, expect, VaultAutomation } from "../../fixtures";
 import { pollUntil, sqlQuery, wait } from "../../helpers/ui/utils";
 import { initializeVaultViaUI } from "../../helpers/ui/ui-vault";
+import { createLocalSpaceViaUI } from "./quic-helpers/ui-spaces";
 
 /**
  * Regression: a public invite (target_did = NULL) still cannot be claimed
@@ -151,9 +152,11 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
     expect(foreignDid).toContain("did:key:");
     expect(foreignDid).not.toBe(identityB.did);
 
+    // `name` is NOT NULL in the schema (src/database/schemas/identity.ts).
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT INTO haex_identities (id, did, private_key) VALUES (?1, ?2, NULL)`,
-      params: [crypto.randomUUID(), foreignDid],
+      sql: `INSERT INTO haex_identities (id, did, name, source, private_key)
+            VALUES (?1, ?2, ?3, 'contact', NULL)`,
+      params: [crypto.randomUUID(), foreignDid, "Phantom Foreign DID"],
     });
 
     const row = await sqlQuery<{ did: string; private_key: string | null }>(
@@ -166,11 +169,11 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
   });
 
   test("Vault A creates a public invite (target_did = NULL) and starts the leader", async () => {
-    spaceId = `e2e-public-foreign-${Date.now()}`;
-    await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
-      params: [spaceId, "local", "Public Foreign Space", identityA.id],
-    });
+    // Create through the UI so the vault initializes the owner's admin UCAN —
+    // raw SQL INSERT skips UCAN generation and causes local_delivery_create_invite
+    // to fail with "No admin UCAN found for space". Same pattern as the working
+    // peer-share-visibility-after-invite spec.
+    spaceId = await createLocalSpaceViaUI(vaultA, `PublicForeign-${Date.now()}`);
 
     const ownDeviceRowsA = await sqlQuery<{ id: string }>(
       vaultA,
@@ -223,9 +226,11 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
   });
 
   test("seed pending invite on Vault B (simulates relay delivery)", async () => {
+    // `name` is NOT NULL in the schema (src/database/schemas/identity.ts).
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: `INSERT OR IGNORE INTO haex_identities (id, did, private_key) VALUES (?1, ?2, NULL)`,
-      params: [crypto.randomUUID(), identityA.did],
+      sql: `INSERT OR IGNORE INTO haex_identities (id, did, name, source, private_key)
+            VALUES (?1, ?2, ?3, 'contact', NULL)`,
+      params: [crypto.randomUUID(), identityA.did, "Vault A"],
     });
 
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
