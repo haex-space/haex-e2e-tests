@@ -108,8 +108,15 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
       if (!v) continue;
       try { await v.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ignore */ }
     }
-    try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
-    try { await vaultB.navigateTo("/"); } catch { /* ignore */ }
+    // Deliberately NOT calling close_database/navigateTo on Vault B here.
+    // That combination resets the WebView URL to "/", which then causes the
+    // next suite's initializeVaultViaUI to skip the early-return path and
+    // run a full vault create. The fresh vault triggers `vault.vue`'s
+    // onMounted auto-start of peer_storage as a fire-and-forget — a subtly
+    // different code path than `startP2PEndpoint`'s UI-driven flow that
+    // breaks cross-vault-file-sharing.spec.ts:523's PushInvite delivery.
+    // Pre-#41 quic-phases also only stopped peer_storage in afterAll; we
+    // match its surface area to stay on the well-tested path.
   });
 
   test("Vault A is open (set up by global-setup)", async () => {
