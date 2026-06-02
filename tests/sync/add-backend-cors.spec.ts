@@ -35,6 +35,9 @@ import {
   clickButton,
   clickTestId,
   elementExists,
+  mousedownClickFound,
+  mousedownClickSelector,
+  setInputValue,
 } from "../helpers/ui/ui-primitives";
 import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
 
@@ -101,16 +104,10 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
 
     // Step 2 — open the server URL select and pick "Custom".
     // The trigger is the first reka-ui combobox button inside the form.
-    const triggerClicked = await vault.executeScript<boolean>(`
-      const btn = document.querySelector('button[aria-haspopup="listbox"]');
-      if (!btn) return false;
-      btn.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('pointerup', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
-      btn.click?.();
-      return true;
-    `);
+    const triggerClicked = await mousedownClickSelector(
+      vault,
+      'button[aria-haspopup="listbox"]',
+    );
     expect(triggerClicked).toBe(true);
 
     await pollUntil(
@@ -121,57 +118,51 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
       { timeout: 10_000, interval: 500, label: "server-URL dropdown options" },
     );
 
-    const customSelected = await vault.executeScript<boolean>(`
-      const opts = [...document.querySelectorAll('[role="option"]')];
-      const match = opts.find(o => {
-        const t = (o.textContent ?? '').toLowerCase();
-        return t.includes('custom') || t.includes('benutzerdefiniert');
-      }) ?? opts[opts.length - 1];
-      if (!match) return false;
-      match.click?.();
-      return true;
-    `);
+    const customSelected = await mousedownClickFound(
+      vault,
+      `
+        const opts = [...document.querySelectorAll('[role="option"]')];
+        const match = opts.find(o => {
+          const t = (o.textContent ?? '').toLowerCase();
+          return t.includes('custom') || t.includes('benutzerdefiniert');
+        }) ?? opts[opts.length - 1];
+        return match ?? null;
+      `,
+    );
     expect(customSelected).toBe(true);
 
     // Step 3 — type the test sync-server URL. The custom URL input is a
     // Nuxt-UI <UiInput> wrapper around a native <input>; v-model is bound to
-    // `customServerUrl`. We push the value through the native setter to make
-    // sure Vue's reactivity actually picks it up — sendKeys can race with the
+    // `customServerUrl`. setInputValue pushes the value through the native
+    // setter so Vue's reactivity picks it up — sendKeys can race with the
     // dropdown's close transition and leave the field empty.
     await pollUntil(
       () => elementExists(vault, '[data-testid="sync-custom-url-input"] input'),
       { timeout: 10_000, interval: 500, label: "custom URL input" },
     );
 
-    const urlSet = await vault.executeScript<{ ok: boolean; value: string }>(`
-      const input = document.querySelector('[data-testid="sync-custom-url-input"] input');
-      if (!input) return { ok: false, value: '(no input)' };
-      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
-      setter.call(input, '');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      setter.call(input, ${JSON.stringify(syncServerUrl)});
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-      return { ok: true, value: input.value };
-    `);
-    expect(urlSet.ok).toBe(true);
-    expect(urlSet.value).toBe(syncServerUrl);
+    await setInputValue(
+      vault,
+      'input',
+      syncServerUrl,
+      '[data-testid="sync-custom-url-input"]',
+    );
+    const urlValue = await vault.executeScript<string>(
+      `return document.querySelector('[data-testid="sync-custom-url-input"] input')?.value ?? '';`,
+    );
+    expect(urlValue).toBe(syncServerUrl);
     await wait(300);
 
     // Step 4 — open the identity select and pick the first identity.
     // The form now has two `aria-haspopup="listbox"` triggers — the server one
     // and the identity one. Pick the second.
-    const identityOpened = await vault.executeScript<boolean>(`
-      const btns = [...document.querySelectorAll('button[aria-haspopup="listbox"]')];
-      const btn = btns[btns.length - 1];
-      if (!btn) return false;
-      btn.dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('pointerup', { button: 0, bubbles: true }));
-      btn.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
-      btn.click?.();
-      return true;
-    `);
+    const identityOpened = await mousedownClickFound(
+      vault,
+      `
+        const btns = [...document.querySelectorAll('button[aria-haspopup="listbox"]')];
+        return btns[btns.length - 1] ?? null;
+      `,
+    );
     expect(identityOpened).toBe(true);
 
     await pollUntil(
@@ -182,12 +173,13 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
       { timeout: 10_000, interval: 500, label: "identity dropdown options" },
     );
 
-    const identityPicked = await vault.executeScript<boolean>(`
-      const opts = [...document.querySelectorAll('[role="option"]')];
-      if (opts.length === 0) return false;
-      opts[0].click?.();
-      return true;
-    `);
+    const identityPicked = await mousedownClickFound(
+      vault,
+      `
+        const opts = [...document.querySelectorAll('[role="option"]')];
+        return opts[0] ?? null;
+      `,
+    );
     expect(identityPicked).toBe(true);
 
     // Step 5 — wait for the requirements fetch to settle. The component shows
