@@ -182,8 +182,14 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
     );
     expect(identityPicked).toBe(true);
 
-    // Step 5 — wait for the requirements fetch to settle. The component shows
-    // either a red UAlert (CORS error) or claim-consent rows.
+    // Step 5 — wait for the requirements fetch to settle. The component
+    // shows either a red UAlert (CORS error), claim-consent rows, or — for
+    // a server that accepted the request but advertises no required
+    // claims — neither. To distinguish "fetch finished" from "fetch never
+    // started", we must observe the loading indicator going through a
+    // true → false transition. A bare `loading=false` snapshot is the
+    // initial state too.
+    let sawLoading = false;
     const result = await pollUntil(
       async () => {
         const state = await vault.executeScript<{
@@ -197,25 +203,33 @@ test.describe("Sync: Add Backend respects Tauri webview CORS", () => {
           const claimCount = document.querySelectorAll('[role="checkbox"]').length;
           return { loading, errorText, claimCount };
         `);
-        if (state.loading) return null;
-        if (state.errorText || state.claimCount > 0) return state;
+        if (state.loading) {
+          sawLoading = true;
+          return null;
+        }
+        // Resolved if: fetch produced an error alert, or rendered claim rows,
+        // or completed silently (we saw the spinner spin and stop).
+        if (state.errorText || state.claimCount > 0 || sawLoading) {
+          return state;
+        }
         return null;
       },
       {
         timeout: 20_000,
-        interval: 1_000,
+        interval: 500,
         label: "requirements fetch resolves",
       },
     );
 
-    // The fetch must not surface an error. Today this fails with a CORS error
-    // string mentioning "Failed to fetch" / "CORS" / similar; after the fix
-    // the alert never appears and claim-consent rows render.
+    // The fetch must not surface an error. Pre-fix this would fail with a
+    // CORS error string mentioning "Failed to fetch" / "CORS" / similar;
+    // post-fix the alert never appears regardless of whether the server
+    // advertises required claims or not. claimCount is intentionally NOT
+    // asserted — the e2e sync-server may run without claim requirements.
     expect(
       result!.errorText,
       `requirements fetch errored: ${result!.errorText}`,
     ).toBeNull();
-    expect(result!.claimCount).toBeGreaterThan(0);
   });
 
   // Why the previous test is meaningful: a plain `fetch()` from the Tauri
