@@ -65,15 +65,58 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
   });
 
   test.afterAll(async () => {
+    // Vault A is shared across every suite in this shard and never gets
+    // close_database — its Pinia `spacesStore.spaces` and the haex_spaces
+    // table both have to be left clean. Cleanup order:
+    //   1. local_delivery_stop — remove the leader from the multi-leader map.
+    //   2. DELETE FROM haex_spaces (FK cascade handles space_devices,
+    //      invite_tokens, pending_invites, ucan_tokens, mls_sync_keys, etc.).
+    //   3. spacesStore.loadSpacesFromDbAsync — refresh Pinia. Without this,
+    //      the next spec's startP2PEndpoint(vaultA) triggers the frontend's
+    //      startLocalSpaceLeadersAsync, which iterates spaces.value (the
+    //      Pinia ref, NOT the DB) and revives a zombie leader for the now-
+    //      deleted space. Confirmed via cross-vault-file-sharing's "After UI
+    //      start: active_spaces=[<my-deleted-space-ids>]" diagnostic.
+    if (spaceId) {
+      try { await vaultA.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
+      try {
+        await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+          sql: `DELETE FROM haex_spaces WHERE id = ?1`,
+          params: [spaceId],
+        });
+      } catch { /* best effort */ }
+    }
+    if (inviteTokenId) {
+      try {
+        await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+          sql: `DELETE FROM haex_invite_tokens WHERE id = ?1`,
+          params: [inviteTokenId],
+        });
+      } catch { /* best effort */ }
+    }
+    try {
+      await vaultA.executeScript(`
+        const app = document.getElementById('__nuxt')?.__vue_app__;
+        const pinia = app?.config?.globalProperties?.$pinia;
+        const spacesStore = pinia?._s?.get('spacesStore');
+        if (spacesStore?.loadSpacesFromDbAsync) {
+          await spacesStore.loadSpacesFromDbAsync();
+        }
+      `);
+    } catch { /* best effort */ }
     for (const v of [vaultA, vaultB]) {
       if (!v) continue;
-      if (spaceId) {
-        try { await v.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
-      }
       try { await v.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ignore */ }
     }
-    try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
-    try { await vaultB.navigateTo("/"); } catch { /* ignore */ }
+    // Deliberately NOT calling close_database/navigateTo on Vault B here.
+    // That combination resets the WebView URL to "/", which then causes the
+    // next suite's initializeVaultViaUI to skip the early-return path and
+    // run a full vault create. The fresh vault triggers `vault.vue`'s
+    // onMounted auto-start of peer_storage as a fire-and-forget — a subtly
+    // different code path than `startP2PEndpoint`'s UI-driven flow that
+    // breaks cross-vault-file-sharing.spec.ts:523's PushInvite delivery.
+    // Pre-#41 quic-phases also only stopped peer_storage in afterAll; we
+    // match its surface area to stay on the well-tested path.
   });
 
   test("Vault A is open (set up by global-setup)", async () => {
