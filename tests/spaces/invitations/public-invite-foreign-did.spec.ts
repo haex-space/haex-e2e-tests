@@ -65,11 +65,32 @@ test.describe("invitations: public invite cannot be claimed with a foreign DID",
   });
 
   test.afterAll(async () => {
+    // Order matters: stop the leader for the test space, then DELETE the
+    // space row on Vault A before peer_storage_stop. Vault A is shared
+    // across all suites and never gets close_database, so a leftover
+    // haex_spaces row with status='active' would cause the frontend's
+    // startLocalSpaceLeadersAsync (triggered by the next startP2PEndpoint)
+    // to try to start a leader for this defunct test space — which slows
+    // every subsequent spec's P2P startup and accumulates over the run.
+    if (spaceId) {
+      try { await vaultA.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
+      try {
+        await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+          sql: `DELETE FROM haex_spaces WHERE id = ?1`,
+          params: [spaceId],
+        });
+      } catch { /* best effort */ }
+    }
+    if (inviteTokenId) {
+      try {
+        await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+          sql: `DELETE FROM haex_invite_tokens WHERE id = ?1`,
+          params: [inviteTokenId],
+        });
+      } catch { /* best effort */ }
+    }
     for (const v of [vaultA, vaultB]) {
       if (!v) continue;
-      if (spaceId) {
-        try { await v.invokeTauriCommand("local_delivery_stop", { spaceId }); } catch { /* ignore */ }
-      }
       try { await v.invokeTauriCommand("peer_storage_stop", {}); } catch { /* ignore */ }
     }
     try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
