@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { setupMarketplace } from "./marketplace-setup";
+import { VaultAutomation } from "./fixtures";
+import { completeWelcomeOnboarding } from "./helpers/ui/ui-welcome";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
@@ -813,6 +815,27 @@ async function initializeTestVault(sessionId: string): Promise<void> {
 
     // Wait for extensions to finish loading
     await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+
+  // Redesigned onboarding: a brand-new vault now shows the WelcomeDialog
+  // (name + device + tour offer) instead of silently auto-registering the
+  // device. Complete it here so the shared session lands on a clean desktop
+  // for every downstream spec — exactly what the old silent fallback did.
+  // Version-tolerant: a no-op on vault builds without the redesigned dialog,
+  // and on later runs where the vault already has a device row.
+  try {
+    const welcomeVault = new VaultAutomation("A");
+    await welcomeVault.createSession();
+    const handled = await completeWelcomeOnboarding(welcomeVault, {
+      userName: "E2E User",
+      deviceName: "e2e-setup-device",
+      timeout: 12_000,
+    });
+    console.log(
+      `[Setup] Welcome onboarding ${handled ? "completed" : "not present (older vault / already onboarded) — skipped"}`,
+    );
+  } catch (error) {
+    console.log("[Setup] Welcome onboarding handling skipped:", (error as Error).message);
   }
 
   console.log("[Setup] Test vault initialized and ready");
