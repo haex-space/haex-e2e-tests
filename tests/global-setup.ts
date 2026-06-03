@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { setupMarketplace } from "./marketplace-setup";
+import { VaultAutomation } from "./fixtures";
+import { completeWelcomeOnboarding } from "./helpers/ui/ui-welcome";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
@@ -815,6 +817,29 @@ async function initializeTestVault(sessionId: string): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 3000));
   }
 
+  // Redesigned onboarding: a brand-new vault now shows the WelcomeDialog
+  // (name + device + tour offer) instead of silently auto-registering the
+  // device. Complete it here so the shared session lands on a clean desktop
+  // for every downstream spec — exactly what the old silent fallback did.
+  //
+  // Version-tolerance is handled INSIDE completeWelcomeOnboarding: it returns
+  // false (without throwing) when the dialog never appears, covering both
+  // older vault builds and runs where the vault is already onboarded. Any
+  // exception that escapes the helper is therefore a real failure (broken
+  // click flow, mid-dialog crash, …) and must surface — silently swallowing
+  // it would leave the WelcomeDialog blocking the desktop and produce cryptic
+  // "launcher-button not found" errors in every downstream spec.
+  const welcomeVault = new VaultAutomation("A");
+  await welcomeVault.createSession();
+  const handled = await completeWelcomeOnboarding(welcomeVault, {
+    userName: "E2E User",
+    deviceName: "e2e-setup-device",
+    timeout: 12_000,
+  });
+  console.log(
+    `[Setup] Welcome onboarding ${handled ? "completed" : "not present (older vault / already onboarded) — skipped"}`,
+  );
+
   console.log("[Setup] Test vault initialized and ready");
 }
 
@@ -891,8 +916,15 @@ async function globalSetup() {
     throw new Error("WebSocket bridge did not start within timeout");
   }
 
-  // Register haex-pass extension (required for browser extension authorization)
-  await installHaexPassExtension(sessionId);
+  // Register haex-pass extension (required for browser extension authorization).
+  // Specs that don't touch haex-pass (e.g. the welcome-dialog UI spec) can skip
+  // this heavier step via SKIP_EXTENSION_INSTALL=true. Defaults to installing,
+  // so CI and haex-pass specs are unaffected.
+  if (process.env.SKIP_EXTENSION_INSTALL === "true") {
+    console.log("[Setup] SKIP_EXTENSION_INSTALL=true — skipping haex-pass extension install");
+  } else {
+    await installHaexPassExtension(sessionId);
+  }
 
   console.log("=== E2E Test Environment Ready ===");
 }
