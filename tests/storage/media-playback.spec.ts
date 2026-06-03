@@ -102,6 +102,75 @@ async function closePreview(vault: VaultAutomation): Promise<void> {
 
 const sel = (testId: string) => `[data-testid="${testId}"]`;
 
+/**
+ * Open the Files window from the launcher — pure UI. Arrange leaves the
+ * Settings window (and possibly a just-closed dialog) in focus, so dismiss
+ * any overlay first, then open the launcher and click the Files item. Returns
+ * whether the Files item became clickable; logs a DOM dump on failure.
+ */
+async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
+  // Dismiss leftover dialog/drawer (create-space dialog, etc.).
+  await vault.executeScript(
+    `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
+  );
+  await wait(500);
+
+  await vault.clickBySelector(sel("launcher-button"), { timeout: 15000 });
+  await wait(500);
+  let found = await vault.waitForElement(sel("launcher-item-system-files"), {
+    timeout: 10000,
+  });
+  if (!found) {
+    // The launcher button toggles — a stale-open launcher would have closed
+    // on the click above. Try once more.
+    await vault.clickBySelector(sel("launcher-button"), { timeout: 5000 });
+    await wait(500);
+    found = await vault.waitForElement(sel("launcher-item-system-files"), {
+      timeout: 10000,
+    });
+  }
+  if (!found) {
+    const diag = await vault.executeScript(`
+      return {
+        launcherButton: !!document.querySelector('[data-testid="launcher-button"]'),
+        launcherItems: [...document.querySelectorAll('[data-testid^="launcher-item-"]')].map(e => e.getAttribute('data-testid')),
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+        bodyText: document.body.innerText.slice(0, 1500),
+      };
+    `);
+    console.log(`[media-playback][diag-launcher] ${JSON.stringify(diag)}`);
+    return false;
+  }
+  return await vault.clickBySelector(sel("launcher-item-system-files"), {
+    timeout: 10000,
+  });
+}
+
+/** Dump overview DOM + DB rows when the seeded share fails to appear. */
+async function diagnoseMissingShare(vault: VaultAutomation): Promise<void> {
+  const dom = await vault.executeScript(`
+    return {
+      peers: [...document.querySelectorAll('[data-testid^="file-peer-"]')].map(e => e.getAttribute('data-testid')),
+      entries: [...document.querySelectorAll('[data-testid^="file-entry-"]')].map(e => e.getAttribute('data-testid')),
+      bodyText: document.body.innerText.slice(0, 2000),
+    };
+  `);
+  console.log(`[media-playback][diag-overview] ${JSON.stringify(dom)}`);
+  const shares = await sqlQuery(
+    vault,
+    "SELECT id, name, endpoint_id, space_id, local_path FROM haex_peer_shares WHERE name = ?1",
+    [SHARE_NAME],
+  );
+  const spaces = await sqlQuery(
+    vault,
+    "SELECT id, name, status, owner_identity_id FROM haex_spaces WHERE name = ?1",
+    [SPACE_NAME],
+  );
+  console.log(
+    `[media-playback][diag-db] shares=${JSON.stringify(shares)} spaces=${JSON.stringify(spaces)}`,
+  );
+}
+
 test.describe("storage: inline media playback (local share, full UI)", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -185,6 +254,17 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   });
 
   test.afterAll(async () => {
+    // Remove the media files first — filesystem_remove won't delete a
+    // non-empty directory.
+    for (const f of [VIDEO_FILE, AUDIO_FILE]) {
+      try {
+        await vault.invokeTauriCommand("filesystem_remove", {
+          path: `${SHARE_DIR}/${f}`,
+        });
+      } catch {
+        // best effort
+      }
+    }
     try {
       await vault.invokeTauriCommand("filesystem_remove", { path: SHARE_DIR });
     } catch {
@@ -198,21 +278,15 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
     test.skip(!arrangeOk, skipReason);
 
     // Open the Files window from the launcher — pure UI.
-    expect(
-      await vault.clickBySelector(sel("launcher-button"), { timeout: 15000 }),
-    ).toBe(true);
-    expect(
-      await vault.clickBySelector(sel("launcher-item-system-files"), {
-        timeout: 15000,
-      }),
-    ).toBe(true);
+    expect(await openFilesWindow(vault)).toBe(true);
 
     // The share shows up in the browser overview.
-    expect(
-      await vault.waitForElement(sel(`file-peer-${SHARE_NAME}`), {
-        timeout: 15000,
-      }),
-    ).toBe(true);
+    const sharePresent = await vault.waitForElement(
+      sel(`file-peer-${SHARE_NAME}`),
+      { timeout: 20000 },
+    );
+    if (!sharePresent) await diagnoseMissingShare(vault);
+    expect(sharePresent).toBe(true);
 
     // Enter the share → its two media files are listed.
     expect(
