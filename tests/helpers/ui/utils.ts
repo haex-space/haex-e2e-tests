@@ -10,13 +10,25 @@ export async function pollUntil<T>(
 ): Promise<T> {
   const { timeout = 15_000, interval = 1_000, label = "condition" } = opts;
   const start = Date.now();
-  let last: T;
+  let last: T | undefined;
+  let attempts = 0;
   while (Date.now() - start < timeout) {
+    attempts++;
     last = await fn();
     if (last) return last;
     await wait(interval);
   }
-  throw new Error(`pollUntil(${label}) timed out after ${timeout}ms`);
+  const elapsed = Date.now() - start;
+  let lastStr: string;
+  try {
+    lastStr = JSON.stringify(last) ?? String(last);
+  } catch {
+    lastStr = String(last);
+  }
+  if (lastStr.length > 200) lastStr = `${lastStr.slice(0, 200)}…`;
+  throw new Error(
+    `pollUntil(${label}) timed out after ${elapsed}ms across ${attempts} attempts; last value: ${lastStr}`,
+  );
 }
 
 /**

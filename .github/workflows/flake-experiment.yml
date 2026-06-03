@@ -1,0 +1,658 @@
+name: Flake Experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: 'Number of attempts (1-30, default 10 ≈ 5 runner-hours)'
+        type: number
+        default: 10
+      spec:
+        description: 'Path to a single spec file'
+        type: string
+        default: 'tests/storage/cross-vault-file-sharing.spec.ts'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate-inputs:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate runs is in range 1-30
+        env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          if ! [[ "$RUNS" =~ ^[0-9]+$ ]]; then
+            echo "::error::runs must be an integer, got: $RUNS"
+            exit 1
+          fi
+          if [ "$RUNS" -lt 1 ] || [ "$RUNS" -gt 30 ]; then
+            echo "::error::runs must be between 1 and 30, got: $RUNS"
+            exit 1
+          fi
+          echo "runs=$RUNS validated"
+
+  matrix-setup:
+    name: Build Attempt Matrix
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    outputs:
+      attempts: ${{ steps.gen.outputs.attempts }}
+    steps:
+      - id: gen
+        env:
+          RUNS: ${{ inputs.runs }}
+        run: |
+          arr=$(seq 1 "$RUNS" | jq -R 'tonumber' | jq -cs .)
+          echo "attempts=$arr" >> "$GITHUB_OUTPUT"
+          echo "Generated matrix: $arr"
+
+  # Build Docker image and save it for parallel test jobs
+  build-env:
+    name: Build Test Environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    outputs:
+      image_artifact: e2e-docker-image-${{ github.run_id }}
+      use_prebuilt_vault: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+      haex_vault_version: ${{ steps.versions.outputs.haex_vault_version }}
+      haextension_version: ${{ steps.versions.outputs.haextension_version }}
+      vault_sdk_version: ${{ steps.versions.outputs.vault_sdk_version }}
+      sync_server_version: ${{ steps.versions.outputs.sync_server_version }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          # Ref resolution priority:
+          # 1. PR head SHA — on pull_request events directly against this repo.
+          #    The github.repository guard is essential: under workflow_call
+          #    the github context is the caller's, so head.sha would point at
+          #    the caller's commit and not exist in this repo.
+          #    head.sha (not head.ref) prevents shell injection via branch names.
+          # 2. The current ref — for workflow_dispatch we want the branch the
+          #    user dispatched from, not main.
+          ref: ${{ (github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || github.ref }}
+
+      - name: Set versions
+        id: versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Same probe as the artifact resolver below — see the comment on
+          # the download step for the cross-repo branch-coupling rationale.
+          # We resolve haex-vault's source ref to the matching branch HEAD
+          # so the migrations cloned from GitHub match the binary downloaded
+          # from the artifact. Without this the source comes from main and
+          # the binary from the feature branch — schema column names diverge.
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          # Resolve each upstream ref to a concrete commit SHA before any
+          # consumer (workflow clone, docker-compose build-arg) uses it.
+          # BuildKit and `git clone --branch` both treat the value opaquely,
+          # so a moving ref like "main" can be served stale, and a 40-char
+          # SHA would fail --branch entirely. Resolving up front avoids both
+          # failure modes and makes every build auditable (the SHA is logged
+          # and flows through as the effective pin).
+          resolve_sha() {
+            local repo="$1" ref="${2:-main}"
+            if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "$ref"
+            else
+              gh api "repos/${repo}/commits/${ref}" --jq .sha
+            fi
+          }
+
+          # For haex-vault, resolve a default ref using a tiered fallback so
+          # the source clone (which carries database/migrations/) stays in
+          # sync with the artifact resolver below, which already picks the
+          # matching branch's binary.
+          #
+          # Priority:
+          #   1. Same-named branch (e.g. a feature branch present in both repos)
+          #   2. develop  (active integration target since haex-vault adopted
+          #      gitflow — main lags behind by a release cycle)
+          #   3. main     (final fallback if develop ever goes away)
+          HAEX_VAULT_REF=""
+          if [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
+              HAEX_VAULT_REF="$E2E_BRANCH"
+              echo "Resolving haex-vault source to matching branch: $HAEX_VAULT_REF"
+            fi
+          fi
+          if [ -z "$HAEX_VAULT_REF" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/develop" --silent 2>/dev/null; then
+              HAEX_VAULT_REF="develop"
+              echo "Resolving haex-vault source to develop (gitflow integration branch)"
+            fi
+          fi
+
+          HAEX_VAULT_SHA=$(resolve_sha "haex-space/haex-vault" "$HAEX_VAULT_REF")
+          HAEXTENSION_SHA=$(resolve_sha "haex-space/haextension" "")
+          VAULT_SDK_SHA=$(resolve_sha "haex-space/vault-sdk" "")
+          SYNC_SERVER_SHA=$(resolve_sha "haex-space/haex-sync-server" "")
+
+          echo "haex_vault_version=$HAEX_VAULT_SHA" >> "$GITHUB_OUTPUT"
+          echo "haextension_version=$HAEXTENSION_SHA" >> "$GITHUB_OUTPUT"
+          echo "vault_sdk_version=$VAULT_SDK_SHA" >> "$GITHUB_OUTPUT"
+          echo "sync_server_version=$SYNC_SERVER_SHA" >> "$GITHUB_OUTPUT"
+
+          echo "Resolved SHAs:"
+          echo "  haex-vault:       $HAEX_VAULT_SHA"
+          echo "  haextension:      $HAEXTENSION_SHA"
+          echo "  vault-sdk:        $VAULT_SDK_SHA"
+          echo "  haex-sync-server: $SYNC_SERVER_SHA"
+
+      - name: Clone dependency repositories
+        env:
+          SYNC_SERVER_SHA: ${{ steps.versions.outputs.sync_server_version }}
+        run: |
+          mkdir -p repos
+
+          # Clone haex-sync-server at the resolved SHA. `git clone --branch`
+          # cannot accept a commit SHA, so we use init + shallow fetch of
+          # the specific SHA + checkout FETCH_HEAD. GitHub allows fetching
+          # arbitrary SHAs by default (uploadpack.allowReachableSHA1InWant).
+          echo "Cloning haex-sync-server at $SYNC_SERVER_SHA..."
+          mkdir -p repos/haex-sync-server
+          (
+            cd repos/haex-sync-server
+            git init -q
+            git remote add origin https://github.com/haex-space/haex-sync-server.git
+            git fetch --depth 1 origin "$SYNC_SERVER_SHA"
+            git checkout -q FETCH_HEAD
+          )
+
+          # Clone haex-marketplace (always main — no input hook exists yet).
+          echo "Cloning haex-marketplace (main)..."
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
+      - name: Download latest haex-vault binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Cross-repo branch coupling: when an e2e-tests branch ships test
+          # changes that depend on an unmerged haex-vault PR (e.g. schema
+          # changes), the matching haex-vault branch usually carries the
+          # same name. Without this resolution the e2e shard runs against
+          # the latest main artifact and fails on the column/API mismatch.
+          # We probe haex-vault for a same-named branch and fall back to
+          # main if it doesn't exist. Mirrors haex-vault's symmetric resolver.
+          E2E_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          echo "Fetching latest successful haex-vault build artifact..."
+
+          # Tiered branch resolution — must stay in sync with the source
+          # clone resolver above (Set versions step), otherwise the binary
+          # downloaded here and the migrations cloned there can diverge.
+          # Priority: same-named → develop → main.
+          TARGET_BRANCH="main"
+          if [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
+              TARGET_BRANCH="$E2E_BRANCH"
+              echo "Found matching haex-vault branch: $TARGET_BRANCH"
+            elif gh api -X GET "repos/haex-space/haex-vault/branches/develop" --silent 2>/dev/null; then
+              TARGET_BRANCH="develop"
+              echo "No matching branch for '$E2E_BRANCH' — using develop (gitflow integration branch)"
+            else
+              echo "No matching haex-vault branch for '$E2E_BRANCH' — using main"
+            fi
+          fi
+
+          # Try to download the Linux e2e artifact from the most recent runs on
+          # the target branch. We don't filter by conclusion because the haex-vault
+          # build often fails its own e2e-tests step while the Linux binary build
+          # succeeds (Windows / e2e-tests are slower / flaky). If the artifact
+          # isn't uploaded (e.g. ubuntu build itself failed), gh run download
+          # returns non-zero and we try the next run. Fall back to main if no
+          # usable artifact is found on the feature branch.
+          download_artifact() {
+            local branch="$1"
+            local run_ids
+            run_ids=$(gh api "repos/haex-space/haex-vault/actions/workflows/build.yml/runs?head_branch=${branch}&per_page=10" \
+              --jq '.workflow_runs | .[].id' \
+              2>/dev/null || echo "")
+
+            for rid in $run_ids; do
+              echo "Trying run $rid on '$branch'..."
+              if gh run download "$rid" --repo haex-space/haex-vault --name haex-vault-linux-e2e 2>/dev/null; then
+                echo "Successfully downloaded pre-built haex-vault binary from run $rid ($branch)"
+                return 0
+              fi
+            done
+            return 1
+          }
+
+          mkdir -p ./docker/prebuilt/haex-vault
+          cd ./docker/prebuilt/haex-vault
+
+          if download_artifact "$TARGET_BRANCH"; then
+            ls -la
+            chmod +x haex-vault 2>/dev/null || true
+          elif [ "$TARGET_BRANCH" != "main" ] && download_artifact "main"; then
+            echo "Used fallback artifact from main"
+            ls -la
+            chmod +x haex-vault 2>/dev/null || true
+          else
+            echo "Could not download artifact, will build from source"
+            cd /
+            rm -rf $GITHUB_WORKSPACE/docker/prebuilt/haex-vault
+          fi
+
+      - name: Prepare pre-built artifacts
+        id: prebuilt
+        run: |
+          USE_PREBUILT_VAULT="false"
+          USE_PREBUILT_SYNC_SERVER="false"
+
+          # Check if haex-vault binary was downloaded (check for actual file, not just directory)
+          if [ -f "./docker/prebuilt/haex-vault/haex-vault" ]; then
+            echo "Found pre-built haex-vault binary"
+            ls -la ./docker/prebuilt/haex-vault/
+            USE_PREBUILT_VAULT="true"
+            chmod +x ./docker/prebuilt/haex-vault/haex-vault
+          else
+            echo "No pre-built haex-vault binary found, will build from source"
+            # Clean up empty directory if it exists
+            rm -rf ./docker/prebuilt/haex-vault 2>/dev/null || true
+          fi
+
+          echo "use_prebuilt_vault=$USE_PREBUILT_VAULT" >> $GITHUB_OUTPUT
+          echo "use_prebuilt_sync_server=$USE_PREBUILT_SYNC_SERVER" >> $GITHUB_OUTPUT
+
+      - name: Log test configuration
+        env:
+          SPEC: ${{ inputs.spec }}
+          RUNS: ${{ inputs.runs }}
+        run: |
+          echo "## Flake Experiment Configuration" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Version |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|---------|" >> "$GITHUB_STEP_SUMMARY"
+
+          # Show haex-vault source
+          if [ "${{ steps.prebuilt.outputs.use_prebuilt_vault }}" == "true" ]; then
+            echo "| haex-vault | \`PRE-BUILT ARTIFACT\` |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "| haextension | \`${{ steps.versions.outputs.haextension_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| vault-sdk | \`${{ steps.versions.outputs.vault_sdk_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| spec | \`$SPEC\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| runs | \`$RUNS\` |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Free disk space
+        run: |
+          echo "Disk space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo rm -rf /usr/local/lib/android
+          sudo apt-get clean
+          echo "Disk space after cleanup:"
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host
+
+      - name: Build and export Docker images
+        env:
+          HAEX_VAULT_VERSION: ${{ steps.versions.outputs.haex_vault_version }}
+          HAEXTENSION_VERSION: ${{ steps.versions.outputs.haextension_version }}
+          VAULT_SDK_VERSION: ${{ steps.versions.outputs.vault_sdk_version }}
+          HAEX_SYNC_SERVER_VERSION: ${{ steps.versions.outputs.sync_server_version }}
+          USE_PREBUILT_VAULT: ${{ steps.prebuilt.outputs.use_prebuilt_vault }}
+          USE_PREBUILT_SYNC_SERVER: ${{ steps.prebuilt.outputs.use_prebuilt_sync_server }}
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          echo "Building with:"
+          if [ "$USE_PREBUILT_VAULT" == "true" ]; then
+            echo "  haex-vault: PRE-BUILT"
+          else
+            echo "  haex-vault: $HAEX_VAULT_VERSION"
+          fi
+          echo "  haextension: $HAEXTENSION_VERSION"
+          echo "  vault-sdk: $VAULT_SDK_VERSION"
+          echo "  sync-server: $HAEX_SYNC_SERVER_VERSION (from $HAEX_SYNC_SERVER_PATH)"
+          echo "  marketplace: from $HAEX_MARKETPLACE_PATH"
+
+          # Ensure prebuilt directory exists (even if empty)
+          mkdir -p prebuilt
+
+          # Build vault-a, sync-server, and marketplace (vault-b uses same image as vault-a)
+          # CI override adds GHA layer cache so apt-get/cargo/playwright layers are reused
+          echo "Building Docker images..."
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.ci.yml build vault-a sync-server marketplace
+
+          # Export vault, sync-server, and marketplace images for parallel test jobs
+          # docker-compose uses project name from directory (docker/)
+          echo "Exporting Docker images..."
+          echo "Available images:"
+          docker images | grep -E "(vault|sync|marketplace)" || true
+
+          # Get actual image names (format: <project>-<service>)
+          # vault-a and vault-b use identical Dockerfile/args, so we only save vault-a
+          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          SYNC_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "sync-server" | head -1)
+          MARKETPLACE_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "marketplace" | head -1)
+
+          if [ -z "$VAULT_IMAGE" ] || [ -z "$SYNC_IMAGE" ]; then
+            echo "ERROR: Could not find required images"
+            docker images
+            exit 1
+          fi
+
+          echo "Saving images: $VAULT_IMAGE, $SYNC_IMAGE, $MARKETPLACE_IMAGE (vault-b will be tagged from vault-a)"
+          if [ -n "$MARKETPLACE_IMAGE" ]; then
+            docker save $VAULT_IMAGE $SYNC_IMAGE $MARKETPLACE_IMAGE | gzip > docker-images.tar.gz
+          else
+            # Marketplace build may have failed or is not available
+            echo "Warning: Marketplace image not found, saving without it"
+            docker save $VAULT_IMAGE $SYNC_IMAGE | gzip > docker-images.tar.gz
+          fi
+          ls -lh docker-images.tar.gz
+
+      - name: Upload Docker images artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+          path: docker-images.tar.gz
+          retention-days: 1
+          compression-level: 0  # Already gzipped
+
+  # Parallel flake-experiment runs of the same spec
+  experiment:
+    name: Attempt ${{ matrix.attempt }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [build-env, matrix-setup]
+
+    strategy:
+      fail-fast: false
+      matrix:
+        attempt: ${{ fromJSON(needs.matrix-setup.outputs.attempts) }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          # Ref resolution priority:
+          # 1. PR head SHA — on pull_request events directly against this repo.
+          # 2. The current ref — for workflow_dispatch we want the branch the
+          #    user dispatched from, not main.
+          ref: ${{ (github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || github.ref }}
+
+      - name: Pre-mark attempt as failed (overwritten on success)
+        env:
+          ATTEMPT: ${{ matrix.attempt }}
+        run: |
+          # Preemptive write so a crash before "Record attempt outcome"
+          # still produces a summary file and the aggregate denominator
+          # reflects the actual number of dispatched attempts.
+          echo "failed" > "attempt-${ATTEMPT}-summary.txt"
+
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+
+          # Clone haex-sync-server (needed for kong.yml config)
+          echo "Cloning haex-sync-server..."
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+
+          # Clone haex-marketplace
+          echo "Cloning haex-marketplace..."
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/lib/android
+          sudo apt-get clean
+
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+
+      - name: Load Docker images
+        run: |
+          echo "Loading Docker images..."
+          gunzip -c docker-images.tar.gz | docker load
+
+          # Tag vault-a as vault-b (they use identical Dockerfile)
+          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          docker tag "$VAULT_IMAGE" docker-vault-b:latest
+
+          docker images
+
+      - name: Pull base images
+        run: |
+          # Pull images that weren't exported (base images from registry)
+          docker pull supabase/postgres:15.8.1.085
+          docker pull supabase/gotrue:v2.169.0
+          docker pull kong:2.8.1
+          docker pull postgrest/postgrest:v12.2.0
+          docker pull supabase/storage-api:v1.14.3
+
+      - name: Start services
+        env:
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          # Start sync stack - database first, then dependent services
+          echo "Starting sync-db..."
+          docker compose -f docker/docker-compose.yml up -d sync-db
+          echo "Waiting for sync-db to be healthy..."
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_db 2>/dev/null | grep -q healthy; then
+              echo "sync-db healthy after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Starting sync-gotrue, sync-realtime, sync-kong, sync-server..."
+          docker compose -f docker/docker-compose.yml up -d sync-gotrue sync-realtime sync-kong sync-server
+
+          # Start marketplace stack - database first, then dependent services
+          echo "Starting marketplace-db..."
+          docker compose -f docker/docker-compose.yml up -d marketplace-db
+          echo "Waiting for marketplace-db to be healthy..."
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace_db 2>/dev/null | grep -q healthy; then
+              echo "marketplace-db healthy after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Starting marketplace dependent services..."
+          docker compose -f docker/docker-compose.yml up -d marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
+
+          # Wait for all services to be healthy
+          echo "Waiting for all services to be ready..."
+          for i in {1..60}; do
+            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
+            REALTIME_STATUS=$(docker inspect --format='{{.State.Health.Status}}' realtime.haex_e2e_sync 2>/dev/null || echo "starting")
+            MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
+            if [ "$SYNC_STATUS" == "healthy" ] && [ "$REALTIME_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
+              echo "All services ready after ~$((i*5))s"
+              break
+            fi
+            echo "Waiting for services... ($i/60) - sync-server: $SYNC_STATUS, realtime: $REALTIME_STATUS, marketplace: $MARKETPLACE_STATUS"
+            sleep 5
+          done
+
+          docker compose -f docker/docker-compose.yml ps
+
+          # Dump container logs if any service is unhealthy
+          if [ "$SYNC_STATUS" != "healthy" ] || [ "$REALTIME_STATUS" != "healthy" ] || [ "$MARKETPLACE_STATUS" != "healthy" ]; then
+            echo "::error::Services failed to become healthy! Dumping logs..."
+            if [ "$SYNC_STATUS" != "healthy" ] || [ "$REALTIME_STATUS" != "healthy" ]; then
+              echo "=== sync-server logs ==="
+              docker logs haex_e2e_sync_server 2>&1 || true
+              echo "=== sync-db logs ==="
+              docker logs haex_e2e_sync_db 2>&1 | tail -30 || true
+              echo "=== sync-kong logs ==="
+              docker logs haex_e2e_sync_kong 2>&1 | tail -20 || true
+              echo "=== sync-realtime logs ==="
+              docker logs realtime.haex_e2e_sync 2>&1 | tail -30 || true
+            fi
+            if [ "$MARKETPLACE_STATUS" != "healthy" ]; then
+              echo "=== marketplace logs ==="
+              docker logs haex_e2e_marketplace 2>&1 || true
+            fi
+            exit 1
+          fi
+
+      - name: Run spec (attempt ${{ matrix.attempt }})
+        id: test
+        env:
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
+          CI: true
+          # Paths to cloned repositories (must be absolute for docker-compose context resolution)
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+          SPEC: ${{ inputs.spec }}
+        run: |
+          # Start vault containers
+          docker compose -f docker/docker-compose.yml up -d vault-a vault-b
+
+          # Wait for tauri-driver to be ready
+          echo "Waiting for tauri-driver to be ready..."
+          for i in {1..30}; do
+            if docker compose -f docker/docker-compose.yml exec -T vault-a curl -s http://localhost:4444/status > /dev/null 2>&1; then
+              echo "tauri-driver ready after ~$((i*2))s"
+              break
+            fi
+            echo "Waiting for tauri-driver... ($i/30)"
+            sleep 2
+          done
+
+          echo "Running spec: $SPEC"
+          docker compose -f docker/docker-compose.yml exec vault-a pnpm test "$SPEC"
+
+      - name: Record attempt outcome
+        if: always()
+        env:
+          ATTEMPT: ${{ matrix.attempt }}
+          OUTCOME: ${{ steps.test.outcome }}
+        run: |
+          if [ "$OUTCOME" = "success" ]; then
+            echo "success" > "attempt-${ATTEMPT}-summary.txt"
+          else
+            echo "failed" > "attempt-${ATTEMPT}-summary.txt"
+          fi
+          echo "Attempt $ATTEMPT outcome: $OUTCOME"
+
+      - name: Copy test results from container
+        if: always()
+        run: |
+          mkdir -p ./test-results
+          docker run --rm \
+            -v docker_test-results:/results \
+            -v $(pwd)/test-results:/output \
+            alpine sh -c "cp -r /results/* /output/ 2>&1 || echo 'Copy completed (may be empty)'"
+
+      - name: Copy screenshots from container
+        if: always()
+        run: |
+          mkdir -p ./test-results/screenshots
+          # Copy screenshots from vault-a container
+          docker cp haex_e2e_vault_a:/tmp/. ./test-results/screenshots/ 2>/dev/null || true
+          # Filter only screenshot files
+          find ./test-results/screenshots -type f ! -name "e2e-screenshot-*.png" -delete 2>/dev/null || true
+          echo "Screenshots collected:"
+          ls -la ./test-results/screenshots/ 2>/dev/null || echo "No screenshots found"
+
+      - name: Upload attempt summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-attempt-${{ matrix.attempt }}
+          path: |
+            attempt-${{ matrix.attempt }}-summary.txt
+            test-results/
+          retention-days: 14
+
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v
+
+  # Aggregate per-attempt outcomes into a flake-rate histogram
+  aggregate:
+    name: Aggregate Flake Results
+    runs-on: ubuntu-latest
+    needs: experiment
+    if: always()
+
+    steps:
+      - name: Download all attempt summaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: flake-attempt-*
+          merge-multiple: false
+
+      - name: Compute and report flake rate
+        env:
+          SPEC: ${{ inputs.spec }}
+          REQUESTED_RUNS: ${{ inputs.runs }}
+        run: |
+          # Each artifact lands in its own subdirectory under cwd:
+          #   ./flake-attempt-1/attempt-1-summary.txt
+          #   ./flake-attempt-2/attempt-2-summary.txt
+          shopt -s nullglob
+          files=(flake-attempt-*/attempt-*-summary.txt)
+          total=${#files[@]}
+
+          if [ "$total" -eq 0 ]; then
+            echo "::error::No attempt summaries found — all experiment jobs likely failed before recording an outcome"
+            {
+              echo "## Flake Experiment Results"
+              echo ""
+              echo "- Spec: \`$SPEC\`"
+              echo "- Requested attempts: $REQUESTED_RUNS"
+              echo "- Recorded attempts: 0"
+              echo ""
+              echo "No outcome files were uploaded; see individual job logs."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          passed=0
+          failed=0
+          for f in "${files[@]}"; do
+            if [ "$(cat "$f")" = "success" ]; then
+              passed=$((passed + 1))
+            else
+              failed=$((failed + 1))
+            fi
+          done
+
+          rate=$(( passed * 100 / total ))
+
+          {
+            echo "## Flake Experiment Results"
+            echo ""
+            echo "- Spec: \`$SPEC\`"
+            echo "- Attempts: $total"
+            echo "- Passed: $passed"
+            echo "- Failed: $failed"
+            echo "- Pass rate: ${rate}%"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "total=$total passed=$passed failed=$failed rate=${rate}%"

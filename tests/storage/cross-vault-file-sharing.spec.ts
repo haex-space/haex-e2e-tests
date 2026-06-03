@@ -8,6 +8,7 @@ import {
   setInputValue,
   elementExists,
 } from "../helpers/ui/ui-primitives";
+import { dumpVaultPair } from "../helpers/ui/dump-pair";
 import { initializeVaultViaUI, openSettingsCategory, startP2PEndpoint } from "../helpers/ui/ui-vault";
 import type { JsonValue, PeerStorageStatus } from "../helpers/ui/types";
 
@@ -329,6 +330,12 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     // by global-setup and shared across suites — do NOT close it.
     try { await vaultB.invokeTauriCommand("close_database", {}); } catch { /* ignore */ }
     try { await vaultB.navigateTo("/"); } catch { /* ignore */ }
+  });
+
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status !== "passed") {
+      await dumpVaultPair(vaultA, vaultB, `${testInfo.title} (${testInfo.status})`);
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
