@@ -914,8 +914,15 @@ async function globalSetup() {
     throw new Error("WebSocket bridge did not start within timeout");
   }
 
-  // Register haex-pass extension (required for browser extension authorization)
-  await installHaexPassExtension(sessionId);
+  // Register haex-pass extension (required for browser extension authorization).
+  // Specs that don't touch haex-pass (e.g. the welcome-dialog UI spec) can skip
+  // this heavier step via SKIP_EXTENSION_INSTALL=true. Defaults to installing,
+  // so CI and haex-pass specs are unaffected.
+  if (process.env.SKIP_EXTENSION_INSTALL === "true") {
+    console.log("[Setup] SKIP_EXTENSION_INSTALL=true — skipping haex-pass extension install");
+  } else {
+    await installHaexPassExtension(sessionId);
+  }
 
   console.log("=== E2E Test Environment Ready ===");
 }
