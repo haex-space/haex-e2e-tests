@@ -33,3 +33,6 @@ repos/
 docs/
 docker/prebuilt/
 prebuilt/
+
+# Git worktrees
+.worktrees/
