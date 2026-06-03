@@ -134,7 +134,11 @@ test.describe("ui: welcome dialog (onboarding redesign)", () => {
 
     await clickTestId(vault, "welcome-tour-start");
 
-    // The dialog closes and the driver.js tour becomes active.
+    // The driver.js tour becomes active. onStartTour sets the dialog's
+    // `visible` to false before awaiting tourStore.start(), so isActive===true
+    // also proves the dialog's close path ran. (We don't assert the dialog node
+    // is gone — Reka/Nuxt-UI keeps the modal content portaled in the DOM while
+    // closed, so a querySelector check is not a reliable visibility signal.)
     await pollUntil(
       () =>
         vault.executeScript<boolean>(`
@@ -145,7 +149,6 @@ test.describe("ui: welcome dialog (onboarding redesign)", () => {
         `),
       { timeout: 10_000, interval: 500, label: "tour active" },
     );
-    expect(await elementExists(vault, '[data-testid="welcome-tour-start"]')).toBe(false);
 
     // Completing the tour resolves the start() promise (Option-a coupling) and
     // clears isActive. On a fresh vault (only the personal space) no publishing
@@ -192,16 +195,20 @@ test.describe("ui: welcome dialog (onboarding redesign)", () => {
       { timeout: 10_000, interval: 500, label: "reclaim toggle" },
     );
 
-    // Expanding it reveals the known device(s).
+    // Expanding it reveals the known device(s), each rendered with a
+    // welcome-reclaim-<id> testid. Click once (toggling re-clicks would just
+    // collapse it again), then poll for the item to render.
     await clickTestId(vault, "welcome-reclaim-toggle");
-    await wait(500);
-    const hasReclaimItem = await vault.executeScript<boolean>(`
-      return [...document.querySelectorAll('[data-testid]')].some((el) => {
-        const id = el.getAttribute('data-testid');
-        return id && id.startsWith('welcome-reclaim-') && id !== 'welcome-reclaim-toggle';
-      });
-    `);
-    expect(hasReclaimItem).toBe(true);
+    await pollUntil(
+      () =>
+        vault.executeScript<boolean>(`
+          return [...document.querySelectorAll('[data-testid]')].some((el) => {
+            const id = el.getAttribute('data-testid');
+            return id && id.startsWith('welcome-reclaim-') && id !== 'welcome-reclaim-toggle';
+          });
+        `),
+      { timeout: 8_000, interval: 500, label: "reclaim device item" },
+    );
 
     // Dismiss so afterAll can restore the baseline cleanly.
     await clickTestId(vault, "welcome-skip");
