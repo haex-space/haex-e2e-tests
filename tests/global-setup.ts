@@ -821,22 +821,24 @@ async function initializeTestVault(sessionId: string): Promise<void> {
   // (name + device + tour offer) instead of silently auto-registering the
   // device. Complete it here so the shared session lands on a clean desktop
   // for every downstream spec — exactly what the old silent fallback did.
-  // Version-tolerant: a no-op on vault builds without the redesigned dialog,
-  // and on later runs where the vault already has a device row.
-  try {
-    const welcomeVault = new VaultAutomation("A");
-    await welcomeVault.createSession();
-    const handled = await completeWelcomeOnboarding(welcomeVault, {
-      userName: "E2E User",
-      deviceName: "e2e-setup-device",
-      timeout: 12_000,
-    });
-    console.log(
-      `[Setup] Welcome onboarding ${handled ? "completed" : "not present (older vault / already onboarded) — skipped"}`,
-    );
-  } catch (error) {
-    console.log("[Setup] Welcome onboarding handling skipped:", (error as Error).message);
-  }
+  //
+  // Version-tolerance is handled INSIDE completeWelcomeOnboarding: it returns
+  // false (without throwing) when the dialog never appears, covering both
+  // older vault builds and runs where the vault is already onboarded. Any
+  // exception that escapes the helper is therefore a real failure (broken
+  // click flow, mid-dialog crash, …) and must surface — silently swallowing
+  // it would leave the WelcomeDialog blocking the desktop and produce cryptic
+  // "launcher-button not found" errors in every downstream spec.
+  const welcomeVault = new VaultAutomation("A");
+  await welcomeVault.createSession();
+  const handled = await completeWelcomeOnboarding(welcomeVault, {
+    userName: "E2E User",
+    deviceName: "e2e-setup-device",
+    timeout: 12_000,
+  });
+  console.log(
+    `[Setup] Welcome onboarding ${handled ? "completed" : "not present (older vault / already onboarded) — skipped"}`,
+  );
 
   console.log("[Setup] Test vault initialized and ready");
 }

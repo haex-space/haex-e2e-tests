@@ -4,7 +4,16 @@ import { clickTestId, elementExists, setInputValue } from "./ui-primitives";
 
 const USER_NAME = '[data-testid="welcome-user-name"]';
 const DEVICE_NAME = '[data-testid="welcome-device-name"]';
+const NEXT = '[data-testid="welcome-next"]';
 const TOUR_SKIP = '[data-testid="welcome-tour-skip"]';
+
+/** Whether the Continue button is currently disabled (native or aria). */
+function nextDisabled(vault: VaultAutomation): Promise<boolean> {
+  return vault.executeScript<boolean>(`
+    const b = document.querySelector(${JSON.stringify(NEXT)});
+    return !!b && (b.disabled === true || b.getAttribute('aria-disabled') === 'true');
+  `);
+}
 
 /**
  * True when the redesigned WelcomeDialog (Step 1: name + device) is on screen.
@@ -40,18 +49,21 @@ export async function completeWelcomeOnboarding(
 
   await setInputValue(vault, "input", userName, USER_NAME);
   await setInputValue(vault, "input", deviceName, DEVICE_NAME);
-  await wait(200);
 
-  // Step 1 → Step 2: clicking Continue registers the device row. Retry until
-  // the tour-offer step renders — the button is disabled until both fields
-  // hold a value, so an early click is a harmless no-op.
+  // Wait for Vue's reactivity tick to flip canProceed → button enabled,
+  // *then* click once. Avoids the brittle "click every 500 ms until Step 2
+  // appears" pattern, which can race a re-validation cycle that briefly
+  // re-disables the button.
   await pollUntil(
-    async () => {
-      await clickTestId(vault, "welcome-next");
-      await wait(300);
-      return elementExists(vault, TOUR_SKIP);
-    },
-    { timeout: 10_000, interval: 500, label: "welcome step 2 (tour offer)" },
+    async () => !(await nextDisabled(vault)),
+    { timeout: 5_000, interval: 100, label: "welcome-next enabled" },
+  );
+  await clickTestId(vault, "welcome-next");
+
+  // Step 1 → Step 2: clicking Continue registers the device row.
+  await pollUntil(
+    () => elementExists(vault, TOUR_SKIP),
+    { timeout: 10_000, interval: 250, label: "welcome step 2 (tour offer)" },
   );
 
   // Skip the tour → the dialog closes.

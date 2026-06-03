@@ -153,7 +153,7 @@ test.describe("ui: welcome dialog (onboarding redesign)", () => {
     // Completing the tour resolves the start() promise (Option-a coupling) and
     // clears isActive. On a fresh vault (only the personal space) no publishing
     // dialog follows, so the desktop is clean afterwards.
-    await vault.executeScript(`
+    await vault.executeScript<string>(`
       const app = document.getElementById('__nuxt')?.__vue_app__;
       const pinia = app?.config?.globalProperties?.$pinia;
       const t = pinia?._s?.get('tourStore');
@@ -178,15 +178,33 @@ test.describe("ui: welcome dialog (onboarding redesign)", () => {
     // device row's device_id to a foreign value so it no longer matches this
     // machine's device_id file. resolveAsync then reports no match but lists it
     // as a known device → the WelcomeDialog re-opens with the reclaim section.
-    await vault.invokeTauriCommand("sql_execute", {
-      sql: "UPDATE haex_devices SET device_id = ?1",
-      params: ["e2e-foreign-device-id"],
+    //
+    // - sql_execute_with_crdt: project policy — every write on haex_* tables
+    //   goes through the CRDT helper so a future sync round can't revert it
+    //   silently.
+    // - WHERE id IN (SELECT…): targets the just-registered row even if some
+    //   future setup change seeds more device rows on init.
+    // - surface resolveAsync errors instead of swallowing them — a thrown
+    //   resolver would otherwise hide behind a generic "reclaim toggle"
+    //   timeout.
+    const ownDevices = await sqlQuery<{ id: string }>(
+      vault,
+      "SELECT id FROM haex_devices",
+    );
+    expect(ownDevices.length).toBeGreaterThanOrEqual(1);
+    await vault.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: "UPDATE haex_devices SET device_id = ?1 WHERE id = ?2",
+      params: ["e2e-foreign-device-id", ownDevices[0]!.id],
     });
     await vault.executeScript(`
       const app = document.getElementById('__nuxt')?.__vue_app__;
       const pinia = app?.config?.globalProperties?.$pinia;
       const ds = pinia?._s?.get('vaultDeviceStore');
-      if (ds && ds.resolveAsync) ds.resolveAsync().catch(() => {});
+      if (ds && ds.resolveAsync) {
+        ds.resolveAsync().catch((err) => console.error('[E2E] resolveAsync threw:', err));
+      } else {
+        console.error('[E2E] vaultDeviceStore.resolveAsync missing');
+      }
       return 'fired';
     `);
 
