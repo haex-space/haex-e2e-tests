@@ -28,7 +28,7 @@ export function isFfmpegAvailable(): boolean {
 }
 
 export interface GeneratedMedia {
-  /** base64 of a ~2s H.264/AAC MP4 (faststart: moov atom up front for seeking). */
+  /** base64 of a ~2s H.264 (video-only) MP4 — faststart: moov atom up front for seeking. */
   videoBase64: string;
   /** base64 of a ~2s MP3 sine tone. */
   audioBase64: string;

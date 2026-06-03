@@ -212,12 +212,15 @@ async function diagnoseMissingShare(vault: VaultAutomation): Promise<void> {
  * Range probe where the WebView permits the fetch. A missing headless codec
  * (`MEDIA_ERR_SRC_NOT_SUPPORTED` = 4) is tolerated — it's not a fix
  * regression and the Rust `media_server` test already covers decoding-free
- * byte serving; a `MEDIA_ERR_NETWORK` (2) would mean delivery broke and fails.
+ * byte serving. Any other error fails: `MEDIA_ERR_NETWORK` (2) means delivery
+ * broke, and `MEDIA_ERR_DECODE` (3) means the range server fed the element
+ * corrupt/truncated bytes — both real regressions. So only `null` (played)
+ * or `4` (no headless codec) are allowed.
  */
 function assertStreamedFromRangeServer(state: MediaElementState): void {
   expect(state.found).toBe(true);
   expect(state.src).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
-  expect(state.error).not.toBe(2);
+  expect([null, 4]).toContain(state.error);
   if (state.fetchErr === null) {
     // 206 + exactly the 16 requested bytes proves the range server honoured
     // the Range request against the local file. The `Content-Range` header
