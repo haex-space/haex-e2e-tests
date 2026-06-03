@@ -163,16 +163,27 @@ jobs:
           }
 
           # For haex-vault, when no explicit version was passed (standalone
-          # PR/push), prefer a same-named branch on haex-vault. This keeps
-          # the source clone (which carries database/migrations/) in sync
+          # PR/push), resolve a default ref using a tiered fallback so the
+          # source clone (which carries database/migrations/) stays in sync
           # with the artifact resolver below, which already picks the
-          # matching branch's binary. Falls back to main if no matching
-          # branch exists.
+          # matching branch's binary.
+          #
+          # Priority:
+          #   1. Same-named branch (e.g. a feature branch present in both repos)
+          #   2. develop  (active integration target since haex-vault adopted
+          #      gitflow — main lags behind by a release cycle)
+          #   3. main     (final fallback if develop ever goes away)
           HAEX_VAULT_REF="$INPUT_HAEX_VAULT"
           if [ -z "$HAEX_VAULT_REF" ] && [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
             if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
               HAEX_VAULT_REF="$E2E_BRANCH"
               echo "Resolving haex-vault source to matching branch: $HAEX_VAULT_REF"
+            fi
+          fi
+          if [ -z "$HAEX_VAULT_REF" ]; then
+            if gh api -X GET "repos/haex-space/haex-vault/branches/develop" --silent 2>/dev/null; then
+              HAEX_VAULT_REF="develop"
+              echo "Resolving haex-vault source to develop (gitflow integration branch)"
             fi
           fi
 
