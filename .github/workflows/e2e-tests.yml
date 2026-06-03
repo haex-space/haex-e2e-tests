@@ -251,11 +251,18 @@ jobs:
         run: |
           echo "Fetching latest successful haex-vault build artifact..."
 
+          # Tiered branch resolution — must stay in sync with the source
+          # clone resolver above (Set versions step), otherwise the binary
+          # downloaded here and the migrations cloned there can diverge.
+          # Priority: same-named → develop → main.
           TARGET_BRANCH="main"
           if [ -n "$E2E_BRANCH" ] && [ "$E2E_BRANCH" != "main" ]; then
             if gh api -X GET "repos/haex-space/haex-vault/branches/$E2E_BRANCH" --silent 2>/dev/null; then
               TARGET_BRANCH="$E2E_BRANCH"
               echo "Found matching haex-vault branch: $TARGET_BRANCH"
+            elif gh api -X GET "repos/haex-space/haex-vault/branches/develop" --silent 2>/dev/null; then
+              TARGET_BRANCH="develop"
+              echo "No matching branch for '$E2E_BRANCH' — using develop (gitflow integration branch)"
             else
               echo "No matching haex-vault branch for '$E2E_BRANCH' — using main"
             fi
