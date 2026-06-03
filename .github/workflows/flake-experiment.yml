@@ -4,13 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: 'Number of attempts (1-30)'
+        description: 'Number of attempts (1-30, default 10 ≈ 5 runner-hours)'
         type: number
         default: 10
       spec:
         description: 'Path to a single spec file'
         type: string
         default: 'tests/storage/cross-vault-file-sharing.spec.ts'
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   validate-inputs:
@@ -260,24 +264,27 @@ jobs:
           echo "use_prebuilt_sync_server=$USE_PREBUILT_SYNC_SERVER" >> $GITHUB_OUTPUT
 
       - name: Log test configuration
+        env:
+          SPEC: ${{ inputs.spec }}
+          RUNS: ${{ inputs.runs }}
         run: |
-          echo "## Flake Experiment Configuration" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Component | Version |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "## Flake Experiment Configuration" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Version |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|---------|" >> "$GITHUB_STEP_SUMMARY"
 
           # Show haex-vault source
           if [ "${{ steps.prebuilt.outputs.use_prebuilt_vault }}" == "true" ]; then
-            echo "| haex-vault | \`PRE-BUILT ARTIFACT\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| haex-vault | \`PRE-BUILT ARTIFACT\` |" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| haex-vault | \`${{ steps.versions.outputs.haex_vault_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          echo "| haextension | \`${{ steps.versions.outputs.haextension_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| vault-sdk | \`${{ steps.versions.outputs.vault_sdk_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| spec | \`${{ inputs.spec }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| runs | \`${{ inputs.runs }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| haextension | \`${{ steps.versions.outputs.haextension_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| vault-sdk | \`${{ steps.versions.outputs.vault_sdk_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| sync-server | \`${{ steps.versions.outputs.sync_server_version }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| spec | \`$SPEC\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| runs | \`$RUNS\` |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Free disk space
         run: |
@@ -386,6 +393,15 @@ jobs:
           # 2. The current ref — for workflow_dispatch we want the branch the
           #    user dispatched from, not main.
           ref: ${{ (github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || github.ref }}
+
+      - name: Pre-mark attempt as failed (overwritten on success)
+        env:
+          ATTEMPT: ${{ matrix.attempt }}
+        run: |
+          # Preemptive write so a crash before "Record attempt outcome"
+          # still produces a summary file and the aggregate denominator
+          # reflects the actual number of dispatched attempts.
+          echo "failed" > "attempt-${ATTEMPT}-summary.txt"
 
       - name: Clone dependency repositories
         run: |
