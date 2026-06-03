@@ -22,6 +22,10 @@ export async function dumpVaultPair(
   b: VaultAutomation,
   label: string,
 ): Promise<void> {
+  if (!a || !b) {
+    console.log(`${PREFIX} ${label}: vaults not initialized — skipping dump`);
+    return;
+  }
   try {
     console.log(`${PREFIX} ${label}:`);
 
@@ -31,6 +35,7 @@ export async function dumpVaultPair(
       aPendingInvites,
       aIdentities,
       bPeerStatus,
+      bLocalDelivery,
       bPendingInvites,
       bIdentities,
     ] = await Promise.allSettled([
@@ -39,6 +44,7 @@ export async function dumpVaultPair(
       sqlQuery(a, "SELECT id, status, space_id FROM haex_pending_invites"),
       sqlQuery(a, "SELECT did, name, source FROM haex_identities"),
       b.invokeTauriCommand("peer_storage_status", {}),
+      b.invokeTauriCommand("local_delivery_status", {}),
       sqlQuery(b, "SELECT id, status, space_id FROM haex_pending_invites"),
       sqlQuery(b, "SELECT did, name, source FROM haex_identities"),
     ]);
@@ -48,6 +54,7 @@ export async function dumpVaultPair(
     logResult(label, "A.haex_pending_invites", aPendingInvites);
     logResult(label, "A.haex_identities", aIdentities);
     logResult(label, "B.peer_storage_status", bPeerStatus);
+    logResult(label, "B.local_delivery_status", bLocalDelivery);
     logResult(label, "B.haex_pending_invites", bPendingInvites);
     logResult(label, "B.haex_identities", bIdentities);
 
