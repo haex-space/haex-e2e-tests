@@ -219,8 +219,13 @@ function assertStreamedFromRangeServer(state: MediaElementState): void {
   expect(state.src).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
   expect(state.error).not.toBe(2);
   if (state.fetchErr === null) {
+    // 206 + exactly the 16 requested bytes proves the range server honoured
+    // the Range request against the local file. The `Content-Range` header
+    // itself isn't asserted: it's not CORS-safelisted, so a cross-origin
+    // `fetch()` from the WebView can't read it (the server sends it; the
+    // media element uses it; JS just can't see it without
+    // Access-Control-Expose-Headers).
     expect(state.fetchStatus).toBe(206);
-    expect(state.fetchContentRange).toMatch(/^bytes 0-15\/\d+$/);
     expect(state.fetchLen).toBe(16);
   }
 }
