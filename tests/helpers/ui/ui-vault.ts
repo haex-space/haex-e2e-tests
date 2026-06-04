@@ -7,6 +7,7 @@ import {
   clickTestId,
   elementExists,
 } from "./ui-primitives";
+import { completeWelcomeOnboarding } from "./ui-welcome";
 
 /**
  * Open (or create) a vault through the real UI.
@@ -127,6 +128,21 @@ export async function initializeVaultViaUI(
 
   // Let stores finish initialising (identity, extensions, sync)
   await wait(5000);
+
+  // Drive the redesigned WelcomeDialog (Step 1: name + device → register row,
+  // Step 2: skip tour) if it appears. On a fresh vault opened via the UI, the
+  // dialog blocks the desktop AND must be completed for the haex_devices row
+  // to exist — otherwise peer_storage_start fails with "no haex_devices row".
+  // Helper is version-tolerant: returns false (no-op) on older vault builds
+  // without the redesign and on re-opens of an already-onboarded vault.
+  const handled = await completeWelcomeOnboarding(vault, {
+    userName: `E2E User ${vault.getInstance()}`,
+    deviceName: `e2e-vault-${vault.getInstance().toLowerCase()}`,
+    timeout: 12_000,
+  });
+  if (handled) {
+    console.log(`[QUIC] WelcomeDialog completed on ${vault.getInstance()}`);
+  }
 }
 
 /**
