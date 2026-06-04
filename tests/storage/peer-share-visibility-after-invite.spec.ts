@@ -1,5 +1,6 @@
 import * as crypto from "crypto";
 import { test, expect, VaultAutomation } from "../fixtures";
+import { completeWelcomeOnboarding } from "../helpers/ui/ui-welcome";
 
 /**
  * Regression tests: P2P file visibility after QUIC invite acceptance
@@ -228,6 +229,17 @@ async function initializeVaultViaUI(
     { timeout: 30_000, interval: 1_000, label: "vault navigation" },
   );
   await wait(2000);
+
+  // Vault builds that ship the redesigned WelcomeDialog (post haex-vault#395)
+  // block the desktop until Step 1 is completed AND require it to register the
+  // haex_devices row. Without that, peer_storage_start throws
+  // "no haex_devices row for endpoint_id" further down. Helper is
+  // version-tolerant — a no-op on older vault builds.
+  await completeWelcomeOnboarding(vault, {
+    userName: `E2E User ${vault.getInstance()}`,
+    deviceName: `e2e-vault-${vault.getInstance().toLowerCase()}`,
+    timeout: 10_000,
+  });
 }
 
 async function elementExists(vault: VaultAutomation, selector: string): Promise<boolean> {
