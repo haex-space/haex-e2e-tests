@@ -1,6 +1,7 @@
 import * as crypto from "crypto";
 import { test, expect, VaultAutomation } from "../fixtures";
 import { completeWelcomeOnboarding } from "../helpers/ui/ui-welcome";
+import { dismissPublishingDialog } from "../helpers/ui/ui-publishing";
 
 /**
  * Regression tests: P2P file visibility after QUIC invite acceptance
@@ -330,6 +331,10 @@ async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string):
     { timeout: 10_000, interval: 300, label: "spaces-create-submit" },
   );
   await wait(1500);
+
+  // Dismiss the SpacePublishingDialog that the vault opens after
+  // createLocalSpaceAsync — it overlays subsequent clicks.
+  await dismissPublishingDialog(vault);
 
   const spaces = await sqlQuery<{ id: string }>(
     vault,

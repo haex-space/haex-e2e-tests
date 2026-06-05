@@ -9,6 +9,7 @@ import {
   setInputValue,
 } from "../../../helpers/ui/ui-primitives";
 import { openSettingsCategory } from "../../../helpers/ui/ui-vault";
+import { dismissPublishingDialog } from "../../../helpers/ui/ui-publishing";
 
 /**
  * Insert a `haex_space_devices` row for the vault's own device in `spaceId`
@@ -88,6 +89,11 @@ export async function createLocalSpaceViaUI(
   // 3. Click the dialog's submit button
   await clickTestId(vault, "spaces-create-submit");
   await wait(1500); // space creation + list refresh
+
+  // After createLocalSpaceAsync, the vault opens the SpacePublishingDialog
+  // (asks which devices publish into the new space). It overlays the rest of
+  // the UI — dismiss it so subsequent clicks reach the page underneath.
+  await dismissPublishingDialog(vault);
 
   // Read the spaceId from DB
   const spaces = await sqlQuery<{ id: string }>(
