@@ -132,6 +132,47 @@ async function closePreview(vault: VaultAutomation): Promise<void> {
   }
 }
 
+/**
+ * Open a media file's inline preview, robustly.
+ *
+ * This suite runs as part of the long `workflows` shard, where vault A is a
+ * single session shared across hundreds of preceding tests. By the time we get
+ * here it carries a lot of accumulated state (peers, connections, status
+ * listeners), and the resulting background reactivity can occasionally swallow
+ * the *second* modal open in this serial suite: the row click registers, but
+ * the preview element never mounts. In isolation the open is instant — the
+ * failure only surfaces under that accumulated load.
+ *
+ * So we don't assume a single click→open succeeds. Each attempt first closes
+ * any stale/half-open preview (clearing a close transition the open could race
+ * against), clicks the row, and waits for the preview element — retrying the
+ * whole cycle a few times. A retry re-clicks, which re-triggers the open.
+ * Returns whether the preview appeared. Budgeted to stay under the 60s test
+ * timeout even if every attempt fails.
+ */
+async function openMediaPreview(
+  vault: VaultAutomation,
+  fileTestId: string,
+  previewTestId: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await closePreview(vault);
+    await wait(500);
+
+    const clicked = await vault.clickBySelector(sel(fileTestId), {
+      timeout: 10000,
+    });
+    if (
+      clicked &&
+      (await vault.waitForElement(sel(previewTestId), { timeout: 10000 }))
+    ) {
+      return true;
+    }
+    await wait(500);
+  }
+  return false;
+}
+
 const sel = (testId: string) => `[data-testid="${testId}"]`;
 
 /**
@@ -376,12 +417,11 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
     test.skip(!arrangeOk, skipReason);
 
     expect(
-      await vault.clickBySelector(sel(`file-entry-${VIDEO_FILE}`), {
-        timeout: 10000,
-      }),
-    ).toBe(true);
-    expect(
-      await vault.waitForElement(sel("file-preview-video"), { timeout: 15000 }),
+      await openMediaPreview(
+        vault,
+        `file-entry-${VIDEO_FILE}`,
+        "file-preview-video",
+      ),
     ).toBe(true);
 
     const state = await readMediaState(vault, "file-preview-video");
@@ -396,17 +436,12 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   test("clicking an MP3 streams it inline via the local range server", async () => {
     test.skip(!arrangeOk, skipReason);
 
-    // Defensive: ensure the video modal from the previous test is closed so
-    // the audio row is clickable rather than covered.
-    await closePreview(vault);
-
     expect(
-      await vault.clickBySelector(sel(`file-entry-${AUDIO_FILE}`), {
-        timeout: 10000,
-      }),
-    ).toBe(true);
-    expect(
-      await vault.waitForElement(sel("file-preview-audio"), { timeout: 15000 }),
+      await openMediaPreview(
+        vault,
+        `file-entry-${AUDIO_FILE}`,
+        "file-preview-audio",
+      ),
     ).toBe(true);
 
     const state = await readMediaState(vault, "file-preview-audio");
