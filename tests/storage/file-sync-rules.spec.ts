@@ -5,6 +5,7 @@ import {
   clickButton,
   clickButtonIn,
   clickTestId,
+  mousedownClickFound,
   setInputValue,
   elementExists,
 } from "../helpers/ui/ui-primitives";
@@ -272,33 +273,41 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
 
     await openSettingsCategory(vaultA, "contacts");
     await wait(500);
-    await clickTestId(vaultA, "contacts-add-trigger");
+    const addClicked = await clickTestId(vaultA, "contacts-add-trigger");
+    expect(addClicked).toBe(true);
     await wait(800);
 
-    await vaultA.executeScript(`
-      const container = document.querySelector('[data-testid="contacts-add-tabs"]');
-      if (!container) return;
-      const tabs = [...container.querySelectorAll('[role="tab"]')];
-      const fileTab = tabs.find(t => {
-        const text = t.textContent?.toLowerCase() || '';
-        return text.includes('file') || text.includes('datei');
-      });
-      if (fileTab) fileTab.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
-    `);
+    const tabSwitched = await mousedownClickFound(
+      vaultA,
+      `
+        const container = document.querySelector('[data-testid="contacts-add-tabs"]');
+        if (!container) return null;
+        const tabs = [...container.querySelectorAll('[role="tab"]')];
+        return tabs.find(t => {
+          const text = t.textContent?.toLowerCase() || '';
+          return text.includes('file') || text.includes('datei');
+        }) ?? null;
+      `,
+    );
+    expect(tabSwitched).toBe(true);
     await wait(300);
 
-    await vaultA.executeScript(`
+    const pasted = await vaultA.executeScript<boolean>(`
       const el = document.querySelector('[data-testid="contacts-import-json"]');
       const textarea = el?.tagName === 'TEXTAREA' ? el : el?.querySelector('textarea');
-      if (!textarea) return;
+      if (!textarea) return false;
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
       setter.call(textarea, ${JSON.stringify(identityPayload)});
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
     `);
+    expect(pasted).toBe(true);
     await wait(300);
-    await clickTestId(vaultA, "contacts-import-preview");
+    const previewClicked = await clickTestId(vaultA, "contacts-import-preview");
+    expect(previewClicked).toBe(true);
     await wait(500);
-    await clickTestId(vaultA, "contacts-import-submit");
+    const submitClicked = await clickTestId(vaultA, "contacts-import-submit");
+    expect(submitClicked).toBe(true);
     await wait(1000);
 
     const contacts = await sqlQuery<{ id: string; name: string }>(
