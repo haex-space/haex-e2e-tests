@@ -55,7 +55,13 @@ test.describe("invitations: targeted invite is delivered after recipient comes o
   let identityB: { id: string; did: string };
   let spaceId: string;
   let spaceName: string;
-  const contactLabel = "OnlineLate Vault B Contact";
+  // Re-use the same contact label as the QUIC invite-flow suite. The
+  // contacts table is keyed by DID, so importing Vault B twice from
+  // different specs hits the existing row — Vue's i18n + contact picker
+  // surfaces only the label that was set on first import. Using the same
+  // label avoids "contact not found in dropdown" failures when this spec
+  // runs after `quic-invite-flow.spec.ts` in the same shard.
+  const contactLabel = "Vault B Contact";
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
