@@ -76,18 +76,8 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
 
   // ───────────────────────────────────────────────────────────────────────────
   // Invitee: init via UI ONLY. No startP2PEndpoint() — that is the whole point.
-  //
-  // Prior specs in the shared docker session leave Vault B inside an open
-  // /vault/<id>, which causes `initializeVaultViaUI` to short-circuit on its
-  // "already open" check — the Welcome dialog never runs, `deviceRowId` never
-  // transitions from '' to a fresh value, and the autostart watcher under test
-  // has no edge to react to. Navigating back to the index closes the prior
-  // vault (onBeforeRouteLeave → closeAsync → peer_storage_stop) so the new
-  // vault genuinely starts from "pending reconciliation".
   // ───────────────────────────────────────────────────────────────────────────
   test("init invitee (Vault B) via UI WITHOUT starting P2P", async () => {
-    await vaultB.navigateTo("/");
-    await wait(1500);
     await initializeVaultViaUI(vaultB, "Autostart Invitee B", "test-password-b");
 
     // The device row (and its persistent endpoint id) exists after the Welcome
