@@ -76,8 +76,35 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
 
   // ───────────────────────────────────────────────────────────────────────────
   // Invitee: init via UI ONLY. No startP2PEndpoint() — that is the whole point.
+  //
+  // Earlier specs (e.g. targeted-invite-did-mismatch, public-invite-foreign-did)
+  // leave Vault B at `/vault/<their id>` and their afterAll calls
+  // `peer_storage_stop` on Vault B. Two consequences for THIS spec:
+  //   1. `initializeVaultViaUI` short-circuits on the "already at /vault/" URL
+  //      check, so its Welcome dialog flow never runs and we cannot exercise
+  //      the reconciliation autostart path the spec is named after.
+  //   2. vault.vue is never remounted, so the mount-time autostart cannot
+  //      re-fire to bring the previously-stopped endpoint back up — the
+  //      reactive `deviceRowId` watcher only edges, it does not poll the
+  //      endpoint status.
+  // Navigate Vault B to `/` first (triggers `onBeforeRouteLeave` → vaultStore
+  // `closeAsync` → DB close + peer_storage_stop + sync teardown) and wait for
+  // the URL to actually leave `/vault/` before opening a vault — that close
+  // chain awaits several Rust commands and a fixed sleep would race in CI.
   // ───────────────────────────────────────────────────────────────────────────
   test("init invitee (Vault B) via UI WITHOUT starting P2P", async () => {
+    const currentHref = await vaultB.executeScript<string>("return location.href");
+    if (currentHref?.includes("/vault/")) {
+      await vaultB.navigateTo("/");
+      await pollUntil(
+        async () => {
+          const h = await vaultB.executeScript<string>("return location.href");
+          return h && !h.includes("/vault/") ? true : null;
+        },
+        { timeout: 30_000, interval: 500, label: "Vault B closed (URL left /vault/)" },
+      );
+    }
+
     await initializeVaultViaUI(vaultB, "Autostart Invitee B", "test-password-b");
 
     // The device row (and its persistent endpoint id) exists after the Welcome
