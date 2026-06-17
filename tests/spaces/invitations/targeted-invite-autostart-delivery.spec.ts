@@ -53,6 +53,9 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
   let nodeIdA = "";
   let endpointIdB = "";
   let didB = "";
+  // The shared baseline vault open on Vault B before this spec swaps in its own
+  // fresh vault. afterAll restores it so downstream specs reuse it (see afterAll).
+  let originalVaultBName: string | null = null;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -62,6 +65,42 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
   });
 
   test.afterAll(async () => {
+    // Restore the shared baseline vault on Vault B. This spec is the only one in
+    // the workflows shard that swaps Vault B away from the warm baseline ("QUIC
+    // Test B") — every other invite spec reuses it via initializeVaultViaUI's
+    // "already at /vault/" early-return. Leaving the fresh "Autostart Invitee B"
+    // active makes the LATER cross-vault-file-sharing spec dial a cold endpoint
+    // that never connects (connectedPeers: []). Re-open the baseline via UI so
+    // downstream specs see exactly the state they would on main.
+    try {
+      await vaultB?.invokeTauriCommand("close_database", {});
+      const baseline =
+        originalVaultBName ??
+        (await vaultB.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {}))
+          .map((v) => v.name)
+          .find((n) => n !== VAULT_B_NAME) ??
+        null;
+      if (baseline) {
+        await vaultB.navigateTo("/");
+        await pollUntil(
+          async () => {
+            const h = await vaultB.executeScript<string>("return location.href");
+            return h && !h.includes("/vault/") ? true : null;
+          },
+          { timeout: 30_000, interval: 500, label: "Vault B at picker (restore)" },
+        );
+        await vaultB.executeScript(`
+          const app = document.getElementById('__nuxt')?.__vue_app__;
+          const pinia = app?.config?.globalProperties?.$pinia;
+          const store = pinia?._s?.get('lastVaultStore');
+          if (store?.syncLastVaultsAsync) await store.syncLastVaultsAsync();
+        `);
+        await initializeVaultViaUI(vaultB, baseline, VAULT_B_PASSWORD);
+      }
+    } catch (err) {
+      console.warn("[E2E] Vault B baseline restore failed:", err);
+    }
+
     for (const v of [vaultA, vaultB]) {
       try {
         await v?.invokeTauriCommand("peer_storage_stop", {});
@@ -106,6 +145,13 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
   // reuse the shared session via the "already at /vault/" early-return) green.
   // ───────────────────────────────────────────────────────────────────────────
   test("init invitee (Vault B) via UI WITHOUT starting P2P", async () => {
+    // Remember the baseline vault (e.g. "QUIC Test B") so afterAll can restore
+    // it for the downstream specs that reuse the shared session.
+    originalVaultBName =
+      (await vaultB.invokeTauriCommand<Array<{ name: string }>>("list_vaults", {}))
+        .map((v) => v.name)
+        .find((n) => n !== VAULT_B_NAME) ?? originalVaultBName;
+
     // 1. Unmount whatever a prior spec left mounted. close_database is the only
     //    reliable way here — the navigate-to-`/` below is a hard reload that
     //    bypasses the route-guard close. Safe to call when nothing is mounted.
