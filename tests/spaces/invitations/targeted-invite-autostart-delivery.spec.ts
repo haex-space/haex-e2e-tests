@@ -89,40 +89,27 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
   // Invitee: a FRESH vault, opened via UI ONLY. No startP2PEndpoint() — the
   // invitee coming up on its own is the whole point.
   //
-  // Earlier specs leave Vault B at `/vault/<their id>` (the shared session is
-  // reused via initializeVaultViaUI's "already at /vault/" early-return). To
-  // exercise the Welcome/reconciliation autostart path we need a brand-new,
-  // never-onboarded vault, so we first close whatever is open and return to the
-  // picker.
-  //
-  // The fresh vault is created with the `create_encrypted_database` backend
-  // command (the same path global-setup uses), NOT the create-vault drawer.
-  // The drawer's onCreateAsync silently returns when its form validation hasn't
-  // settled, and on the cross-container Vault B that DOM/form-fill flow is flaky
-  // once a heavily-used vault has been opened+closed this session: the create
-  // no-ops, the desktop poll times out, and — because Vault B then sits on `/`
-  // instead of `/vault/` — every LATER spec that reuses Vault B is forced into
-  // the same flaky create and cascades red. The command create is deterministic;
-  // close_database releases the lock so the UI open below re-opens it cleanly
-  // and drives the Welcome dialog → device row → deviceRowId autostart.
+  // Earlier specs leave the prior vault ("QUIC Test B") MOUNTED on Vault B's
+  // Rust process. Two facts make this the crux of the whole spec:
+  //   • create_encrypted_database refuses a second in-process mount and throws
+  //     `VaultAlreadyMountedInProcess`; the create-vault drawer's onCreateAsync
+  //     swallows that error, so the drawer path just silently no-ops and the
+  //     desktop poll times out.
+  //   • `navigateTo` on the cross-container Vault B has no `$router` and falls
+  //     back to a hard `location.href` reload, which does NOT run the
+  //     `onBeforeRouteLeave` guard — so navigating to `/` never closes the DB.
+  //     The Rust mount survives the reload (it is process-global).
+  // So we must close the mounted vault EXPLICITLY on the Rust side, then create
+  // the fresh vault via the same backend command global-setup uses, then open
+  // it via UI to drive the Welcome dialog → device row → deviceRowId autostart.
+  // Leaving Vault B back on `/vault/<new id>` also keeps later specs (which
+  // reuse the shared session via the "already at /vault/" early-return) green.
   // ───────────────────────────────────────────────────────────────────────────
   test("init invitee (Vault B) via UI WITHOUT starting P2P", async () => {
-    // 1. Close whatever a prior spec left open and wait for the URL to actually
-    //    leave `/vault/` — the route guard (`onBeforeRouteLeave` → vaultStore
-    //    `closeAsync`) awaits DB close + peer_storage_stop + sync teardown, so a
-    //    fixed sleep would race in CI. close_database also releases the OS-level
-    //    vault lock before we create the next vault.
-    const currentHref = await vaultB.executeScript<string>("return location.href");
-    if (currentHref?.includes("/vault/")) {
-      await vaultB.navigateTo("/");
-      await pollUntil(
-        async () => {
-          const h = await vaultB.executeScript<string>("return location.href");
-          return h && !h.includes("/vault/") ? true : null;
-        },
-        { timeout: 30_000, interval: 500, label: "Vault B closed (URL left /vault/)" },
-      );
-    }
+    // 1. Unmount whatever a prior spec left mounted. close_database is the only
+    //    reliable way here — the navigate-to-`/` below is a hard reload that
+    //    bypasses the route-guard close. Safe to call when nothing is mounted.
+    await vaultB.invokeTauriCommand("close_database", {}).catch(() => {});
 
     // 2. Create the fresh invitee vault via the backend command (idempotent
     //    across Playwright retries). create_encrypted_database also mounts it,
@@ -140,9 +127,20 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
       await vaultB.invokeTauriCommand("close_database", {}).catch(() => {});
     }
 
-    // 3. Refresh the picker's vault list. syncLastVaultsAsync only runs on mount
-    //    (which happened before the create above), so without this the open
-    //    path below would not find the new entry's button.
+    // 3. Return to the picker. navigateTo hard-reloads Vault B, so index.vue's
+    //    onMounted re-runs syncLastVaultsAsync and the freshly-created vault
+    //    shows up in the list for the open path below.
+    await vaultB.navigateTo("/");
+    await pollUntil(
+      async () => {
+        const h = await vaultB.executeScript<string>("return location.href");
+        return h && !h.includes("/vault/") ? true : null;
+      },
+      { timeout: 30_000, interval: 500, label: "Vault B at picker (URL left /vault/)" },
+    );
+
+    // 4. Belt-and-suspenders: if navigateTo ever resolves to an in-app router
+    //    push (no reload), the list won't have re-synced — refresh it directly.
     await vaultB.executeScript(`
       const app = document.getElementById('__nuxt')?.__vue_app__;
       const pinia = app?.config?.globalProperties?.$pinia;
@@ -150,7 +148,7 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
       if (store?.syncLastVaultsAsync) await store.syncLastVaultsAsync();
     `);
 
-    // 4. Open via UI → vault.vue mounts → Welcome dialog (fresh vault) → device
+    // 5. Open via UI → vault.vue mounts → Welcome dialog (fresh vault) → device
     //    row committed → deviceRowId watcher fires the P2P autostart we guard.
     await initializeVaultViaUI(vaultB, VAULT_B_NAME, VAULT_B_PASSWORD);
 
