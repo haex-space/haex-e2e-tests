@@ -1,7 +1,7 @@
 /**
  * Marketplace Setup for E2E Tests
  *
- * This script publishes the haex-pass extension to the marketplace
+ * This script publishes the haex-notes extension to the marketplace
  * so it can be installed via the UI during tests.
  */
 
@@ -27,8 +27,8 @@ const TEST_EMAIL = "e2e-publisher@haex.space";
 const TEST_PASSWORD = "e2e-test-password-12345";
 
 // Extension bundle path (created by Dockerfile)
-const HAEX_PASS_BUNDLE = "/app/haex-pass.haex";
-const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-pass-public.key";
+const HAEX_PASS_BUNDLE = "/app/haex-notes.haex";
+const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-notes-public.key";
 
 interface AuthTokens {
   accessToken: string;
@@ -120,17 +120,17 @@ async function createPublisherProfile(accessToken: string): Promise<void> {
 }
 
 /**
- * Get haex-pass manifest
+ * Get haex-notes manifest
  */
 function getHaexPassManifest(): Record<string, unknown> {
   const publicKey = fs.readFileSync(HAEX_PASS_PUBLIC_KEY_FILE, "utf-8").trim();
 
   return {
-    name: "haex-pass",
+    name: "haex-notes",
     version: "1.4.31",
     author: "haex",
     entry: "index.html",
-    icon: "haextension/haex-pass-logo.png",
+    icon: "haextension/haex-notes-logo.png",
     publicKey: publicKey,
     signature: "",
     permissions: {
@@ -140,7 +140,7 @@ function getHaexPassManifest(): Record<string, unknown> {
       shell: [],
     },
     homepage: null,
-    description: "A password manager for HaexSpace",
+    description: "Digital notebook for handwritten notes",
     singleInstance: true,
     displayMode: "auto",
     migrationsDir: "database/migrations",
@@ -163,10 +163,10 @@ async function createExtension(accessToken: string): Promise<void> {
     },
     body: JSON.stringify({
       publicKey: publicKey,
-      name: "haex-pass",
-      slug: "haex-pass",
-      shortDescription: "A password manager for HaexSpace",
-      description: "haex-pass is a secure password manager extension for haex-vault.",
+      name: "haex-notes",
+      slug: "haex-notes",
+      shortDescription: "Digital notebook for handwritten notes",
+      description: "haex-notes is a digital notebook extension for haex-vault.",
       tags: ["password", "security", "manager"],
     }),
   });
@@ -200,11 +200,11 @@ async function uploadExtensionBundle(accessToken: string): Promise<void> {
 
   // Create form data
   const formData = new FormData();
-  formData.append("bundle", new Blob([bundleData]), "haex-pass.haex");
+  formData.append("bundle", new Blob([bundleData]), "haex-notes.haex");
   formData.append("version", manifest.version as string);
   formData.append("manifest", JSON.stringify(manifest));
 
-  const response = await fetch(`${EFFECTIVE_MARKETPLACE_URL}/publish/extensions/haex-pass/bundle`, {
+  const response = await fetch(`${EFFECTIVE_MARKETPLACE_URL}/publish/extensions/haex-notes/bundle`, {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${accessToken}`,

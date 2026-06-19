@@ -16,7 +16,7 @@ import * as http from "node:http";
 import { TAURI_COMMANDS } from "@haex-space/vault-sdk";
 
 // Import haex-pass API constants
-import { HAEX_PASS_METHODS } from "./haex-pass-api";
+import { BRIDGE_METHODS } from "./external-bridge-api";
 
 // Path to built browser extension
 const EXTENSION_PATH = "/repos/haextension/apps/haex-pass-browser/extension";
@@ -101,28 +101,15 @@ console.log("[E2E Config] VAULT_CONFIG.B.tauriDriverUrl:", VAULT_CONFIG.B.tauriD
 
 export type VaultInstance = keyof typeof VAULT_CONFIG;
 
-// haex-pass extension public key file (copied by Dockerfile)
-const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-pass-public.key";
-
-// haex-pass extension name
-const HAEX_PASS_EXTENSION_NAME = "haex-pass";
+// Core sentinel used by external clients to address haex-vault core directly
+// (passwords/passkeys are first-class in core now — no extension needed).
+// Must match `CORE_EXTENSION_ID` / `CORE_EXTENSION_NAME` in
+// src-tauri/src/external_bridge/mod.rs and the routing check in server.rs.
+const CORE_EXTENSION_PUBLIC_KEY = "__core__";
+const CORE_EXTENSION_NAME = "core";
 
 // Sync server URL (from docker-compose environment)
 const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL || "http://localhost:3002";
-
-/**
- * Get the haex-pass extension public key (for request routing)
- */
-function getHaexPassPublicKey(): string {
-  try {
-    return fs.readFileSync(HAEX_PASS_PUBLIC_KEY_FILE, "utf-8").trim();
-  } catch {
-    throw new Error(
-      `Could not read haex-pass public key from ${HAEX_PASS_PUBLIC_KEY_FILE}. ` +
-      `Make sure the Docker image was built correctly.`
-    );
-  }
-}
 
 /**
  * ECDH key pair for encryption
@@ -567,10 +554,10 @@ export class VaultBridgeClient {
     const ephemeralPublicDer = ephemeralPublic.export({ type: "spki", format: "der" });
     const ephemeralPublicKeyBase64 = ephemeralPublicDer.subarray(-32).toString("base64");
 
-    // Get extension info for request routing
-    const extensionPublicKey = getHaexPassPublicKey();
+    // Route to haex-vault core (passwords/passkeys are core, not an extension)
+    const extensionPublicKey = CORE_EXTENSION_PUBLIC_KEY;
 
-    // Create request envelope with extension info
+    // Create request envelope with core routing info
     const request = {
       type: "request",
       action,
@@ -579,14 +566,14 @@ export class VaultBridgeClient {
       clientId: this.clientId,
       publicKey: ephemeralPublicKeyBase64,
       extensionPublicKey,
-      extensionName: HAEX_PASS_EXTENSION_NAME,
+      extensionName: CORE_EXTENSION_NAME,
     };
 
     console.log("[E2E] Sending request:", {
       action,
       requestId,
-      extensionPublicKey: extensionPublicKey.substring(0, 16) + "...",
-      extensionName: HAEX_PASS_EXTENSION_NAME,
+      extensionPublicKey,
+      extensionName: CORE_EXTENSION_NAME,
       clientId: this.clientId,
       timeout,
     });
@@ -613,28 +600,28 @@ export class VaultBridgeClient {
    * Get items (logins) matching a URL
    */
   async getItems(url: string, fields: string[]): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, { url, fields });
+    return this.sendRequest(BRIDGE_METHODS.GET_ITEMS, { url, fields });
   }
 
   /**
    * Create a new item entry
    */
   async createItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, entry);
+    return this.sendRequest(BRIDGE_METHODS.CREATE_ITEM, entry);
   }
 
   /**
    * Update an existing item entry
    */
   async updateItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, entry);
+    return this.sendRequest(BRIDGE_METHODS.UPDATE_ITEM, entry);
   }
 
   /**
    * Get TOTP code for an entry
    */
   async getTotp(entryId: string): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.GET_TOTP, { entryId });
+    return this.sendRequest(BRIDGE_METHODS.GET_TOTP, { entryId });
   }
 
   /**
@@ -1511,6 +1498,15 @@ export class VaultAutomation {
   async getPendingAuthorizations(): Promise<PendingAuthorization[]> {
     return this.invokeTauriCommand<PendingAuthorization[]>(
       TAURI_COMMANDS.externalBridge.getPendingAuthorizations
+    );
+  }
+
+  /**
+   * Get the list of authorized (paired) external clients.
+   */
+  async getAuthorizedClients(): Promise<Array<{ clientId: string }>> {
+    return this.invokeTauriCommand<Array<{ clientId: string }>>(
+      TAURI_COMMANDS.externalBridge.getAuthorizedClients
     );
   }
 
@@ -2772,7 +2768,7 @@ export const test = base.extend<TestFixtures>({
 export { expect } from "@playwright/test";
 
 // Re-export haex-pass API constants for tests
-export { HAEX_PASS_METHODS } from "./haex-pass-api";
+export { BRIDGE_METHODS } from "./external-bridge-api";
 
 /**
  * Helper to wait for WebSocket connection to bridge
@@ -2882,7 +2878,7 @@ export async function waitForExtensionReady(
   } = {}
 ): Promise<boolean> {
   const {
-    testAction = HAEX_PASS_METHODS.GET_ITEMS,
+    testAction = BRIDGE_METHODS.GET_ITEMS,
     testPayload = { url: "https://example.com" },
     vault,
     extensionId = "haex-pass",
@@ -2994,16 +2990,10 @@ export async function authorizeClient(
     // Create WebDriver session - the vault should already be running from global setup
     await vault.createSession();
 
-    // CRITICAL: Get the extension ID dynamically from the current vault's database.
-    // The extension ID is vault-specific and can't be read from a file because
-    // different vaults have different extension IDs even for the same extension.
-    console.log("[E2E] Looking up haex-pass extension in current vault...");
-    const vaultExtensionId = await getExtensionIdFromVault(vault, "haex-pass", timeout);
-    if (!vaultExtensionId) {
-      console.error("[E2E] haex-pass extension not found in database after timeout");
-      return false;
-    }
-    console.log("[E2E] Found haex-pass extension with ID:", vaultExtensionId);
+    // Authorize the client against haex-vault core (not an extension). The
+    // `__core__` sentinel has a phantom row in `haex_extensions` (migration
+    // 0007), so the authorized-client FK is satisfied without any install.
+    const vaultExtensionId = CORE_EXTENSION_PUBLIC_KEY;
 
     // Wait for the client to be in pending_approval state
     const start = Date.now();
@@ -3047,39 +3037,6 @@ export async function authorizeClient(
   } finally {
     await vault.deleteSession();
   }
-}
-
-/**
- * Get the extension ID for an extension by name from the current vault's database.
- * This is required before authorization can be persisted (due to FOREIGN KEY constraint).
- * Returns the extension ID if found, or null if not found within timeout.
- */
-async function getExtensionIdFromVault(
-  vault: VaultAutomation,
-  extensionName: string,
-  timeout: number
-): Promise<string | null> {
-  const start = Date.now();
-
-  while (Date.now() - start < timeout) {
-    try {
-      // Query the extensions table to find the extension by name
-      const extensions = await vault.invokeTauriCommand<Array<{ id: string; name: string }>>(
-        "get_all_extensions"
-      );
-
-      const extension = extensions.find((ext) => ext.name === extensionName);
-      if (extension) {
-        return extension.id;
-      }
-    } catch (error) {
-      console.log("[E2E] Error checking extension in database:", error);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  return null;
 }
 
 /**

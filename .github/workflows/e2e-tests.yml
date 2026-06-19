@@ -461,11 +461,11 @@ jobs:
       matrix:
         shard:
           - "workflows"    # vault-lifecycle, sync, spaces, storage, identity-auth, extensions
-          - "other"        # database, ui
+          - "other"        # database, ui, browser-extension
           # haex-pass shard removed: passwords are now first-class in haex-vault
           # via the `passwords::commands::extension_password_*` Tauri handlers,
           # so the dedicated haex-pass extension is no longer the source of
-          # truth for that flow. The tests under `tests/haex-pass/` still
+          # truth for that flow. The tests under `tests/external-bridge/` still
           # exist for historical reference but should not gate haex-vault CI.
 
     outputs:
@@ -635,7 +635,7 @@ jobs:
               TEST_DIR="tests/vault-lifecycle tests/sync tests/spaces tests/storage tests/identity-auth tests/extensions"
               ;;
             "other")
-              TEST_DIR="tests/database tests/ui"
+              TEST_DIR="tests/database tests/ui tests/browser-extension"
               ;;
           esac
 

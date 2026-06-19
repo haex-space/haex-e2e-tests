@@ -1,7 +1,7 @@
 {
   "name": "haex-e2e-tests",
   "version": "1.0.0",
-  "description": "End-to-end tests for haex-vault, haex-pass, and browser extension",
+  "description": "End-to-end tests for haex-vault (core, external bridge, extension framework) and the haex-pass-browser extension",
   "private": true,
   "type": "module",
   "scripts": {

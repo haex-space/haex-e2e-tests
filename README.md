@@ -1,6 +1,6 @@
 # haex-e2e-tests
 
-End-to-End Tests für das haex-Ökosystem: haex-vault, haex-pass und Browser-Extension.
+End-to-End Tests für das haex-Ökosystem: haex-vault (Core, External Bridge, Extension-Framework) und die haex-pass-browser Extension.
 
 ## Voraussetzungen
 
@@ -66,7 +66,7 @@ haex-e2e-tests/
 │   ├── fixtures.ts             # Playwright Fixtures + Helper
 │   ├── global-setup.ts         # Start haex-vault vor Tests
 │   ├── global-teardown.ts      # Cleanup nach Tests
-│   ├── haex-pass/              # API-Tests
+│   ├── external-bridge/        # Core-Bridge API-Tests
 │   │   ├── authorization-flow.spec.ts
 │   │   ├── get-logins.spec.ts
 │   │   ├── get-totp.spec.ts
@@ -111,7 +111,7 @@ pnpm docker:test
 
 # Einzelne Test-Suite
 docker compose -f docker/docker-compose.yml run --rm e2e-test-env \
-  pnpm test tests/haex-pass/get-logins.spec.ts
+  pnpm test tests/external-bridge/get-logins.spec.ts
 ```
 
 ### Im Container (interaktiv)

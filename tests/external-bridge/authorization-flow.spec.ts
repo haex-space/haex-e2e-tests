@@ -5,11 +5,11 @@ import {
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
-  HAEX_PASS_METHODS,
+  BRIDGE_METHODS,
   type KeyPair,
 } from "../fixtures";
 
-test.describe("haex-pass: authorization-flow", () => {
+test.describe("external-bridge: authorization-flow", () => {
   test.describe.configure({ mode: "serial" });
 
   test("connect transitions to pending_approval or paired", async () => {
@@ -54,7 +54,7 @@ test.describe("haex-pass: authorization-flow", () => {
         data?: { entries: unknown[] };
         error?: string;
         requestId: string;
-      }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+      }>(client, BRIDGE_METHODS.GET_ITEMS, {
         url: "https://example.com",
       });
 
@@ -79,7 +79,7 @@ test.describe("haex-pass: authorization-flow", () => {
       expect(state).not.toBe("paired");
 
       await expect(
-        client.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+        client.sendRequest(BRIDGE_METHODS.GET_ITEMS, {
           url: "https://example.com",
         })
       ).rejects.toThrow("Not authorized");

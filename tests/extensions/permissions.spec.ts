@@ -53,7 +53,7 @@ test.describe("extensions: permissions", () => {
       "get_all_extensions",
       {}
     );
-    const haexPass = extensions.find((ext) => ext.name === "haex-pass");
+    const haexPass = extensions.find((ext) => ext.name === "haex-notes");
     expect(haexPass).not.toBeUndefined();
     extensionId = haexPass!.id;
   });

@@ -6,7 +6,7 @@ import {
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
-  HAEX_PASS_METHODS,
+  BRIDGE_METHODS,
 } from "../fixtures";
 
 /**
@@ -59,7 +59,7 @@ function computeTotpReference(
   return code.toString().padStart(digits, "0");
 }
 
-test.describe("haex-pass: totp-generation", () => {
+test.describe("external-bridge: totp-generation", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
@@ -77,7 +77,7 @@ test.describe("haex-pass: totp-generation", () => {
     const totpResponse = await sendRequestWithRetry<{
       success: boolean;
       data: { entryId: string };
-    }>(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    }>(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_TOTP,
       title: "TOTP Test Entry",
       username: "totpuser",
@@ -91,7 +91,7 @@ test.describe("haex-pass: totp-generation", () => {
     const noTotpResponse = await sendRequestWithRetry<{
       success: boolean;
       data: { entryId: string };
-    }>(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    }>(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_NO_TOTP,
       title: "No TOTP Entry",
       username: "nototpuser",
@@ -110,7 +110,7 @@ test.describe("haex-pass: totp-generation", () => {
       success: boolean;
       data: { code: string; validFor: number };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: totpEntryId,
     });
 
@@ -124,7 +124,7 @@ test.describe("haex-pass: totp-generation", () => {
       success: boolean;
       data: { code: string; validFor: number };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: totpEntryId,
     });
 
@@ -138,7 +138,7 @@ test.describe("haex-pass: totp-generation", () => {
     const response1 = await sendRequestWithRetry<{
       success: boolean;
       data: { code: string; validFor: number };
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: totpEntryId,
     });
 
@@ -147,7 +147,7 @@ test.describe("haex-pass: totp-generation", () => {
       const response2 = await sendRequestWithRetry<{
         success: boolean;
         data: { code: string; validFor: number };
-      }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+      }>(client, BRIDGE_METHODS.GET_TOTP, {
         entryId: totpEntryId,
       });
 
@@ -162,7 +162,7 @@ test.describe("haex-pass: totp-generation", () => {
       success: boolean;
       error?: string;
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: noTotpEntryId,
     });
 
@@ -179,7 +179,7 @@ test.describe("haex-pass: totp-generation", () => {
     const response = await sendRequestWithRetry<{
       success: boolean;
       data: { code: string; validFor: number };
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: totpEntryId,
     });
 
@@ -204,7 +204,7 @@ test.describe("haex-pass: totp-generation", () => {
       success: boolean;
       error?: string;
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_TOTP, {
+    }>(client, BRIDGE_METHODS.GET_TOTP, {
       entryId: "00000000-0000-0000-0000-000000000000",
     });
 

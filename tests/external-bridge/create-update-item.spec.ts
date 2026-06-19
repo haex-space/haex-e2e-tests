@@ -5,17 +5,17 @@ import {
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
-  HAEX_PASS_METHODS,
+  BRIDGE_METHODS,
 } from "../fixtures";
 
-test.describe("haex-pass: create-update-item", () => {
+test.describe("external-bridge: create-update-item", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
   let createdEntryId: string;
-  const TEST_URL_CREATE = `https://create-test-${Date.now()}.example.com`;
-  const TEST_URL_AUTO_TITLE = `https://auto-title-${Date.now()}.example.com`;
-  const TEST_URL_SPECIAL = `https://special-chars-${Date.now()}.example.com`;
+  const TEST_URL_CREATE = `https://create-test-${Date.now()}.example`;
+  const TEST_URL_AUTO_TITLE = `https://auto-title-${Date.now()}.example`;
+  const TEST_URL_SPECIAL = `https://special-chars-${Date.now()}.example`;
 
   test.beforeAll(async () => {
     client = new VaultBridgeClient();
@@ -32,7 +32,7 @@ test.describe("haex-pass: create-update-item", () => {
       success: boolean;
       data: { entryId: string };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    }>(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_CREATE,
       title: "Create Test Entry",
       username: "createuser",
@@ -63,7 +63,7 @@ test.describe("haex-pass: create-update-item", () => {
         }>;
       };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_CREATE,
     });
 
@@ -84,7 +84,7 @@ test.describe("haex-pass: create-update-item", () => {
       success: boolean;
       data: { entryId: string };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    }>(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_AUTO_TITLE,
     });
 
@@ -98,7 +98,7 @@ test.describe("haex-pass: create-update-item", () => {
         entries: Array<{ title: string }>;
       };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_AUTO_TITLE,
     });
 
@@ -115,7 +115,7 @@ test.describe("haex-pass: create-update-item", () => {
       success: boolean;
       data: { entryId: string };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    }>(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_SPECIAL,
       title: "Special Chars Entry",
       username: "specialuser",
@@ -133,7 +133,7 @@ test.describe("haex-pass: create-update-item", () => {
         }>;
       };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_SPECIAL,
     });
 
@@ -146,7 +146,7 @@ test.describe("haex-pass: create-update-item", () => {
     const updateResponse = await sendRequestWithRetry<{
       success: boolean;
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.UPDATE_ITEM, {
+    }>(client, BRIDGE_METHODS.UPDATE_ITEM, {
       id: createdEntryId,
       username: "updateduser",
       password: "updatedpass999",
@@ -168,7 +168,7 @@ test.describe("haex-pass: create-update-item", () => {
         }>;
       };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_CREATE,
     });
 
@@ -189,7 +189,7 @@ test.describe("haex-pass: create-update-item", () => {
       success: boolean;
       error?: string;
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.UPDATE_ITEM, {
+    }>(client, BRIDGE_METHODS.UPDATE_ITEM, {
       id: "00000000-0000-0000-0000-000000000000",
       username: "nonexistent",
     });

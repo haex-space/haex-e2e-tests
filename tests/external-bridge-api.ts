@@ -1,14 +1,14 @@
 /**
- * haex-pass API Constants
+ * external-bridge API Constants
  *
- * These constants mirror the HAEX_PASS_METHODS from @haextension/haex-pass/api/external
- * Keep in sync with: /repos/haextension/apps/haex-pass/app/api/external.ts
+ * These constants mirror the BRIDGE_METHODS exposed by the haex-vault core
+ * external bridge. Keep in sync with: /repos/haextension/apps/haex-pass/app/api/external.ts
  */
 
 /**
- * Available methods for haex-pass External Requests
+ * Available methods for external-bridge requests
  */
-export const HAEX_PASS_METHODS = {
+export const BRIDGE_METHODS = {
   /** Get items (logins) for a URL and optional field names */
   GET_ITEMS: "get-items",
   /** Get TOTP code for an entry */
@@ -29,4 +29,4 @@ export const HAEX_PASS_METHODS = {
   PASSKEY_LIST: "passkey-list",
 } as const;
 
-export type HaexPassMethod = (typeof HAEX_PASS_METHODS)[keyof typeof HAEX_PASS_METHODS];
+export type BridgeMethod = (typeof BRIDGE_METHODS)[keyof typeof BRIDGE_METHODS];
