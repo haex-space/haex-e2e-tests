@@ -5,15 +5,15 @@ import {
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
-  HAEX_PASS_METHODS,
+  BRIDGE_METHODS,
 } from "../fixtures";
 
-test.describe("haex-pass: get-logins", () => {
+test.describe("external-bridge: get-logins", () => {
   test.describe.configure({ mode: "serial" });
 
   let client: VaultBridgeClient;
-  const TEST_URL_GITHUB = `https://github-${Date.now()}.test.com`;
-  const TEST_URL_GITLAB = `https://gitlab-${Date.now()}.test.com`;
+  const TEST_URL_GITHUB = `https://github-${Date.now()}.example`;
+  const TEST_URL_GITLAB = `https://gitlab-${Date.now()}.example`;
 
   test.beforeAll(async () => {
     client = new VaultBridgeClient();
@@ -21,21 +21,21 @@ test.describe("haex-pass: get-logins", () => {
     await authorizeClient(client, "unused");
 
     // Create test entries with unique URLs to avoid interference from retries
-    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    await sendRequestWithRetry(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_GITHUB,
       title: "GitHub",
       username: "ghuser",
       password: "ghpass123",
     });
 
-    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    await sendRequestWithRetry(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_GITHUB,
       title: "GitHub Work",
       username: "ghworkuser",
       password: "ghworkpass456",
     });
 
-    await sendRequestWithRetry(client, HAEX_PASS_METHODS.CREATE_ITEM, {
+    await sendRequestWithRetry(client, BRIDGE_METHODS.CREATE_ITEM, {
       url: TEST_URL_GITLAB,
       title: "GitLab",
       username: "gluser",
@@ -52,7 +52,7 @@ test.describe("haex-pass: get-logins", () => {
       success: boolean;
       data: { entries: Array<{ fields: { username: string; password: string }; title: string }> };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_GITHUB,
     });
 
@@ -73,7 +73,7 @@ test.describe("haex-pass: get-logins", () => {
       success: boolean;
       data: { entries: unknown[] };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: "https://nonexistent-site-e2e.example.org",
     });
 
@@ -94,7 +94,7 @@ test.describe("haex-pass: get-logins", () => {
         }>;
       };
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {
       url: TEST_URL_GITLAB,
     });
 
@@ -119,7 +119,7 @@ test.describe("haex-pass: get-logins", () => {
       success: boolean;
       error?: string;
       requestId: string;
-    }>(client, HAEX_PASS_METHODS.GET_ITEMS, {});
+    }>(client, BRIDGE_METHODS.GET_ITEMS, {});
 
     expect(response.success).toBe(false);
     expect(typeof response.error).toBe("string");

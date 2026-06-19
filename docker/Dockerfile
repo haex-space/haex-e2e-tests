@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# E2E Test Environment for haex-vault + haex-pass + Browser Extension
+# E2E Test Environment for haex-vault + haex-notes + haex-pass-browser
 #
 # Uses pre-built base image with all system deps (webtop, Node.js, Rust,
 # tauri-driver, Playwright deps). See Dockerfile.base for the base image.
@@ -103,7 +103,9 @@ RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-vau
 WORKDIR /repos/vault-sdk
 RUN pnpm install && pnpm build
 
-# Build haextension (monorepo with all core extensions: haex-pass, haex-files, haex-send)
+# Build haextension. We only need haex-notes (framework-test subject, installed
+# via the marketplace) and haex-pass-browser (the browser extension, tested
+# against haex-vault core). haex-pass/haex-files/haex-send are obsolete.
 WORKDIR /repos/haextension
 RUN pnpm install
 
@@ -111,14 +113,14 @@ RUN pnpm install
 # This ensures migrations use the correct table prefix based on our test public key
 # The keypair is shared across all extensions for consistency
 RUN mkdir -p /tmp/e2e-keys && \
-    cd apps/haex-pass && \
+    cd apps/haex-notes && \
     pnpm exec haex keygen -o /tmp/e2e-keys
 
 # Update all extensions with the new test keypair
 # Each extension needs its manifest.json and migrations updated
 RUN NEW_KEY=$(cat /tmp/e2e-keys/public.key) && \
     echo "Generated E2E test key: $NEW_KEY" && \
-    for EXT in haex-pass haex-files haex-send; do \
+    for EXT in haex-notes; do \
       EXT_DIR="/repos/haextension/apps/$EXT"; \
       if [ -d "$EXT_DIR/haextension" ]; then \
         echo "Updating $EXT with new keypair..."; \
@@ -145,7 +147,7 @@ RUN pnpm exec nuxt prepare || true
 
 # Prepare each extension app
 WORKDIR /repos/haextension
-RUN for EXT in haex-pass haex-files haex-send; do \
+RUN for EXT in haex-notes; do \
       if [ -d "apps/$EXT" ]; then \
         echo "Preparing $EXT..."; \
         cd "apps/$EXT" && pnpm exec nuxt prepare || true; \
@@ -153,27 +155,30 @@ RUN for EXT in haex-pass haex-files haex-send; do \
       fi; \
     done
 
-# Build all extensions
-RUN pnpm --filter haex-pass build
-RUN pnpm --filter haex-files build || echo "haex-files build skipped (may not exist yet)"
-RUN pnpm --filter haex-send build || echo "haex-send build skipped (may not exist yet)"
+# Build the framework-test extension (haex-notes) and the browser extension
+# (haex-pass-browser talks to haex-vault __core__, not to an extension).
+RUN pnpm --filter haex-notes build
 RUN pnpm --filter haex-pass-browser build
 
-# Package all extensions for E2E tests
-# Sign with the previously generated test keypair
-RUN for EXT in haex-pass haex-files haex-send; do \
-      EXT_DIR="/repos/haextension/apps/$EXT"; \
-      if [ -d "$EXT_DIR/.output/public" ]; then \
-        echo "Signing $EXT..."; \
-        cd "$EXT_DIR" && \
-        pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o "/app/$EXT.haex" || \
-        echo "Warning: haex sign failed for $EXT"; \
-      fi; \
-    done
+# Package haex-notes, signed with the test keypair, so it can be published to
+# the marketplace and installed through the real marketplace flow.
+#
+# haex-notes is the framework-test subject: if its build output is missing or the
+# sign step fails, the whole e2e run is useless (every extension spec times out
+# downstream). So fail the image build here instead of masking it — no
+# "if [ -d ... ]" skip, no "|| echo Warning", and assert the bundle exists.
+RUN set -e; \
+    EXT=haex-notes; \
+    EXT_DIR="/repos/haextension/apps/$EXT"; \
+    test -d "$EXT_DIR/.output/public" || { echo "ERROR: $EXT build output missing at $EXT_DIR/.output/public"; exit 1; }; \
+    echo "Signing $EXT..."; \
+    cd "$EXT_DIR"; \
+    pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o "/app/$EXT.haex"; \
+    test -f "/app/$EXT.haex" || { echo "ERROR: $EXT bundle not produced at /app/$EXT.haex"; exit 1; }; \
+    echo "Signed bundle present: /app/$EXT.haex"
 
-# Copy the extension public key for E2E tests to use in requests
-# Named haex-pass-public.key since haex-pass is the primary extension being tested
-RUN cp /tmp/e2e-keys/public.key /app/haex-pass-public.key
+# Copy the haex-notes public key for E2E tests (marketplace publish + lookups).
+RUN cp /tmp/e2e-keys/public.key /app/haex-notes-public.key
 
 # Copy test files from build context
 WORKDIR /app

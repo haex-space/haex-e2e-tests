@@ -6,11 +6,11 @@ import {
   waitForBridgeConnection,
   authorizeClient,
   sendRequestWithRetry,
-  HAEX_PASS_METHODS,
+  BRIDGE_METHODS,
 } from "../fixtures";
 import { TAURI_COMMANDS } from "@haex-space/vault-sdk";
 
-test.describe("haex-pass: client-management", () => {
+test.describe("external-bridge: client-management", () => {
   test.describe.configure({ mode: "serial" });
 
   let vault: VaultAutomation;
@@ -132,7 +132,7 @@ test.describe("haex-pass: client-management", () => {
       const preResponse = await sendRequestWithRetry<{
         success: boolean;
         requestId: string;
-      }>(client, HAEX_PASS_METHODS.GET_ITEMS, {
+      }>(client, BRIDGE_METHODS.GET_ITEMS, {
         url: "https://example.com",
       });
       expect(preResponse.success).toBe(true);
@@ -157,7 +157,7 @@ test.describe("haex-pass: client-management", () => {
         expect(state).not.toBe("paired");
 
         await expect(
-          client2.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, {
+          client2.sendRequest(BRIDGE_METHODS.GET_ITEMS, {
             url: "https://example.com",
           })
         ).rejects.toThrow("Not authorized");

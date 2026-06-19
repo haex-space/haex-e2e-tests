@@ -16,7 +16,7 @@ import * as http from "node:http";
 import { TAURI_COMMANDS } from "@haex-space/vault-sdk";
 
 // Import haex-pass API constants
-import { HAEX_PASS_METHODS } from "./haex-pass-api";
+import { BRIDGE_METHODS } from "./external-bridge-api";
 
 // Path to built browser extension
 const EXTENSION_PATH = "/repos/haextension/apps/haex-pass-browser/extension";
@@ -101,28 +101,15 @@ console.log("[E2E Config] VAULT_CONFIG.B.tauriDriverUrl:", VAULT_CONFIG.B.tauriD
 
 export type VaultInstance = keyof typeof VAULT_CONFIG;
 
-// haex-pass extension public key file (copied by Dockerfile)
-const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-pass-public.key";
-
-// haex-pass extension name
-const HAEX_PASS_EXTENSION_NAME = "haex-pass";
+// Core sentinel used by external clients to address haex-vault core directly
+// (passwords/passkeys are first-class in core now — no extension needed).
+// Must match `CORE_EXTENSION_ID` / `CORE_EXTENSION_NAME` in
+// src-tauri/src/external_bridge/mod.rs and the routing check in server.rs.
+const CORE_EXTENSION_PUBLIC_KEY = "__core__";
+const CORE_EXTENSION_NAME = "core";
 
 // Sync server URL (from docker-compose environment)
 const SYNC_SERVER_URL = process.env.SYNC_SERVER_URL || "http://localhost:3002";
-
-/**
- * Get the haex-pass extension public key (for request routing)
- */
-function getHaexPassPublicKey(): string {
-  try {
-    return fs.readFileSync(HAEX_PASS_PUBLIC_KEY_FILE, "utf-8").trim();
-  } catch {
-    throw new Error(
-      `Could not read haex-pass public key from ${HAEX_PASS_PUBLIC_KEY_FILE}. ` +
-      `Make sure the Docker image was built correctly.`
-    );
-  }
-}
 
 /**
  * ECDH key pair for encryption
@@ -567,10 +554,10 @@ export class VaultBridgeClient {
     const ephemeralPublicDer = ephemeralPublic.export({ type: "spki", format: "der" });
     const ephemeralPublicKeyBase64 = ephemeralPublicDer.subarray(-32).toString("base64");
 
-    // Get extension info for request routing
-    const extensionPublicKey = getHaexPassPublicKey();
+    // Route to haex-vault core (passwords/passkeys are core, not an extension)
+    const extensionPublicKey = CORE_EXTENSION_PUBLIC_KEY;
 
-    // Create request envelope with extension info
+    // Create request envelope with core routing info
     const request = {
       type: "request",
       action,
@@ -579,14 +566,14 @@ export class VaultBridgeClient {
       clientId: this.clientId,
       publicKey: ephemeralPublicKeyBase64,
       extensionPublicKey,
-      extensionName: HAEX_PASS_EXTENSION_NAME,
+      extensionName: CORE_EXTENSION_NAME,
     };
 
     console.log("[E2E] Sending request:", {
       action,
       requestId,
-      extensionPublicKey: extensionPublicKey.substring(0, 16) + "...",
-      extensionName: HAEX_PASS_EXTENSION_NAME,
+      extensionPublicKey,
+      extensionName: CORE_EXTENSION_NAME,
       clientId: this.clientId,
       timeout,
     });
@@ -613,28 +600,28 @@ export class VaultBridgeClient {
    * Get items (logins) matching a URL
    */
   async getItems(url: string, fields: string[]): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.GET_ITEMS, { url, fields });
+    return this.sendRequest(BRIDGE_METHODS.GET_ITEMS, { url, fields });
   }
 
   /**
    * Create a new item entry
    */
   async createItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.CREATE_ITEM, entry);
+    return this.sendRequest(BRIDGE_METHODS.CREATE_ITEM, entry);
   }
 
   /**
    * Update an existing item entry
    */
   async updateItem(entry: object): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.UPDATE_ITEM, entry);
+    return this.sendRequest(BRIDGE_METHODS.UPDATE_ITEM, entry);
   }
 
   /**
    * Get TOTP code for an entry
    */
   async getTotp(entryId: string): Promise<unknown> {
-    return this.sendRequest(HAEX_PASS_METHODS.GET_TOTP, { entryId });
+    return this.sendRequest(BRIDGE_METHODS.GET_TOTP, { entryId });
   }
 
   /**
@@ -1515,6 +1502,15 @@ export class VaultAutomation {
   }
 
   /**
+   * Get the list of authorized (paired) external clients.
+   */
+  async getAuthorizedClients(): Promise<Array<{ clientId: string }>> {
+    return this.invokeTauriCommand<Array<{ clientId: string }>>(
+      TAURI_COMMANDS.externalBridge.getAuthorizedClients
+    );
+  }
+
+  /**
    * Allow a client authorization (approve)
    */
   async approveClient(
@@ -1991,6 +1987,29 @@ export class VaultAutomation {
       email: row.email as string,
       enabled: row.enabled === 1,
     }));
+  }
+
+  /**
+   * Point the vault's built-in default marketplace at a specific base URL.
+   *
+   * The vault seeds its default `haex_marketplaces` row to the PRODUCTION URL
+   * (`https://marketplace.haex.space`) when a vault is opened. The E2E tests
+   * publish to the local test marketplace instead, so before installing an
+   * extension from the marketplace we must repoint the default row at the test
+   * instance — otherwise the vault queries production and finds nothing.
+   *
+   * Uses sql_execute_with_crdt (same mechanism as configureSyncBackend) so the
+   * haex_* write goes through the CRDT helpers.
+   */
+  async setDefaultMarketplaceUrl(baseUrl: string): Promise<void> {
+    console.log(`[E2E] Pointing default marketplace to ${baseUrl} on Vault ${this.instance}`);
+
+    await this.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: "UPDATE haex_marketplaces SET base_url = ? WHERE is_default = 1",
+      params: [baseUrl],
+    });
+
+    console.log(`[E2E] Default marketplace base_url updated to ${baseUrl}`);
   }
 
   /**
@@ -2545,8 +2564,61 @@ export class VaultAutomation {
   }
 
   /**
+   * Open the Marketplace window via the App Launcher.
+   *
+   * The marketplace is a desktop "system window" (windowManager id 'marketplace',
+   * singleton:false), NOT a route — `/en/marketplace` resolves to nothing. So we
+   * open it the way a user does: launcher button → launcher-item-system-marketplace.
+   *
+   * Because the marketplace window is singleton:false, every open mounts a FRESH
+   * component instance, re-running onMounted → fetchExtensions, which re-reads the
+   * marketplace rows (base_url) from the DB. Calling this AFTER
+   * setDefaultMarketplaceUrl() therefore makes the live search query the test
+   * marketplace (http://marketplace:3001) instead of the production URL.
+   */
+  async openMarketplace(): Promise<void> {
+    console.log(`[E2E] Opening Marketplace on Vault ${this.instance}`);
+
+    // Step 1: Click the launcher button to open the App Launcher drawer.
+    // The launcher button only shows when a vault is open.
+    const maxRetries = 10;
+    let clicked = false;
+    for (let attempt = 1; attempt <= maxRetries && !clicked; attempt++) {
+      const result = await this.executeScript<{ found: boolean }>(`
+        const wrapper = document.querySelector('[data-testid="launcher-button"]');
+        if (!wrapper) return { found: false };
+        const button = wrapper.querySelector('button') || wrapper;
+        button.click();
+        return { found: true };
+      `);
+      if (result?.found) {
+        clicked = true;
+      } else if (attempt < maxRetries) {
+        await this.wait(1000);
+      }
+    }
+    if (!clicked) {
+      await this.takeScreenshot("marketplace-launcher-button-not-found");
+      throw new Error("Launcher button not found after retries");
+    }
+
+    // Wait for launcher drawer to open
+    await this.wait(1000);
+
+    // Step 2: Click the Marketplace launcher item (system window id 'marketplace')
+    await this.executeScript(`
+      const item = document.querySelector('[data-testid="launcher-item-system-marketplace"]');
+      if (!item) throw new Error('Marketplace launcher item not found');
+      item.click();
+    `);
+
+    // Wait for the marketplace window to open and its onMounted fetch to run
+    await this.wait(2000);
+  }
+
+  /**
    * Install an extension from the marketplace via UI
-   * This navigates to the marketplace, searches for the extension, and clicks install
+   * This opens the marketplace, searches for the extension, and clicks install
    *
    * @param extensionName - The name of the extension to install (e.g., "haex-pass")
    * @param timeout - Maximum time to wait for the installation (default 60s)
@@ -2555,9 +2627,11 @@ export class VaultAutomation {
     console.log(`[E2E] Installing ${extensionName} from marketplace via UI...`);
     const start = Date.now();
 
-    // Step 1: Navigate to marketplace
-    await this.navigateTo("/en/marketplace");
-    await this.wait(2000); // Wait for marketplace to load
+    // Step 1: Open the marketplace window. This mounts a fresh marketplace
+    // component (singleton:false), so its onMounted → fetchExtensions re-reads
+    // the marketplace base_url set by setDefaultMarketplaceUrl() and queries the
+    // in-Docker test marketplace instead of the unreachable production URL.
+    await this.openMarketplace();
 
     // Step 2: Wait for extensions to load and find the extension card
     let extensionFound = false;
@@ -2610,8 +2684,9 @@ export class VaultAutomation {
       const card = document.querySelector('[data-testid="marketplace-extension-${extensionName}"]');
       if (!card) throw new Error('Extension card not found');
 
-      // Look for install button on the card
-      const installBtn = card.querySelector('[data-testid="marketplace-install-button"]')
+      // Look for install button on the card. The card emits a per-extension
+      // testid (e.g. marketplace-install-button-haex-notes), so match by prefix.
+      const installBtn = card.querySelector('[data-testid^="marketplace-install-button"]')
         || card.querySelector('button:has([class*="download"])')
         || card.querySelector('button');
 
@@ -2772,7 +2847,7 @@ export const test = base.extend<TestFixtures>({
 export { expect } from "@playwright/test";
 
 // Re-export haex-pass API constants for tests
-export { HAEX_PASS_METHODS } from "./haex-pass-api";
+export { BRIDGE_METHODS } from "./external-bridge-api";
 
 /**
  * Helper to wait for WebSocket connection to bridge
@@ -2882,7 +2957,7 @@ export async function waitForExtensionReady(
   } = {}
 ): Promise<boolean> {
   const {
-    testAction = HAEX_PASS_METHODS.GET_ITEMS,
+    testAction = BRIDGE_METHODS.GET_ITEMS,
     testPayload = { url: "https://example.com" },
     vault,
     extensionId = "haex-pass",
@@ -2994,16 +3069,10 @@ export async function authorizeClient(
     // Create WebDriver session - the vault should already be running from global setup
     await vault.createSession();
 
-    // CRITICAL: Get the extension ID dynamically from the current vault's database.
-    // The extension ID is vault-specific and can't be read from a file because
-    // different vaults have different extension IDs even for the same extension.
-    console.log("[E2E] Looking up haex-pass extension in current vault...");
-    const vaultExtensionId = await getExtensionIdFromVault(vault, "haex-pass", timeout);
-    if (!vaultExtensionId) {
-      console.error("[E2E] haex-pass extension not found in database after timeout");
-      return false;
-    }
-    console.log("[E2E] Found haex-pass extension with ID:", vaultExtensionId);
+    // Authorize the client against haex-vault core (not an extension). The
+    // `__core__` sentinel has a phantom row in `haex_extensions` (migration
+    // 0007), so the authorized-client FK is satisfied without any install.
+    const vaultExtensionId = CORE_EXTENSION_PUBLIC_KEY;
 
     // Wait for the client to be in pending_approval state
     const start = Date.now();
@@ -3047,39 +3116,6 @@ export async function authorizeClient(
   } finally {
     await vault.deleteSession();
   }
-}
-
-/**
- * Get the extension ID for an extension by name from the current vault's database.
- * This is required before authorization can be persisted (due to FOREIGN KEY constraint).
- * Returns the extension ID if found, or null if not found within timeout.
- */
-async function getExtensionIdFromVault(
-  vault: VaultAutomation,
-  extensionName: string,
-  timeout: number
-): Promise<string | null> {
-  const start = Date.now();
-
-  while (Date.now() - start < timeout) {
-    try {
-      // Query the extensions table to find the extension by name
-      const extensions = await vault.invokeTauriCommand<Array<{ id: string; name: string }>>(
-        "get_all_extensions"
-      );
-
-      const extension = extensions.find((ext) => ext.name === extensionName);
-      if (extension) {
-        return extension.id;
-      }
-    } catch (error) {
-      console.log("[E2E] Error checking extension in database:", error);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  return null;
 }
 
 /**

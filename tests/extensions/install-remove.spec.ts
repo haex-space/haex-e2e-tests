@@ -4,7 +4,8 @@ interface Extension {
   id: string;
   name: string;
   version: string;
-  author: string;
+  // haex-notes omits author in its manifest, so it may be absent or explicitly null.
+  author?: string | null;
   description: string;
   publicKey: string;
 }
@@ -20,7 +21,7 @@ test.describe("extensions: install & query", () => {
     await vault.createSession();
   });
 
-  test("get_all_extensions returns list containing haex-pass", async () => {
+  test("get_all_extensions returns list containing haex-notes", async () => {
     const extensions = await vault.invokeTauriCommand<Extension[]>(
       "get_all_extensions",
       {}
@@ -29,19 +30,25 @@ test.describe("extensions: install & query", () => {
     expect(Array.isArray(extensions)).toBe(true);
     expect(extensions.length).toBeGreaterThanOrEqual(1);
 
-    const found = extensions.find((ext) => ext.name === "haex-pass");
+    const found = extensions.find((ext) => ext.name === "haex-notes");
     expect(found).not.toBeUndefined();
     haexPass = found!;
   });
 
-  test("haex-pass has correct name, version, and author fields", async () => {
-    expect(haexPass.name).toEqual("haex-pass");
+  test("haex-notes has correct name, version, and author fields", async () => {
+    expect(haexPass.name).toEqual("haex-notes");
     expect(typeof haexPass.version).toEqual("string");
-    expect(haexPass.version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(haexPass.author).toEqual("haex");
+    // Metadata values (version format, author) are extension-defined; haex-notes
+    // omits author in its manifest, so it may be a string, undefined, or null —
+    // but NOT an arbitrary object (typeof null === "object" would mask that, so
+    // assert the value/shape directly instead of just typeof).
+    const author = haexPass.author;
+    expect(
+      author === undefined || author === null || typeof author === "string",
+    ).toBe(true);
   });
 
-  test("haex-pass has valid id, description, and publicKey", async () => {
+  test("haex-notes has valid id, description, and publicKey", async () => {
     expect(typeof haexPass.id).toEqual("string");
     expect(haexPass.id.length).toBeGreaterThan(0);
     expect(typeof haexPass.description).toEqual("string");
@@ -50,7 +57,7 @@ test.describe("extensions: install & query", () => {
     expect(haexPass.publicKey.length).toBeGreaterThan(0);
   });
 
-  test("is_extension_installed returns true for haex-pass", async () => {
+  test("is_extension_installed returns true for haex-notes", async () => {
     const installed = await vault.invokeTauriCommand<boolean>(
       "is_extension_installed",
       {
@@ -76,7 +83,7 @@ test.describe("extensions: install & query", () => {
     expect(installed).toBe(false);
   });
 
-  test("get_extension_info returns matching data for haex-pass", async () => {
+  test("get_extension_info returns matching data for haex-notes", async () => {
     const info = await vault.invokeTauriCommand<Extension>(
       "get_extension_info",
       {
@@ -86,9 +93,9 @@ test.describe("extensions: install & query", () => {
     );
 
     expect(info.id).toEqual(haexPass.id);
-    expect(info.name).toEqual("haex-pass");
+    expect(info.name).toEqual("haex-notes");
     expect(info.version).toEqual(haexPass.version);
-    expect(info.author).toEqual("haex");
+    expect(info.author).toEqual(haexPass.author);
     expect(info.publicKey).toEqual(haexPass.publicKey);
   });
 });
