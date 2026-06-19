@@ -1990,6 +1990,29 @@ export class VaultAutomation {
   }
 
   /**
+   * Point the vault's built-in default marketplace at a specific base URL.
+   *
+   * The vault seeds its default `haex_marketplaces` row to the PRODUCTION URL
+   * (`https://marketplace.haex.space`) when a vault is opened. The E2E tests
+   * publish to the local test marketplace instead, so before installing an
+   * extension from the marketplace we must repoint the default row at the test
+   * instance — otherwise the vault queries production and finds nothing.
+   *
+   * Uses sql_execute_with_crdt (same mechanism as configureSyncBackend) so the
+   * haex_* write goes through the CRDT helpers.
+   */
+  async setDefaultMarketplaceUrl(baseUrl: string): Promise<void> {
+    console.log(`[E2E] Pointing default marketplace to ${baseUrl} on Vault ${this.instance}`);
+
+    await this.invokeTauriCommand("sql_execute_with_crdt", {
+      sql: "UPDATE haex_marketplaces SET base_url = ? WHERE is_default = 1",
+      params: [baseUrl],
+    });
+
+    console.log(`[E2E] Default marketplace base_url updated to ${baseUrl}`);
+  }
+
+  /**
    * Complete the welcome dialog that appears when a new vault is created.
    * The dialog has 3 steps: Device Name, Extensions, Sync.
    * Uses data-testid attributes for reliable element selection.
@@ -2606,8 +2629,9 @@ export class VaultAutomation {
       const card = document.querySelector('[data-testid="marketplace-extension-${extensionName}"]');
       if (!card) throw new Error('Extension card not found');
 
-      // Look for install button on the card
-      const installBtn = card.querySelector('[data-testid="marketplace-install-button"]')
+      // Look for install button on the card. The card emits a per-extension
+      // testid (e.g. marketplace-install-button-haex-notes), so match by prefix.
+      const installBtn = card.querySelector('[data-testid^="marketplace-install-button"]')
         || card.querySelector('button:has([class*="download"])')
         || card.querySelector('button');
 

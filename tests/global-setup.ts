@@ -745,6 +745,12 @@ async function globalSetup() {
     const vault = new VaultAutomation("A");
     await vault.createSession();
     try {
+      // The vault seeds its default marketplace row to the production URL on
+      // open. Repoint it at the local test marketplace so the vault can find
+      // haex-notes (published by marketplace-setup.ts to MARKETPLACE_URL).
+      const testMarketplaceUrl =
+        process.env.MARKETPLACE_URL || "http://marketplace:3001";
+      await vault.setDefaultMarketplaceUrl(testMarketplaceUrl);
       await vault.installExtensionFromMarketplace("haex-notes");
       console.log("[Setup] haex-notes installed from marketplace");
     } finally {
