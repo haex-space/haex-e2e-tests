@@ -751,6 +751,7 @@ async function globalSetup() {
       const testMarketplaceUrl =
         process.env.MARKETPLACE_URL || "http://marketplace:3001";
       await vault.setDefaultMarketplaceUrl(testMarketplaceUrl);
+      console.log(`[Setup] Pointed vault at test marketplace ${testMarketplaceUrl}`);
       await vault.installExtensionFromMarketplace("haex-notes");
       console.log("[Setup] haex-notes installed from marketplace");
     } finally {

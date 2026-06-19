@@ -2564,8 +2564,61 @@ export class VaultAutomation {
   }
 
   /**
+   * Open the Marketplace window via the App Launcher.
+   *
+   * The marketplace is a desktop "system window" (windowManager id 'marketplace',
+   * singleton:false), NOT a route — `/en/marketplace` resolves to nothing. So we
+   * open it the way a user does: launcher button → launcher-item-system-marketplace.
+   *
+   * Because the marketplace window is singleton:false, every open mounts a FRESH
+   * component instance, re-running onMounted → fetchExtensions, which re-reads the
+   * marketplace rows (base_url) from the DB. Calling this AFTER
+   * setDefaultMarketplaceUrl() therefore makes the live search query the test
+   * marketplace (http://marketplace:3001) instead of the production URL.
+   */
+  async openMarketplace(): Promise<void> {
+    console.log(`[E2E] Opening Marketplace on Vault ${this.instance}`);
+
+    // Step 1: Click the launcher button to open the App Launcher drawer.
+    // The launcher button only shows when a vault is open.
+    const maxRetries = 10;
+    let clicked = false;
+    for (let attempt = 1; attempt <= maxRetries && !clicked; attempt++) {
+      const result = await this.executeScript<{ found: boolean }>(`
+        const wrapper = document.querySelector('[data-testid="launcher-button"]');
+        if (!wrapper) return { found: false };
+        const button = wrapper.querySelector('button') || wrapper;
+        button.click();
+        return { found: true };
+      `);
+      if (result?.found) {
+        clicked = true;
+      } else if (attempt < maxRetries) {
+        await this.wait(1000);
+      }
+    }
+    if (!clicked) {
+      await this.takeScreenshot("marketplace-launcher-button-not-found");
+      throw new Error("Launcher button not found after retries");
+    }
+
+    // Wait for launcher drawer to open
+    await this.wait(1000);
+
+    // Step 2: Click the Marketplace launcher item (system window id 'marketplace')
+    await this.executeScript(`
+      const item = document.querySelector('[data-testid="launcher-item-system-marketplace"]');
+      if (!item) throw new Error('Marketplace launcher item not found');
+      item.click();
+    `);
+
+    // Wait for the marketplace window to open and its onMounted fetch to run
+    await this.wait(2000);
+  }
+
+  /**
    * Install an extension from the marketplace via UI
-   * This navigates to the marketplace, searches for the extension, and clicks install
+   * This opens the marketplace, searches for the extension, and clicks install
    *
    * @param extensionName - The name of the extension to install (e.g., "haex-pass")
    * @param timeout - Maximum time to wait for the installation (default 60s)
@@ -2574,9 +2627,11 @@ export class VaultAutomation {
     console.log(`[E2E] Installing ${extensionName} from marketplace via UI...`);
     const start = Date.now();
 
-    // Step 1: Navigate to marketplace
-    await this.navigateTo("/en/marketplace");
-    await this.wait(2000); // Wait for marketplace to load
+    // Step 1: Open the marketplace window. This mounts a fresh marketplace
+    // component (singleton:false), so its onMounted → fetchExtensions re-reads
+    // the marketplace base_url set by setDefaultMarketplaceUrl() and queries the
+    // in-Docker test marketplace instead of the unreachable production URL.
+    await this.openMarketplace();
 
     // Step 2: Wait for extensions to load and find the extension card
     let extensionFound = false;
