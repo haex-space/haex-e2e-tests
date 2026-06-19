@@ -1,10 +1,11 @@
 /**
  * external-bridge API Constants
  *
- * These method strings are the haex-pass application-level API exposed over the
- * haex-vault external WebSocket bridge (the vault core only routes the messages;
- * the methods themselves are defined by haex-pass). They mirror HAEX_PASS_METHODS.
- * Keep in sync with: haextension repo, apps/haex-pass/app/api/external.ts
+ * These method strings are the haex-vault *core* external API exposed over the
+ * external WebSocket bridge and routed via the `__core__` sentinel (passwords
+ * and passkeys are core features now, no longer a separate haex-pass app).
+ * Keep in sync with the core handler map in haex-vault:
+ * src/composables/handlers/useCoreExternalRequestHandlers.ts
  */
 
 /**
