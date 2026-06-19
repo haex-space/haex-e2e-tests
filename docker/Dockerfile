@@ -162,15 +162,20 @@ RUN pnpm --filter haex-pass-browser build
 
 # Package haex-notes, signed with the test keypair, so it can be published to
 # the marketplace and installed through the real marketplace flow.
-RUN for EXT in haex-notes; do \
-      EXT_DIR="/repos/haextension/apps/$EXT"; \
-      if [ -d "$EXT_DIR/.output/public" ]; then \
-        echo "Signing $EXT..."; \
-        cd "$EXT_DIR" && \
-        pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o "/app/$EXT.haex" || \
-        echo "Warning: haex sign failed for $EXT"; \
-      fi; \
-    done
+#
+# haex-notes is the framework-test subject: if its build output is missing or the
+# sign step fails, the whole e2e run is useless (every extension spec times out
+# downstream). So fail the image build here instead of masking it — no
+# "if [ -d ... ]" skip, no "|| echo Warning", and assert the bundle exists.
+RUN set -e; \
+    EXT=haex-notes; \
+    EXT_DIR="/repos/haextension/apps/$EXT"; \
+    test -d "$EXT_DIR/.output/public" || { echo "ERROR: $EXT build output missing at $EXT_DIR/.output/public"; exit 1; }; \
+    echo "Signing $EXT..."; \
+    cd "$EXT_DIR"; \
+    pnpm exec haex sign .output/public -k /tmp/e2e-keys/private.key -o "/app/$EXT.haex"; \
+    test -f "/app/$EXT.haex" || { echo "ERROR: $EXT bundle not produced at /app/$EXT.haex"; exit 1; }; \
+    echo "Signed bundle present: /app/$EXT.haex"
 
 # Copy the haex-notes public key for E2E tests (marketplace publish + lookups).
 RUN cp /tmp/e2e-keys/public.key /app/haex-notes-public.key

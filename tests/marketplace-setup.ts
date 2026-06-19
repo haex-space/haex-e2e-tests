@@ -27,8 +27,31 @@ const TEST_EMAIL = "e2e-publisher@haex.space";
 const TEST_PASSWORD = "e2e-test-password-12345";
 
 // Extension bundle path (created by Dockerfile)
-const HAEX_PASS_BUNDLE = "/app/haex-notes.haex";
-const HAEX_PASS_PUBLIC_KEY_FILE = "/app/haex-notes-public.key";
+const HAEX_NOTES_BUNDLE = "/app/haex-notes.haex";
+const HAEX_NOTES_PUBLIC_KEY_FILE = "/app/haex-notes-public.key";
+
+// Source of truth for the published version: the haex-notes package the bundle
+// was built from. The Dockerfile clones haextension to /repos and does NOT prune
+// it, so this path is still present at setup time. The manifest.json carries no
+// version field, so package.json is the authoritative source. Fall back to a
+// known-good literal if the repo layout ever changes, to avoid a hard crash.
+const HAEX_NOTES_PACKAGE_JSON = "/repos/haextension/apps/haex-notes/package.json";
+const HAEX_NOTES_FALLBACK_VERSION = "0.1.7";
+
+function getHaexNotesVersion(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(HAEX_NOTES_PACKAGE_JSON, "utf-8")) as { version?: string };
+    if (pkg.version) {
+      return pkg.version;
+    }
+  } catch {
+    // Repo not present at runtime — fall through to the literal.
+  }
+  console.log(
+    `[Marketplace Setup] Could not read version from ${HAEX_NOTES_PACKAGE_JSON}, using fallback ${HAEX_NOTES_FALLBACK_VERSION}`,
+  );
+  return HAEX_NOTES_FALLBACK_VERSION;
+}
 
 interface AuthTokens {
   accessToken: string;
@@ -122,12 +145,12 @@ async function createPublisherProfile(accessToken: string): Promise<void> {
 /**
  * Get haex-notes manifest
  */
-function getHaexPassManifest(): Record<string, unknown> {
-  const publicKey = fs.readFileSync(HAEX_PASS_PUBLIC_KEY_FILE, "utf-8").trim();
+function getHaexNotesManifest(): Record<string, unknown> {
+  const publicKey = fs.readFileSync(HAEX_NOTES_PUBLIC_KEY_FILE, "utf-8").trim();
 
   return {
     name: "haex-notes",
-    version: "1.4.31",
+    version: getHaexNotesVersion(),
     author: "haex",
     entry: "index.html",
     icon: "haextension/haex-notes-logo.png",
@@ -153,7 +176,7 @@ function getHaexPassManifest(): Record<string, unknown> {
 async function createExtension(accessToken: string): Promise<void> {
   console.log("[Marketplace Setup] Creating extension...");
 
-  const publicKey = fs.readFileSync(HAEX_PASS_PUBLIC_KEY_FILE, "utf-8").trim();
+  const publicKey = fs.readFileSync(HAEX_NOTES_PUBLIC_KEY_FILE, "utf-8").trim();
 
   const response = await fetch(`${EFFECTIVE_MARKETPLACE_URL}/publish/extensions`, {
     method: "POST",
@@ -191,12 +214,12 @@ async function createExtension(accessToken: string): Promise<void> {
 async function uploadExtensionBundle(accessToken: string): Promise<void> {
   console.log("[Marketplace Setup] Uploading extension bundle...");
 
-  if (!fs.existsSync(HAEX_PASS_BUNDLE)) {
-    throw new Error(`Extension bundle not found at ${HAEX_PASS_BUNDLE}`);
+  if (!fs.existsSync(HAEX_NOTES_BUNDLE)) {
+    throw new Error(`Extension bundle not found at ${HAEX_NOTES_BUNDLE}`);
   }
 
-  const bundleData = fs.readFileSync(HAEX_PASS_BUNDLE);
-  const manifest = getHaexPassManifest();
+  const bundleData = fs.readFileSync(HAEX_NOTES_BUNDLE);
+  const manifest = getHaexNotesManifest();
 
   // Create form data
   const formData = new FormData();
@@ -212,18 +235,27 @@ async function uploadExtensionBundle(accessToken: string): Promise<void> {
     body: formData,
   });
 
-  const data = await response.json();
+  // Read the body defensively: a failing endpoint may return non-JSON (e.g. an
+  // HTML 500 page), and we still want the raw text in the error for diagnosis.
+  const rawBody = await response.text();
+  let data: Record<string, unknown> = {};
+  try {
+    data = rawBody ? JSON.parse(rawBody) : {};
+  } catch {
+    data = { error: rawBody };
+  }
 
   if (!response.ok) {
     // Check if version already exists
-    if (response.status === 409 && data.error?.includes("already exists")) {
+    if (response.status === 409 && typeof data.error === "string" && data.error.includes("already exists")) {
       console.log("[Marketplace Setup] Version already exists");
       return;
     }
-    throw new Error(`Failed to upload bundle: ${JSON.stringify(data)}`);
+    throw new Error(`Failed to upload bundle (HTTP ${response.status}): ${rawBody}`);
   }
 
-  console.log("[Marketplace Setup] Bundle uploaded, version:", data.version?.version);
+  const uploadedVersion = (data.version as { version?: string } | undefined)?.version;
+  console.log("[Marketplace Setup] Bundle uploaded, version:", uploadedVersion);
 }
 
 /**

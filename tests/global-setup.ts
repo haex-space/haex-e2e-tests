@@ -647,12 +647,31 @@ async function globalSetup() {
   // when the container starts. We just need to wait for them to be ready.
   console.log("[Setup] Waiting for services (started by container init)...");
 
-  // Setup marketplace (publish haex-pass extension)
-  // This runs early so the extension is available in the marketplace for UI tests
+  // Setup marketplace (publish the haex-notes extension)
+  // This runs early so the extension is available in the marketplace for UI tests.
+  //
+  // When haex-notes is the framework-test subject and gets INSTALLED from the
+  // marketplace (the default, i.e. SKIP_EXTENSION_INSTALL !== "true"), a publish
+  // failure is fatal: if the bundle never lands in the marketplace, every
+  // extension spec fails downstream with a cryptic 60s "not found" timeout. So
+  // rethrow and log the full error here to surface the real cause in CI.
+  //
+  // Only stay graceful when the marketplace is genuinely optional for this run
+  // (SKIP_EXTENSION_INSTALL=true — extension-agnostic specs that talk to core).
+  const marketplaceRequired = process.env.SKIP_EXTENSION_INSTALL !== "true";
   try {
     await setupMarketplace();
   } catch (error) {
-    console.log("[Setup] Marketplace setup failed (may not be available):", (error as Error).message);
+    if (marketplaceRequired) {
+      // Surface the FULL error: message, any attached HTTP body, and stack.
+      console.error("[Setup] Marketplace setup FAILED (required for marketplace-installed haex-notes):");
+      console.error(error);
+      throw error;
+    }
+    console.log(
+      "[Setup] Marketplace setup failed (SKIP_EXTENSION_INSTALL=true — marketplace optional):",
+      (error as Error).message,
+    );
   }
 
   // Seed 'free' tier in sync-server DB if missing.
