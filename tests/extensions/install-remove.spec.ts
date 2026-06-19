@@ -4,7 +4,8 @@ interface Extension {
   id: string;
   name: string;
   version: string;
-  author: string;
+  // haex-notes omits author in its manifest, so it may be absent or explicitly null.
+  author?: string | null;
   description: string;
   publicKey: string;
 }
@@ -38,8 +39,13 @@ test.describe("extensions: install & query", () => {
     expect(haexPass.name).toEqual("haex-notes");
     expect(typeof haexPass.version).toEqual("string");
     // Metadata values (version format, author) are extension-defined; haex-notes
-    // omits author in its manifest, so only assert types, not specific values.
-    expect(["string", "undefined", "object"]).toContain(typeof haexPass.author);
+    // omits author in its manifest, so it may be a string, undefined, or null —
+    // but NOT an arbitrary object (typeof null === "object" would mask that, so
+    // assert the value/shape directly instead of just typeof).
+    const author = haexPass.author;
+    expect(
+      author === undefined || author === null || typeof author === "string",
+    ).toBe(true);
   });
 
   test("haex-notes has valid id, description, and publicKey", async () => {

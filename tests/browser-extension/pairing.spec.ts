@@ -13,6 +13,13 @@ import { test, expect, VaultAutomation } from "../fixtures";
  * end-to-end through a real browser, not the WebSocket simulator used by the
  * tests/external-bridge specs.
  */
+// Identity the haex-pass-browser background worker reports when it connects:
+// see haextension apps/haex-pass-browser/src/background/connection.ts
+// (`const CLIENT_NAME = 'haex-pass Browser Extension'`, sent as `clientName`).
+// We match the pending authorization on this so the test validates THIS client,
+// not whatever else might happen to be pending in the shared session.
+const BROWSER_CLIENT_NAME = "haex-pass Browser Extension";
+
 test.describe("browser-extension: pairing with haex-vault core", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -33,8 +40,11 @@ test.describe("browser-extension: pairing with haex-vault core", () => {
       const start = Date.now();
       while (Date.now() - start < 30000) {
         const list = await vault.getPendingAuthorizations();
-        if (list.length > 0) {
-          pending = list[0];
+        // Pick the specific haex-pass-browser client by its reported clientName,
+        // not list[0] — the shared session may carry other pending clients.
+        const match = list.find((p) => p.clientName === BROWSER_CLIENT_NAME);
+        if (match) {
+          pending = match;
           break;
         }
         await new Promise((r) => setTimeout(r, 1000));
@@ -42,8 +52,9 @@ test.describe("browser-extension: pairing with haex-vault core", () => {
 
       expect(
         pending,
-        "haex-pass-browser should appear in the vault's pending authorizations",
+        `haex-pass-browser ("${BROWSER_CLIENT_NAME}") should appear in the vault's pending authorizations`,
       ).toBeTruthy();
+      expect(pending!.clientName).toBe(BROWSER_CLIENT_NAME);
 
       // Approve the real browser client for haex-vault core (__core__).
       await vault.approveClient(

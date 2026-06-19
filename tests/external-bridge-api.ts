@@ -1,8 +1,10 @@
 /**
  * external-bridge API Constants
  *
- * These constants mirror the BRIDGE_METHODS exposed by the haex-vault core
- * external bridge. Keep in sync with: /repos/haextension/apps/haex-pass/app/api/external.ts
+ * These method strings are the haex-pass application-level API exposed over the
+ * haex-vault external WebSocket bridge (the vault core only routes the messages;
+ * the methods themselves are defined by haex-pass). They mirror HAEX_PASS_METHODS.
+ * Keep in sync with: haextension repo, apps/haex-pass/app/api/external.ts
  */
 
 /**
