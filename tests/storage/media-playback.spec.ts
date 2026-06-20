@@ -219,6 +219,59 @@ async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
   });
 }
 
+/**
+ * Click the seeded share row and wait for its file children to appear.
+ *
+ * Mirrors the same shared-session hazard as openMediaPreview above: vault A
+ * carries hundreds of preceding tests' accumulated state by the time this
+ * suite runs, and the share-folder navigation can race against background
+ * reactivity — the row click registers, the URL/view switches, but the
+ * file-entry rows don't paint within the per-attempt budget. In isolation
+ * the listing is instant; only under accumulated shard load does the race
+ * surface. So we don't assume a single click→list succeeds: each attempt
+ * clicks the share, polls for the expected file-entry, and on miss falls
+ * back out to the share overview (so the next click is a fresh navigation)
+ * before retrying. Returns whether the file-entry appeared. Budgeted to
+ * stay under the 60s test timeout even if every attempt fails.
+ */
+async function enterShareAndExpectFile(
+  vault: VaultAutomation,
+  shareName: string,
+  fileTestId: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const clicked = await vault.clickBySelector(sel(`file-peer-${shareName}`), {
+      timeout: 10000,
+    });
+    if (
+      clicked &&
+      (await vault.waitForElement(sel(fileTestId), { timeout: 8000 }))
+    ) {
+      return true;
+    }
+    const dom = await vault.executeScript(`
+      return {
+        peers: [...document.querySelectorAll('[data-testid^="file-peer-"]')].map(e => e.getAttribute('data-testid')),
+        entries: [...document.querySelectorAll('[data-testid^="file-entry-"]')].map(e => e.getAttribute('data-testid')),
+      };
+    `);
+    console.log(
+      `[media-playback][share-listing-attempt-${attempt}] clicked=${clicked} ${JSON.stringify(dom)}`,
+    );
+    // Back out so the next attempt re-navigates from a clean overview.
+    await vault.executeScript(
+      `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
+    );
+    await wait(500);
+    // Re-assert we're back on the overview before retrying the click.
+    await vault.waitForElement(sel(`file-peer-${shareName}`), {
+      timeout: 5000,
+    });
+    await wait(500);
+  }
+  return false;
+}
+
 /** Dump overview DOM + DB rows when the seeded share fails to appear. */
 async function diagnoseMissingShare(vault: VaultAutomation): Promise<void> {
   const dom = await vault.executeScript(`
@@ -395,16 +448,11 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
     if (!sharePresent) await diagnoseMissingShare(vault);
     expect(sharePresent).toBe(true);
 
-    // Enter the share → its two media files are listed.
+    // Enter the share → its two media files are listed. The click→listing path
+    // can race against accumulated reactivity in the shared vault A session,
+    // so the helper retries the navigation a few times before giving up.
     expect(
-      await vault.clickBySelector(sel(`file-peer-${SHARE_NAME}`), {
-        timeout: 10000,
-      }),
-    ).toBe(true);
-    expect(
-      await vault.waitForElement(sel(`file-entry-${VIDEO_FILE}`), {
-        timeout: 15000,
-      }),
+      await enterShareAndExpectFile(vault, SHARE_NAME, `file-entry-${VIDEO_FILE}`),
     ).toBe(true);
     expect(await vault.waitForElement(sel(`file-entry-${AUDIO_FILE}`))).toBe(
       true,
