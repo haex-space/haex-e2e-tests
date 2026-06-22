@@ -25,14 +25,17 @@ const PWD_FROM_B_SECRET = "secret-authored-on-b";
  * 3. Vault B ingests the file through its own `import_vault` Tauri
  *    command — the exact code path a real "Import vault" button would
  *    call. B then opens the imported vault through the standard UI.
- *    The welcome dialog does NOT re-fire (vault is already onboarded),
- *    so B's own device is NOT auto-registered into `haex_devices`.
- *    That is intentional: we test the asymmetric bootstrap state that
- *    a real DB copy produces.
+ *    KNOWN GAP: the welcome dialog does NOT re-fire on an
+ *    already-onboarded vault, so B's own device is NOT auto-registered
+ *    into `haex_devices`. The planned new-device-detection drawer will
+ *    fix this — at which point owner-sync becomes symmetric. Until then
+ *    this spec exercises the asymmetric state a real DB copy produces
+ *    today, and is written so it still passes once the gap is closed.
  * 4. autostart from PR #511 fires `peer_storage_start` + `owner_sync_start`
  *    on both vaults. Only B has a peer to connect to (A) — A's
- *    `owner_sync_start` is a no-op because B is unknown to A. The single
- *    B→A connection carries both push and pull, so both sides converge.
+ *    `owner_sync_start` is currently a no-op because B is unknown to A.
+ *    The single B→A connection carries both push and pull, so both sides
+ *    converge regardless.
  *
  * Specs in this file assert that bidirectional convergence is achieved
  * over the B-initiated connection alone.
@@ -88,14 +91,18 @@ test.describe("sync: owner-vault via DB copy", () => {
     await initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD);
     await initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD);
 
-    // Post-import, B's `haex_devices` carries only A's row (no welcome
-    // dialog re-runs on an already-onboarded vault). This is the
-    // asymmetric bootstrap the rest of the spec exercises.
+    // Post-import, A's row from the copied DB must be present on B (the
+    // baseline for B → A connectivity below). B's OWN endpoint may or may
+    // not be in there: today the welcome dialog does not re-fire on an
+    // already-onboarded vault, so B is missing — a known gap the planned
+    // new-device-detection drawer will close. We assert only the bound
+    // that the existing code already enforces (A is present), so the spec
+    // keeps passing when that gap is closed and `length` becomes 2.
     const bDevices = await sqlQuery<{ endpoint_id: string }>(
       vaultB,
       "SELECT endpoint_id FROM haex_devices",
     );
-    expect(bDevices.length).toBe(1);
+    expect(bDevices.length).toBeGreaterThanOrEqual(1);
   });
 
   test("A → B: B pulls A's existing row over the B-initiated connection", async () => {
