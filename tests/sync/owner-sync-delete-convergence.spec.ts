@@ -23,7 +23,7 @@ const PWD_SECRET = "secret-to-be-deleted";
  * This spec sets up the natural minimum: identical row on both devices,
  * delete on one side, and verify (a) the delete reaches the other side and
  * (b) the row stays gone after multiple sync cycles. A resurrected row
- * (regression of #494) would show up as a re-appeared `haex_passwords` row
+ * (regression of #494) would show up as a re-appeared `haex_passwords_item_details` row
  * with the same primary key.
  */
 test.describe("sync: owner-vault delete convergence", () => {
@@ -48,7 +48,7 @@ test.describe("sync: owner-vault delete convergence", () => {
     await initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD);
 
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: "INSERT INTO haex_passwords (id, secret) VALUES (?1, ?2)",
+      sql: "INSERT INTO haex_passwords_item_details (id, password) VALUES (?1, ?2)",
       params: [PWD_ID, PWD_SECRET],
     });
 
@@ -61,7 +61,7 @@ test.describe("sync: owner-vault delete convergence", () => {
       async () => {
         const rows = await sqlQuery<{ id: string }>(
           vaultB,
-          "SELECT id FROM haex_passwords WHERE id = ?1",
+          "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
           [PWD_ID],
         );
         return rows.length === 1 ? rows : null;
@@ -72,7 +72,7 @@ test.describe("sync: owner-vault delete convergence", () => {
 
   test("delete on A converges to B and stays deleted after multiple sync cycles", async () => {
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: "DELETE FROM haex_passwords WHERE id = ?1",
+      sql: "DELETE FROM haex_passwords_item_details WHERE id = ?1",
       params: [PWD_ID],
     });
 
@@ -82,7 +82,7 @@ test.describe("sync: owner-vault delete convergence", () => {
       async () => {
         const rows = await sqlQuery<{ id: string }>(
           vaultB,
-          "SELECT id FROM haex_passwords WHERE id = ?1",
+          "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
           [PWD_ID],
         );
         return rows.length === 0 ? true : null;
@@ -94,7 +94,7 @@ test.describe("sync: owner-vault delete convergence", () => {
     // surface here too).
     const aRowsAfterDelete = await sqlQuery<{ id: string }>(
       vaultA,
-      "SELECT id FROM haex_passwords WHERE id = ?1",
+      "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
       [PWD_ID],
     );
     expect(aRowsAfterDelete.length).toBe(0);
@@ -110,12 +110,12 @@ test.describe("sync: owner-vault delete convergence", () => {
 
     const aFinal = await sqlQuery<{ id: string }>(
       vaultA,
-      "SELECT id FROM haex_passwords WHERE id = ?1",
+      "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
       [PWD_ID],
     );
     const bFinal = await sqlQuery<{ id: string }>(
       vaultB,
-      "SELECT id FROM haex_passwords WHERE id = ?1",
+      "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
       [PWD_ID],
     );
     expect(aFinal.length).toBe(0);

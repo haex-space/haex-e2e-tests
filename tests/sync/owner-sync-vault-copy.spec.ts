@@ -62,7 +62,7 @@ test.describe("sync: owner-vault via DB copy", () => {
     await initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD);
 
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: "INSERT INTO haex_passwords (id, secret) VALUES (?1, ?2)",
+      sql: "INSERT INTO haex_passwords_item_details (id, password) VALUES (?1, ?2)",
       params: [PWD_FROM_A_ID, PWD_FROM_A_SECRET],
     });
 
@@ -78,7 +78,7 @@ test.describe("sync: owner-vault via DB copy", () => {
 
     const rows = await sqlQuery<{ id: string }>(
       vaultA,
-      "SELECT id FROM haex_passwords WHERE id = ?1",
+      "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
       [PWD_FROM_A_ID],
     );
     expect(rows.length).toBe(1);
@@ -116,12 +116,12 @@ test.describe("sync: owner-vault via DB copy", () => {
 
     await pollUntil(
       async () => {
-        const rows = await sqlQuery<{ id: string; secret: string }>(
+        const rows = await sqlQuery<{ id: string; password: string }>(
           vaultB,
-          "SELECT id, secret FROM haex_passwords WHERE id = ?1",
+          "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
           [PWD_FROM_A_ID],
         );
-        return rows.length === 1 && rows[0]?.secret === PWD_FROM_A_SECRET
+        return rows.length === 1 && rows[0]?.password === PWD_FROM_A_SECRET
           ? rows
           : null;
       },
@@ -135,7 +135,7 @@ test.describe("sync: owner-vault via DB copy", () => {
 
   test("B → A: A receives a row authored on B over the same connection", async () => {
     await vaultB.invokeTauriCommand("sql_execute_with_crdt", {
-      sql: "INSERT INTO haex_passwords (id, secret) VALUES (?1, ?2)",
+      sql: "INSERT INTO haex_passwords_item_details (id, password) VALUES (?1, ?2)",
       params: [PWD_FROM_B_ID, PWD_FROM_B_SECRET],
     });
 
@@ -145,12 +145,12 @@ test.describe("sync: owner-vault via DB copy", () => {
 
     await pollUntil(
       async () => {
-        const rows = await sqlQuery<{ id: string; secret: string }>(
+        const rows = await sqlQuery<{ id: string; password: string }>(
           vaultA,
-          "SELECT id, secret FROM haex_passwords WHERE id = ?1",
+          "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
           [PWD_FROM_B_ID],
         );
-        return rows.length === 1 && rows[0]?.secret === PWD_FROM_B_SECRET
+        return rows.length === 1 && rows[0]?.password === PWD_FROM_B_SECRET
           ? rows
           : null;
       },
@@ -164,14 +164,14 @@ test.describe("sync: owner-vault via DB copy", () => {
     // Both rows should now be visible on both sides (full convergence).
     const aRows = await sqlQuery<{ id: string }>(
       vaultA,
-      "SELECT id FROM haex_passwords WHERE id IN (?1, ?2) ORDER BY id",
+      "SELECT id FROM haex_passwords_item_details WHERE id IN (?1, ?2) ORDER BY id",
       [PWD_FROM_A_ID, PWD_FROM_B_ID],
     );
     expect(aRows.map((r) => r.id)).toEqual([PWD_FROM_A_ID, PWD_FROM_B_ID]);
 
     const bRows = await sqlQuery<{ id: string }>(
       vaultB,
-      "SELECT id FROM haex_passwords WHERE id IN (?1, ?2) ORDER BY id",
+      "SELECT id FROM haex_passwords_item_details WHERE id IN (?1, ?2) ORDER BY id",
       [PWD_FROM_A_ID, PWD_FROM_B_ID],
     );
     expect(bRows.map((r) => r.id)).toEqual([PWD_FROM_A_ID, PWD_FROM_B_ID]);
