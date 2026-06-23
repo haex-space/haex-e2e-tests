@@ -34,6 +34,16 @@ test.describe("sync: owner-vault delete convergence", () => {
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
     await vaultB.createSession();
+
+    // Drop any prior /vault/... URL so initializeVaultViaUI doesn't
+    // short-circuit on the cached location (would silently reuse a vault
+    // from a sibling suite instead of creating VAULT_NAME). Mirrors the
+    // pattern in tests/ui/welcome-dialog.spec.ts:46-48.
+    for (const v of [vaultA, vaultB]) {
+      await v.invokeTauriCommand("close_database", {}).catch(() => {});
+      await v.navigateTo("/");
+    }
+    await wait(1000);
   });
 
   test.afterAll(async () => {
