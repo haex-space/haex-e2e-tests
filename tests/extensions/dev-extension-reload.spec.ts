@@ -53,15 +53,21 @@ interface PermissionEntry {
   status?: "granted" | "denied" | "ask" | null;
 }
 
-// Mirrors ExtensionPermissions in haex-vault (see permissions.spec.ts).
+// Mirrors haex-vault's ExtensionPermissions struct
+// (src-tauri/src/extension/core/manifest.rs).
 interface EditablePermissions {
-  database: PermissionEntry[] | null;
-  filesystem: PermissionEntry[] | null;
-  http: PermissionEntry[] | null;
-  shell: PermissionEntry[] | null;
-  filesync: PermissionEntry[] | null;
-  spaces: PermissionEntry[] | null;
-  identities: PermissionEntry[] | null;
+  database?: PermissionEntry[] | null;
+  filesystem?: PermissionEntry[] | null;
+  http?: PermissionEntry[] | null;
+  shell?: PermissionEntry[] | null;
+  syncServers?: PermissionEntry[] | null;
+  cloudStorage?: PermissionEntry[] | null;
+  syncRules?: PermissionEntry[] | null;
+  spaces?: PermissionEntry[] | null;
+  identities?: PermissionEntry[] | null;
+  passwords?: PermissionEntry[] | null;
+  mail?: PermissionEntry[] | null;
+  notifications?: PermissionEntry[] | null;
 }
 
 const EMPTY_PERMISSIONS: EditablePermissions = {
@@ -69,9 +75,14 @@ const EMPTY_PERMISSIONS: EditablePermissions = {
   filesystem: [],
   http: [],
   shell: [],
-  filesync: [],
+  syncServers: [],
+  cloudStorage: [],
+  syncRules: [],
   spaces: [],
   identities: [],
+  passwords: [],
+  mail: [],
+  notifications: [],
 };
 
 function countEntries(perms: EditablePermissions): number {
@@ -80,9 +91,14 @@ function countEntries(perms: EditablePermissions): number {
     perms.filesystem,
     perms.http,
     perms.shell,
-    perms.filesync,
+    perms.syncServers,
+    perms.cloudStorage,
+    perms.syncRules,
     perms.spaces,
     perms.identities,
+    perms.passwords,
+    perms.mail,
+    perms.notifications,
   ];
   return lists.reduce((acc, list) => acc + (list?.length ?? 0), 0);
 }
@@ -125,9 +141,17 @@ test.describe("extensions: replace_permissions clears stale rows (dev reload ana
   test("update to zero-permissions clears prior db.read.haex_* row", async () => {
     // 1. Seed a non-trivial permission set, mimicking what a dev manifest
     //    with `database: [{ target: "haex_*" }]` would produce.
+    // Backend drops entries whose `operation` doesn't parse via the per-
+    // resource Action::from_str — for ResourceType::Db that's "read",
+    // "read_write" (alias "readwrite"), "create", "delete", "alter_drop"
+    // (see src-tauri/src/extension/permissions/types/actions.rs). Without
+    // `operation` set the entry would silently never reach the DB, which
+    // is what bit the earlier iteration of this spec.
     const seeded: EditablePermissions = {
       ...originalPermissions,
-      database: [{ target: "haex_*", status: "granted" }],
+      database: [
+        { target: "haex_*", operation: "read", status: "granted" },
+      ],
     };
     await vault.invokeTauriCommand("update_extension_permissions", {
       extensionId,
@@ -172,7 +196,17 @@ test.describe("extensions: replace_permissions clears stale rows (dev reload ana
 
     const reSeeded: EditablePermissions = {
       ...EMPTY_PERMISSIONS,
-      http: [{ target: "https://e2e-reload.example.com/*", status: "granted" }],
+      // Web entries default operation to All when empty, but the parsed
+      // action still goes through Action::from_str on the manifest path;
+      // keep `operation` explicit so future actions.rs changes (e.g.
+      // tightening the empty-string fallback) don't silently drop it.
+      http: [
+        {
+          target: "https://e2e-reload.example.com/*",
+          operation: "read",
+          status: "granted",
+        },
+      ],
     };
 
     await vault.invokeTauriCommand("update_extension_permissions", {

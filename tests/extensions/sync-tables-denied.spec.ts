@@ -34,15 +34,21 @@ interface PermissionEntry {
   status?: "granted" | "denied" | "ask" | null;
 }
 
-// Mirrors ExtensionPermissions in haex-vault (see permissions.spec.ts).
+// Mirrors haex-vault's ExtensionPermissions struct
+// (src-tauri/src/extension/core/manifest.rs).
 interface EditablePermissions {
-  database: PermissionEntry[] | null;
-  filesystem: PermissionEntry[] | null;
-  http: PermissionEntry[] | null;
-  shell: PermissionEntry[] | null;
-  filesync: PermissionEntry[] | null;
-  spaces: PermissionEntry[] | null;
-  identities: PermissionEntry[] | null;
+  database?: PermissionEntry[] | null;
+  filesystem?: PermissionEntry[] | null;
+  http?: PermissionEntry[] | null;
+  shell?: PermissionEntry[] | null;
+  syncServers?: PermissionEntry[] | null;
+  cloudStorage?: PermissionEntry[] | null;
+  syncRules?: PermissionEntry[] | null;
+  spaces?: PermissionEntry[] | null;
+  identities?: PermissionEntry[] | null;
+  passwords?: PermissionEntry[] | null;
+  mail?: PermissionEntry[] | null;
+  notifications?: PermissionEntry[] | null;
 }
 
 interface FilteredSyncTablesResult {
@@ -89,11 +95,14 @@ test.describe("extensions: sync_tables honors Denied", () => {
     // Set up the precedence collision:
     //   * Granted on `haex_*` (broad prefix wildcard) — would allow everything.
     //   * Denied on `haex_logs` (specific exact target) — must win.
+    // `operation` must parse via DbAction::from_str — empty/missing makes
+    // the manifest parser drop the entry silently. See actions.rs
+    // (src-tauri/src/extension/permissions/types/actions.rs).
     const updated: EditablePermissions = {
       ...originalPermissions,
       database: [
-        { target: "haex_*", status: "granted" },
-        { target: "haex_logs", status: "denied" },
+        { target: "haex_*", operation: "read", status: "granted" },
+        { target: "haex_logs", operation: "read", status: "denied" },
       ],
     };
 
@@ -124,7 +133,9 @@ test.describe("extensions: sync_tables honors Denied", () => {
     // a Denied row is somehow treated as a granted-style match.
     const updated: EditablePermissions = {
       ...originalPermissions,
-      database: [{ target: "haex_logs", status: "denied" }],
+      database: [
+        { target: "haex_logs", operation: "read", status: "denied" },
+      ],
     };
 
     await vault.invokeTauriCommand("update_extension_permissions", {
