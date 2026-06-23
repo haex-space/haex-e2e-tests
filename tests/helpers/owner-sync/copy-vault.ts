@@ -107,6 +107,14 @@ export async function copyVaultToDevice(
     vaultName,
   });
 
+  // 3. Force B's WebView to re-read list_vaults by reloading the picker.
+  // import_vault writes the .db to disk but does not emit a Tauri event
+  // the Vue picker subscribes to — without this nudge the picker keeps
+  // its in-memory list from container boot and the new vault is invisible
+  // to the click-the-tile flow `initializeVaultViaUI` relies on.
+  await to.navigateTo("/");
+  await wait(1000);
+
   return exchangePath;
 }
 
