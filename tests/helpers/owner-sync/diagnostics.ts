@@ -41,8 +41,8 @@ export async function snapshotUi(
         buttons: buttons.slice(0, 25),
         inputs: inputs.slice(0, 12),
         dialogOpen: !!dialog,
-        dialogText: dialog ? (dialog as HTMLElement).innerText.slice(0, 600) : null,
-        toastText: toast ? (toast as HTMLElement).innerText.slice(0, 400) : null,
+        dialogText: dialog ? (dialog.innerText || '').slice(0, 600) : null,
+        toastText: toast ? (toast.innerText || '').slice(0, 400) : null,
       };
     })()`);
     console.log(
