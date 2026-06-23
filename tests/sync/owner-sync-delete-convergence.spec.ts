@@ -4,10 +4,10 @@ import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
 import {
   clearExchangedVault,
   copyVaultToDevice,
-  resetVaultOnDevice,
 } from "../helpers/owner-sync/copy-vault";
+import { restoreOriginalVault } from "../vault-lifecycle/vault-constants";
 
-const VAULT_NAME = "owner-sync-delete";
+const VAULT_NAME = `owner-sync-delete-${Date.now()}`;
 const VAULT_PASSWORD = "owner-sync-delete-pw-1234";
 const PWD_ID = "pw-delete-target";
 const PWD_SECRET = "secret-to-be-deleted";
@@ -15,17 +15,11 @@ const PWD_SECRET = "secret-to-be-deleted";
 /**
  * Delete-convergence + resurrection protection (Path B, PR #494).
  *
- * The risk this guards against is straightforward: a delete authored on one
- * device must converge — and must STAY deleted — even after both devices
- * keep talking. PR #494 added a guard so a late-arriving row insert
- * (reordered relative to its own delete in the peer's HLC stream) cannot
- * resurrect a tombstoned row.
- *
- * This spec sets up the natural minimum: identical row on both devices,
- * delete on one side, and verify (a) the delete reaches the other side and
- * (b) the row stays gone after multiple sync cycles. A resurrected row
- * (regression of #494) would show up as a re-appeared `haex_passwords_item_details` row
- * with the same primary key.
+ * Sets up identical rows on A and B (via a vault copy), deletes on one
+ * side, and verifies (a) the delete reaches the other side and (b) the
+ * row stays gone after multiple sync cycles. A resurrected row
+ * (regression of #494) would show up as a re-appeared row with the same
+ * primary key.
  */
 test.describe("sync: owner-vault delete convergence", () => {
   test.describe.configure({ mode: "serial" });
@@ -39,17 +33,12 @@ test.describe("sync: owner-vault delete convergence", () => {
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
     await vaultB.createSession();
-
-    // See the convergence spec: Playwright reruns describe.serial on retry,
-    // so we wipe both sides up front to keep INSERT/import idempotent
-    // across attempts.
-    await resetVaultOnDevice(vaultA, VAULT_NAME);
-    await resetVaultOnDevice(vaultB, VAULT_NAME);
-    await clearExchangedVault(VAULT_NAME).catch(() => {});
   });
 
   test.afterAll(async () => {
     await clearExchangedVault(VAULT_NAME).catch(() => {});
+    await restoreOriginalVault(vaultA, VAULT_NAME).catch(() => {});
+    await restoreOriginalVault(vaultB, VAULT_NAME).catch(() => {});
   });
 
   test("setup: shared vault on A and B with one password row", async () => {
@@ -84,7 +73,6 @@ test.describe("sync: owner-vault delete convergence", () => {
       params: [PWD_ID],
     });
 
-    // Wait for the delete to land on B.
     await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
     await pollUntil(
       async () => {
@@ -98,8 +86,6 @@ test.describe("sync: owner-vault delete convergence", () => {
       { timeout: 60_000, interval: 1_500, label: "B sees the delete" },
     );
 
-    // Confirm A still has it gone (sanity — a buggy local revival would
-    // surface here too).
     const aRowsAfterDelete = await sqlQuery<{ id: string }>(
       vaultA,
       "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
@@ -107,10 +93,8 @@ test.describe("sync: owner-vault delete convergence", () => {
     );
     expect(aRowsAfterDelete.length).toBe(0);
 
-    // Force several more sync cycles. With the PR #494 guard in place,
-    // exchanging the same "I have no row / I had no row" state across the
-    // peer set MUST NOT resurrect the row. Without the guard, a stale
-    // insert reordered before its own delete in the HLC stream would.
+    // Force several more sync cycles. The PR #494 guard MUST keep the row
+    // gone even when stale state gets exchanged again.
     for (let i = 0; i < 4; i++) {
       await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
       await wait(2_000);

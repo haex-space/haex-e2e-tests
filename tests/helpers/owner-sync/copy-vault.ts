@@ -19,18 +19,13 @@ interface VaultInfoEntry {
 }
 
 /**
- * Path to a vault file on disk via the Tauri-side `list_vaults` command.
- *
- * `list_vaults` is the always-allowed lookup the standard
- * `initializeVaultViaUI` helper already uses. `get_vaults_directory` would
- * be the obvious shorter route, but it's not on the webview ACL — confirmed
- * by a CI failure: `Command get_vaults_directory not allowed by ACL`.
- *
- * Returns null when the vault does not exist on this container (e.g. before
- * creation, or after a successful cleanup). Callers should treat that as
- * "nothing to copy / nothing to delete".
+ * Find a vault file on disk by name via the `list_vaults` Tauri command.
+ * `list_vaults` is on the proven webview ACL surface — `get_vaults_directory`
+ * is not (a CI failure confirmed it). Returns null when the vault doesn't
+ * exist on this container, which is informative rather than fatal: the
+ * caller decides whether absence is OK.
  */
-export async function findVaultPath(
+async function findVaultPath(
   vault: VaultAutomation,
   vaultName: string,
 ): Promise<string | null> {
@@ -39,43 +34,6 @@ export async function findVaultPath(
     {},
   );
   return vaults.find((v) => v.name === vaultName)?.path ?? null;
-}
-
-/**
- * Close any open vault and remove the named vault's `.db` from this
- * container's vaults directory. Idempotent — safe to call when no vault
- * is open and no file exists (covers both first-run and retry scenarios).
- *
- * Playwright reruns the entire `describe.serial` block on retry, so a test
- * that creates a vault in step 1 + copies in step 2 will, on the second
- * attempt, try to create on top of the leftover .db (or to copy onto a
- * target that already has the file). Calling this in `beforeAll` makes the
- * whole describe block reentrant.
- *
- * Uses Node `fs.rm` instead of a Tauri `delete_vault` command for the same
- * reason `findVaultPath` uses `list_vaults` — staying inside the proven
- * ACL surface.
- */
-export async function resetVaultOnDevice(
-  vault: VaultAutomation,
-  vaultName: string,
-): Promise<void> {
-  // close_database is safe to call when no vault is mounted (returns an
-  // error which we swallow); navigateTo("/") matches the same
-  // close→navigate-back pattern as `tests/ui/welcome-dialog.spec.ts:46-48`.
-  await vault.invokeTauriCommand("close_database", {}).catch(() => {});
-  await vault.navigateTo("/").catch(() => {});
-  await wait(500);
-
-  const existing = await findVaultPath(vault, vaultName);
-  if (existing) {
-    await rm(existing, { force: true });
-    // Best-effort: SQLite leaves WAL/SHM siblings the OS will clean on next
-    // open, but removing them keeps a stale partial vault from being
-    // surfaced by `list_vaults` in the next run.
-    await rm(`${existing}-wal`, { force: true }).catch(() => {});
-    await rm(`${existing}-shm`, { force: true }).catch(() => {});
-  }
 }
 
 /**
@@ -90,18 +48,21 @@ export async function resetVaultOnDevice(
  * copied vault picks up a NEW `endpoint_id` on the target device. That is
  * the whole point: same owner DID, different device.
  *
+ * Vault names must be UNIQUE across the rig (per haex-vault's data model)
+ * — callers should derive them from `Date.now()` so a retry's freshly
+ * created vault doesn't collide with leftover state from a prior attempt.
+ *
  * After this returns the target vault is staged but NOT opened — call
  * `initializeVaultViaUI(to, vaultName, password)` next to unlock it
  * through the existing welcome-dialog flow.
  *
  * Preconditions:
- * - `from` has the vault open (so `list_vaults` can resolve its path).
- * - `to` does NOT already have a vault with this name (import_vault fails
- *   `VaultAlreadyExists` if it does). Call `resetVaultOnDevice(to, name)`
- *   in `beforeAll` to guarantee this in the face of Playwright retries.
+ * - `from` has the vault open (so `list_vaults` resolves its path).
+ * - `to` does NOT already have a vault named `vaultName` (import_vault
+ *   fails `VaultAlreadyExists` if it does — unique names per run avoid
+ *   that automatically).
  * - The test process runs INSIDE `from`'s container (so Node `fs` sees
- *   `from`'s vaults directory directly). This matches the standard
- *   playwright entrypoint via `vault-a`.
+ *   `from`'s vaults directory directly).
  *
  * @returns the staged path inside the shared volume (caller-owned cleanup).
  */
@@ -139,9 +100,8 @@ export async function copyVaultToDevice(
   // 2. import_vault accepts arbitrary paths (no Tauri scope check — see
   // `src-tauri/src/database/mod.rs:262`), copies the file into the target's
   // vaults/ directory, and surfaces it through the next `list_vaults` call.
-  // Args use camelCase: Tauri v2's default arg-naming for `#[tauri::command]`
-  // (no `rename_all` attribute on import_vault) — sending snake_case fails
-  // with "missing required key sourcePath".
+  // Args use camelCase (Tauri v2 default for `#[tauri::command]` without
+  // `rename_all`).
   await to.invokeTauriCommand<string>("import_vault", {
     sourcePath: exchangePath,
     vaultName,
@@ -153,7 +113,8 @@ export async function copyVaultToDevice(
 /**
  * Remove a previously-staged vault from the shared `/exchange` volume.
  * The volume itself persists across `docker compose down`, so specs that
- * use the same `vaultName` across runs must call this in their teardown.
+ * use a `vaultName` should call this in their teardown — even unique names
+ * (Date.now()) would accumulate stale files over many CI runs without it.
  * Best-effort — silently swallows ENOENT.
  */
 export async function clearExchangedVault(vaultName: string): Promise<void> {
