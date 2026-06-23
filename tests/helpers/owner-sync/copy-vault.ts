@@ -139,9 +139,12 @@ export async function copyVaultToDevice(
   // 2. import_vault accepts arbitrary paths (no Tauri scope check — see
   // `src-tauri/src/database/mod.rs:262`), copies the file into the target's
   // vaults/ directory, and surfaces it through the next `list_vaults` call.
+  // Args use camelCase: Tauri v2's default arg-naming for `#[tauri::command]`
+  // (no `rename_all` attribute on import_vault) — sending snake_case fails
+  // with "missing required key sourcePath".
   await to.invokeTauriCommand<string>("import_vault", {
-    source_path: exchangePath,
-    vault_name: vaultName,
+    sourcePath: exchangePath,
+    vaultName,
   });
 
   return exchangePath;
