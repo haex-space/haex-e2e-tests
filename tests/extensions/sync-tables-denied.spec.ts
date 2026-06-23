@@ -34,19 +34,15 @@ interface PermissionEntry {
   status?: "granted" | "denied" | "ask" | null;
 }
 
+// Mirrors ExtensionPermissions in haex-vault (see permissions.spec.ts).
 interface EditablePermissions {
   database: PermissionEntry[] | null;
   filesystem: PermissionEntry[] | null;
   http: PermissionEntry[] | null;
   shell: PermissionEntry[] | null;
-  syncServers?: PermissionEntry[] | null;
-  cloudStorage?: PermissionEntry[] | null;
-  syncRules?: PermissionEntry[] | null;
+  filesync: PermissionEntry[] | null;
   spaces: PermissionEntry[] | null;
   identities: PermissionEntry[] | null;
-  passwords?: PermissionEntry[] | null;
-  mail?: PermissionEntry[] | null;
-  notifications?: PermissionEntry[] | null;
 }
 
 interface FilteredSyncTablesResult {
@@ -82,12 +78,10 @@ test.describe("extensions: sync_tables honors Denied", () => {
   test.afterAll(async () => {
     // Always restore so we don't leak state into sibling specs.
     if (originalPermissions) {
-      await vault
-        .invokeTauriCommand("update_extension_permissions", {
-          extensionId,
-          permissions: originalPermissions,
-        })
-        .catch(() => {});
+      await vault.invokeTauriCommand("update_extension_permissions", {
+        extensionId,
+        permissions: originalPermissions,
+      });
     }
   });
 

@@ -53,19 +53,15 @@ interface PermissionEntry {
   status?: "granted" | "denied" | "ask" | null;
 }
 
+// Mirrors ExtensionPermissions in haex-vault (see permissions.spec.ts).
 interface EditablePermissions {
   database: PermissionEntry[] | null;
   filesystem: PermissionEntry[] | null;
   http: PermissionEntry[] | null;
   shell: PermissionEntry[] | null;
-  syncServers?: PermissionEntry[] | null;
-  cloudStorage?: PermissionEntry[] | null;
-  syncRules?: PermissionEntry[] | null;
+  filesync: PermissionEntry[] | null;
   spaces: PermissionEntry[] | null;
   identities: PermissionEntry[] | null;
-  passwords?: PermissionEntry[] | null;
-  mail?: PermissionEntry[] | null;
-  notifications?: PermissionEntry[] | null;
 }
 
 const EMPTY_PERMISSIONS: EditablePermissions = {
@@ -73,14 +69,9 @@ const EMPTY_PERMISSIONS: EditablePermissions = {
   filesystem: [],
   http: [],
   shell: [],
-  syncServers: [],
-  cloudStorage: [],
-  syncRules: [],
+  filesync: [],
   spaces: [],
   identities: [],
-  passwords: [],
-  mail: [],
-  notifications: [],
 };
 
 function countEntries(perms: EditablePermissions): number {
@@ -89,14 +80,9 @@ function countEntries(perms: EditablePermissions): number {
     perms.filesystem,
     perms.http,
     perms.shell,
-    perms.syncServers,
-    perms.cloudStorage,
-    perms.syncRules,
+    perms.filesync,
     perms.spaces,
     perms.identities,
-    perms.passwords,
-    perms.mail,
-    perms.notifications,
   ];
   return lists.reduce((acc, list) => acc + (list?.length ?? 0), 0);
 }
@@ -129,12 +115,10 @@ test.describe("extensions: replace_permissions clears stale rows (dev reload ana
 
   test.afterAll(async () => {
     if (originalPermissions) {
-      await vault
-        .invokeTauriCommand("update_extension_permissions", {
-          extensionId,
-          permissions: originalPermissions,
-        })
-        .catch(() => {});
+      await vault.invokeTauriCommand("update_extension_permissions", {
+        extensionId,
+        permissions: originalPermissions,
+      });
     }
   });
 
@@ -178,9 +162,9 @@ test.describe("extensions: replace_permissions clears stale rows (dev reload ana
   });
 
   test("subsequent re-seed installs cleanly (no leftover rows from prior state)", async () => {
-    // Ensures the previous test's clearing actually fully completed — a
-    // partial clear would surface here as a duplicate row when re-seeding
-    // with the same target.
+    // Re-seeds a different category (http) after the database clear and
+    // asserts the database category stays empty — guards against the
+    // cleared haex_* row resurrecting on the next update.
     await vault.invokeTauriCommand("update_extension_permissions", {
       extensionId,
       permissions: EMPTY_PERMISSIONS,
