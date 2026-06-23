@@ -5,6 +5,7 @@ import {
   clearExchangedVault,
   copyVaultToDevice,
 } from "../helpers/owner-sync/copy-vault";
+import { diagnosed } from "../helpers/owner-sync/diagnostics";
 import { restoreOriginalVault } from "../vault-lifecycle/vault-constants";
 
 const VAULT_NAME = `owner-sync-delete-${Date.now()}`;
@@ -50,8 +51,12 @@ test.describe("sync: owner-vault delete convergence", () => {
     });
 
     await copyVaultToDevice(vaultA, vaultB, VAULT_NAME);
-    await initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD);
-    await initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD);
+    await diagnosed(vaultA, "reopen-A-after-copy", () =>
+      initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD),
+    );
+    await diagnosed(vaultB, "open-B-imported", () =>
+      initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD),
+    );
 
     // Confirm both sides see the row before we touch anything.
     await pollUntil(

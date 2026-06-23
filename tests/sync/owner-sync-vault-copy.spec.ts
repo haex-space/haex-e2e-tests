@@ -5,6 +5,7 @@ import {
   clearExchangedVault,
   copyVaultToDevice,
 } from "../helpers/owner-sync/copy-vault";
+import { diagnosed } from "../helpers/owner-sync/diagnostics";
 import { restoreOriginalVault } from "../vault-lifecycle/vault-constants";
 
 // Vault names MUST be unique across the rig (one name → one .db file per
@@ -81,8 +82,12 @@ test.describe("sync: owner-vault via DB copy", () => {
     // copyVaultToDevice closes A's vault internally; we re-open A below so
     // subsequent assertions can keep talking to it.
     await copyVaultToDevice(vaultA, vaultB, VAULT_NAME);
-    await initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD);
-    await initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD);
+    await diagnosed(vaultA, "reopen-A-after-copy", () =>
+      initializeVaultViaUI(vaultA, VAULT_NAME, VAULT_PASSWORD),
+    );
+    await diagnosed(vaultB, "open-B-imported", () =>
+      initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD),
+    );
 
     // Post-import baseline: A's row from the copied DB must be present on
     // B (the floor we rely on for B → A connectivity). B's own row may or
