@@ -5,13 +5,6 @@ import type { VaultAutomation } from "../../fixtures";
 import { wait } from "../ui/utils";
 
 /**
- * Per-container vaults directory. Resolved by Tauri's `BaseDirectory::AppLocalData`
- * and pinned by the docker image to `$HOME=/root`. Mirrored in haex-vault's
- * `database::get_vaults_directory` (`src-tauri/src/database/mod.rs`).
- */
-const VAULT_DIR_IN_CONTAINER = "/root/.local/share/space.haex.vault/vaults";
-
-/**
  * Shared docker volume `vault-exchange` mounted on both vault-a and vault-b
  * at `/exchange`. Defined in `docker/docker-compose.yml`. This is the bridge
  * between the two container filesystems; it's the only way a test inside
@@ -49,7 +42,17 @@ export async function copyVaultToDevice(
   to: VaultAutomation,
   vaultName: string,
 ): Promise<string> {
-  // 1. Make the source `.db` canonical. close_database flushes the WAL into
+  // 1. Resolve the source vaults directory at runtime via Tauri instead of
+  // hardcoding it — the resolved path differs per container image (e.g.
+  // /root/.local/share vs /home/abc/.local/share depending on which user the
+  // webtop runs the binary as). Both `get_vaults_directory` and
+  // `BaseDirectory::AppLocalData` are pinned by haex-vault itself.
+  const vaultsDir = await from.invokeTauriCommand<string>(
+    "get_vaults_directory",
+    {},
+  );
+
+  // 2. Make the source `.db` canonical. close_database flushes the WAL into
   // the main file and releases the file handle, so the next copyFile sees a
   // self-consistent snapshot. Without this the WAL/SHM siblings would carry
   // unmaterialized writes that `import_vault` (which only takes a `.db`
@@ -64,7 +67,7 @@ export async function copyVaultToDevice(
   await from.navigateTo("/");
   await wait(1000);
 
-  const sourcePath = path.join(VAULT_DIR_IN_CONTAINER, `${vaultName}.db`);
+  const sourcePath = path.join(vaultsDir, `${vaultName}.db`);
   const exchangePath = path.join(EXCHANGE_DIR, `${vaultName}.db`);
 
   await mkdir(EXCHANGE_DIR, { recursive: true });
