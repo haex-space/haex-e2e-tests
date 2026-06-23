@@ -4,6 +4,7 @@ import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
 import {
   clearExchangedVault,
   copyVaultToDevice,
+  resetVaultOnDevice,
 } from "../helpers/owner-sync/copy-vault";
 
 const VAULT_NAME = "owner-sync-delete";
@@ -38,6 +39,13 @@ test.describe("sync: owner-vault delete convergence", () => {
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
     await vaultB.createSession();
+
+    // See the convergence spec: Playwright reruns describe.serial on retry,
+    // so we wipe both sides up front to keep INSERT/import idempotent
+    // across attempts.
+    await resetVaultOnDevice(vaultA, VAULT_NAME);
+    await resetVaultOnDevice(vaultB, VAULT_NAME);
+    await clearExchangedVault(VAULT_NAME).catch(() => {});
   });
 
   test.afterAll(async () => {

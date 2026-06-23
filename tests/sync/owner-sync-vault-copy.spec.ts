@@ -4,6 +4,7 @@ import { pollUntil, sqlQuery } from "../helpers/ui/utils";
 import {
   clearExchangedVault,
   copyVaultToDevice,
+  resetVaultOnDevice,
 } from "../helpers/owner-sync/copy-vault";
 
 const VAULT_NAME = "owner-sync-copy";
@@ -52,6 +53,15 @@ test.describe("sync: owner-vault via DB copy", () => {
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
     await vaultB.createSession();
+
+    // Playwright reruns the whole describe.serial on retry, so a leftover
+    // .db from a prior attempt would (a) make Step 1's INSERT hit a UNIQUE
+    // constraint and (b) make Step 2's import_vault fail with
+    // VaultAlreadyExists. Wipe both sides up-front so every attempt sees
+    // truly empty vault dirs.
+    await resetVaultOnDevice(vaultA, VAULT_NAME);
+    await resetVaultOnDevice(vaultB, VAULT_NAME);
+    await clearExchangedVault(VAULT_NAME).catch(() => {});
   });
 
   test.afterAll(async () => {

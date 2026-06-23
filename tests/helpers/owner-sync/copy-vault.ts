@@ -12,6 +12,72 @@ import { wait } from "../ui/utils";
  */
 const EXCHANGE_DIR = "/exchange";
 
+interface VaultInfoEntry {
+  name: string;
+  lastAccess: number;
+  path: string;
+}
+
+/**
+ * Path to a vault file on disk via the Tauri-side `list_vaults` command.
+ *
+ * `list_vaults` is the always-allowed lookup the standard
+ * `initializeVaultViaUI` helper already uses. `get_vaults_directory` would
+ * be the obvious shorter route, but it's not on the webview ACL — confirmed
+ * by a CI failure: `Command get_vaults_directory not allowed by ACL`.
+ *
+ * Returns null when the vault does not exist on this container (e.g. before
+ * creation, or after a successful cleanup). Callers should treat that as
+ * "nothing to copy / nothing to delete".
+ */
+export async function findVaultPath(
+  vault: VaultAutomation,
+  vaultName: string,
+): Promise<string | null> {
+  const vaults = await vault.invokeTauriCommand<VaultInfoEntry[]>(
+    "list_vaults",
+    {},
+  );
+  return vaults.find((v) => v.name === vaultName)?.path ?? null;
+}
+
+/**
+ * Close any open vault and remove the named vault's `.db` from this
+ * container's vaults directory. Idempotent — safe to call when no vault
+ * is open and no file exists (covers both first-run and retry scenarios).
+ *
+ * Playwright reruns the entire `describe.serial` block on retry, so a test
+ * that creates a vault in step 1 + copies in step 2 will, on the second
+ * attempt, try to create on top of the leftover .db (or to copy onto a
+ * target that already has the file). Calling this in `beforeAll` makes the
+ * whole describe block reentrant.
+ *
+ * Uses Node `fs.rm` instead of a Tauri `delete_vault` command for the same
+ * reason `findVaultPath` uses `list_vaults` — staying inside the proven
+ * ACL surface.
+ */
+export async function resetVaultOnDevice(
+  vault: VaultAutomation,
+  vaultName: string,
+): Promise<void> {
+  // close_database is safe to call when no vault is mounted (returns an
+  // error which we swallow); navigateTo("/") matches the same
+  // close→navigate-back pattern as `tests/ui/welcome-dialog.spec.ts:46-48`.
+  await vault.invokeTauriCommand("close_database", {}).catch(() => {});
+  await vault.navigateTo("/").catch(() => {});
+  await wait(500);
+
+  const existing = await findVaultPath(vault, vaultName);
+  if (existing) {
+    await rm(existing, { force: true });
+    // Best-effort: SQLite leaves WAL/SHM siblings the OS will clean on next
+    // open, but removing them keeps a stale partial vault from being
+    // surfaced by `list_vaults` in the next run.
+    await rm(`${existing}-wal`, { force: true }).catch(() => {});
+    await rm(`${existing}-shm`, { force: true }).catch(() => {});
+  }
+}
+
 /**
  * Replicate a vault from one container's filesystem to another via the
  * shared `/exchange` volume. Mirrors the real-world "I copied my vault to a
@@ -29,11 +95,13 @@ const EXCHANGE_DIR = "/exchange";
  * through the existing welcome-dialog flow.
  *
  * Preconditions:
- * - `from` has the vault open (so we can call close_database on it).
+ * - `from` has the vault open (so `list_vaults` can resolve its path).
+ * - `to` does NOT already have a vault with this name (import_vault fails
+ *   `VaultAlreadyExists` if it does). Call `resetVaultOnDevice(to, name)`
+ *   in `beforeAll` to guarantee this in the face of Playwright retries.
  * - The test process runs INSIDE `from`'s container (so Node `fs` sees
  *   `from`'s vaults directory directly). This matches the standard
- *   playwright entrypoint via `vault-a`. Calling from outside will fail
- *   the local `copyFile` with ENOENT.
+ *   playwright entrypoint via `vault-a`.
  *
  * @returns the staged path inside the shared volume (caller-owned cleanup).
  */
@@ -42,17 +110,14 @@ export async function copyVaultToDevice(
   to: VaultAutomation,
   vaultName: string,
 ): Promise<string> {
-  // 1. Resolve the source vaults directory at runtime via Tauri instead of
-  // hardcoding it — the resolved path differs per container image (e.g.
-  // /root/.local/share vs /home/abc/.local/share depending on which user the
-  // webtop runs the binary as). Both `get_vaults_directory` and
-  // `BaseDirectory::AppLocalData` are pinned by haex-vault itself.
-  const vaultsDir = await from.invokeTauriCommand<string>(
-    "get_vaults_directory",
-    {},
-  );
+  const sourcePath = await findVaultPath(from, vaultName);
+  if (!sourcePath) {
+    throw new Error(
+      `copyVaultToDevice: vault "${vaultName}" not found on ${from.getInstance()}`,
+    );
+  }
 
-  // 2. Make the source `.db` canonical. close_database flushes the WAL into
+  // 1. Make the source `.db` canonical. close_database flushes the WAL into
   // the main file and releases the file handle, so the next copyFile sees a
   // self-consistent snapshot. Without this the WAL/SHM siblings would carry
   // unmaterialized writes that `import_vault` (which only takes a `.db`
@@ -67,9 +132,7 @@ export async function copyVaultToDevice(
   await from.navigateTo("/");
   await wait(1000);
 
-  const sourcePath = path.join(vaultsDir, `${vaultName}.db`);
   const exchangePath = path.join(EXCHANGE_DIR, `${vaultName}.db`);
-
   await mkdir(EXCHANGE_DIR, { recursive: true });
   await copyFile(sourcePath, exchangePath);
 
