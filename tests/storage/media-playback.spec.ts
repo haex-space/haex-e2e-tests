@@ -1,6 +1,6 @@
 import * as fsAsync from "node:fs/promises";
 import { test, expect, VaultAutomation } from "../fixtures";
-import { sqlQuery, wait } from "../helpers/ui/utils";
+import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
 import { createLocalSpaceViaUI } from "../spaces/invitations/quic-helpers/ui-spaces";
 import {
   openSettingsCategory,
@@ -194,6 +194,11 @@ async function closeNonFilesSystemWindows(vault: VaultAutomation): Promise<strin
     const wins = (wm.currentWorkspaceWindows || []).slice();
     const ids = [];
     for (const w of wins) {
+      // Only target system windows. Vault A is shared across the workflows
+      // shard; user/app windows on the same workspace must NOT be torn down
+      // — that would create cross-test state loss far from this suite.
+      const wtype = w.type || w.tabs?.[0]?.type || null;
+      if (wtype !== 'system') continue;
       const sid = w.sourceId || w.tabs?.[0]?.sourceId || 'unknown';
       if (sid === 'files') continue;
       ids.push(sid);
@@ -240,7 +245,10 @@ async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
     const wm = pinia?._s?.get('windowManager');
     if (!wm?.openWindowAsync) return false;
     try {
-      wm.openWindowAsync({ sourceId: 'files', type: 'system' });
+      // Await the async open so a deferred rejection (store/route mount race)
+      // surfaces as a falsy return and the outer retry loop kicks in. Without
+      // the await we'd report success on a pending promise and skip retries.
+      await wm.openWindowAsync({ sourceId: 'files', type: 'system' });
       return true;
     } catch (_) {
       return false;
@@ -464,6 +472,29 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
       // Create the local space — also pure UI.
       const spaceId = await createLocalSpaceViaUI(vault, SPACE_NAME);
 
+      // startP2PEndpoint's leader-ready wait only fires when a local space
+      // ALREADY exists. We just created SPACE_NAME *after* P2P start, so the
+      // leader still needs a moment to register it. Adding the share before
+      // `activeSpaces` includes `spaceId` races the leader and addShareAsync
+      // can silently no-op. Mirrors the same pollUntil used in
+      // ui-vault.ts:306-315.
+      await pollUntil(
+        async () => {
+          const ds = await vault.invokeTauriCommand<{
+            isLeader: boolean;
+            activeSpaces: string[];
+          }>("local_delivery_status", {});
+          return ds.isLeader && (ds.activeSpaces ?? []).includes(spaceId)
+            ? ds
+            : null;
+        },
+        {
+          timeout: 15_000,
+          interval: 500,
+          label: `leader picked up local space ${spaceId}`,
+        },
+      );
+
       // Prime the e2e picker override: filesystem_select_folder reads
       // PICK_FOLDER_SENTINEL_PATH at dialog-open time when present (debug
       // build only — see haex-vault src-tauri/src/filesystem/commands.rs).
@@ -475,15 +506,25 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
         // sentinel), then `store.addShareAsync(spaceId, name, path)` — the same
         // path a real user takes, including peerStore + leader updates.
         await openSettingsCategory(vault, "spaces");
-        await mousedownClickTestId(
-          vault,
-          `space-add-share-trigger-${spaceId}`,
-        );
+        // Assert each click landed. `mousedownClickTestId` returns false when
+        // the element isn't there; ignoring it would let arrange "succeed"
+        // without a share, then the spec would fail later at "Files lists the
+        // share" — far from the broken setup step.
+        expect(
+          await mousedownClickTestId(
+            vault,
+            `space-add-share-trigger-${spaceId}`,
+          ),
+          `space-add-share-trigger-${spaceId} not found`,
+        ).toBe(true);
         await wait(500);
-        await mousedownClickTestId(
-          vault,
-          `space-add-share-folder-${spaceId}`,
-        );
+        expect(
+          await mousedownClickTestId(
+            vault,
+            `space-add-share-folder-${spaceId}`,
+          ),
+          `space-add-share-folder-${spaceId} not found`,
+        ).toBe(true);
         // Toast + reactive store update settle.
         await wait(2000);
       } finally {
