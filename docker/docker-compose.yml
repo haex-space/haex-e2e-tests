@@ -416,6 +416,10 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=A
+      # Enables the sentinel-file picker override in haex-vault's
+      # filesystem_select_folder/_file (see haex-vault#540). Required for the
+      # pure-UI add-share test path; production vaults never set this.
+      - HAEX_E2E_TEST_MODE=1
       # Local iroh relay for P2P discovery (mDNS doesn't work in Docker bridge)
       - HAEX_RELAY_URL=http://iroh-relay:3340
     volumes:
@@ -470,6 +474,8 @@ services:
       - DATABASE_URL=postgresql://postgres:postgres@sync-db:5432/postgres
       - CI=${CI:-false}
       - VAULT_INSTANCE=B
+      # See vault-a comment.
+      - HAEX_E2E_TEST_MODE=1
       # Local iroh relay for P2P discovery (mDNS doesn't work in Docker bridge)
       - HAEX_RELAY_URL=http://iroh-relay:3340
     volumes:
