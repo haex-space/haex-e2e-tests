@@ -5,7 +5,11 @@ import {
   clearExchangedVault,
   copyVaultToDevice,
 } from "../helpers/owner-sync/copy-vault";
-import { diagnosed } from "../helpers/owner-sync/diagnostics";
+import {
+  diagnosed,
+  diagnosedSync,
+  dumpSyncState,
+} from "../helpers/owner-sync/diagnostics";
 import { restoreOriginalVault } from "../vault-lifecycle/vault-constants";
 
 const VAULT_NAME = `owner-sync-delete-${Date.now()}`;
@@ -69,16 +73,20 @@ test.describe("sync: owner-vault delete convergence", () => {
     );
 
     // Confirm both sides see the row before we touch anything.
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ id: string }>(
-          vaultB,
-          "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
-          [PWD_ID],
-        );
-        return rows.length === 1 ? rows : null;
-      },
-      { timeout: 60_000, interval: 1_500, label: "B has pre-delete row" },
+    await diagnosedSync(
+      { a: vaultA, b: vaultB },
+      "post-copy-pre-delete",
+      () => pollUntil(
+        async () => {
+          const rows = await sqlQuery<{ id: string }>(
+            vaultB,
+            "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
+            [PWD_ID],
+          );
+          return rows.length === 1 ? rows : null;
+        },
+        { timeout: 60_000, interval: 1_500, label: "B has pre-delete row" },
+      ),
     );
   });
 
@@ -89,16 +97,20 @@ test.describe("sync: owner-vault delete convergence", () => {
     });
 
     await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ id: string }>(
-          vaultB,
-          "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
-          [PWD_ID],
-        );
-        return rows.length === 0 ? true : null;
-      },
-      { timeout: 60_000, interval: 1_500, label: "B sees the delete" },
+    await diagnosedSync(
+      { a: vaultA, b: vaultB },
+      "delete-A->B",
+      () => pollUntil(
+        async () => {
+          const rows = await sqlQuery<{ id: string }>(
+            vaultB,
+            "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
+            [PWD_ID],
+          );
+          return rows.length === 0 ? true : null;
+        },
+        { timeout: 60_000, interval: 1_500, label: "B sees the delete" },
+      ),
     );
 
     const aRowsAfterDelete = await sqlQuery<{ id: string }>(
@@ -125,6 +137,10 @@ test.describe("sync: owner-vault delete convergence", () => {
       "SELECT id FROM haex_passwords_item_details WHERE id = ?1",
       [PWD_ID],
     );
+    // Show final sync state regardless of outcome — resurrection-on-B is
+    // the bug shape PR #494 fixes and we want the post-cycle view recorded.
+    await dumpSyncState(vaultA, "post-multi-cycle");
+    await dumpSyncState(vaultB, "post-multi-cycle");
     expect(aFinal.length).toBe(0);
     expect(bFinal.length).toBe(0);
   });

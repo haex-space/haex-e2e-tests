@@ -5,7 +5,11 @@ import {
   clearExchangedVault,
   copyVaultToDevice,
 } from "../helpers/owner-sync/copy-vault";
-import { diagnosed } from "../helpers/owner-sync/diagnostics";
+import {
+  diagnosed,
+  diagnosedSync,
+  dumpSyncState,
+} from "../helpers/owner-sync/diagnostics";
 import { restoreOriginalVault } from "../vault-lifecycle/vault-constants";
 
 // Vault names MUST be unique across the rig (one name → one .db file per
@@ -108,6 +112,11 @@ test.describe("sync: owner-vault via DB copy", () => {
       "SELECT endpoint_id FROM haex_devices",
     );
     expect(bDevices.length).toBeGreaterThanOrEqual(1);
+
+    // Capture the post-import baseline on both sides so a downstream
+    // convergence timeout has the "what does each side know?" view ready.
+    await dumpSyncState(vaultA, "post-import");
+    await dumpSyncState(vaultB, "post-import");
   });
 
   test("A → B: B pulls A's existing row over the B-initiated connection", async () => {
@@ -115,22 +124,26 @@ test.describe("sync: owner-vault via DB copy", () => {
     // it so we don't sit through the full poll interval.
     await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
 
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ id: string; password: string }>(
-          vaultB,
-          "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
-          [PWD_FROM_A_ID],
-        );
-        return rows.length === 1 && rows[0]?.password === PWD_FROM_A_SECRET
-          ? rows
-          : null;
-      },
-      {
-        timeout: 60_000,
-        interval: 1_500,
-        label: `B pulls password ${PWD_FROM_A_ID} from A`,
-      },
+    await diagnosedSync(
+      { a: vaultA, b: vaultB },
+      "A->B-pull",
+      () => pollUntil(
+        async () => {
+          const rows = await sqlQuery<{ id: string; password: string }>(
+            vaultB,
+            "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
+            [PWD_FROM_A_ID],
+          );
+          return rows.length === 1 && rows[0]?.password === PWD_FROM_A_SECRET
+            ? rows
+            : null;
+        },
+        {
+          timeout: 60_000,
+          interval: 1_500,
+          label: `B pulls password ${PWD_FROM_A_ID} from A`,
+        },
+      ),
     );
   });
 
@@ -142,22 +155,26 @@ test.describe("sync: owner-vault via DB copy", () => {
 
     await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
 
-    await pollUntil(
-      async () => {
-        const rows = await sqlQuery<{ id: string; password: string }>(
-          vaultA,
-          "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
-          [PWD_FROM_B_ID],
-        );
-        return rows.length === 1 && rows[0]?.password === PWD_FROM_B_SECRET
-          ? rows
-          : null;
-      },
-      {
-        timeout: 60_000,
-        interval: 1_500,
-        label: `A receives password ${PWD_FROM_B_ID} pushed from B`,
-      },
+    await diagnosedSync(
+      { a: vaultA, b: vaultB },
+      "B->A-push",
+      () => pollUntil(
+        async () => {
+          const rows = await sqlQuery<{ id: string; password: string }>(
+            vaultA,
+            "SELECT id, password FROM haex_passwords_item_details WHERE id = ?1",
+            [PWD_FROM_B_ID],
+          );
+          return rows.length === 1 && rows[0]?.password === PWD_FROM_B_SECRET
+            ? rows
+            : null;
+        },
+        {
+          timeout: 60_000,
+          interval: 1_500,
+          label: `A receives password ${PWD_FROM_B_ID} pushed from B`,
+        },
+      ),
     );
 
     // Both rows should now be visible on both sides (full convergence).
