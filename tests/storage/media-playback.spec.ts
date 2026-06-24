@@ -495,6 +495,26 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
         },
       );
 
+      // Sentinel-mechanism probe. The whole pure-UI arrange depends on the
+      // vault honouring `/tmp/haex-e2e-pick-folder.txt`. If this returns null
+      // (or hangs), either the vault binary doesn't have haex-vault PR #539,
+      // or /tmp isn't shared between the test runner and the vault process.
+      // Fail loud here instead of silently mis-seeding the share.
+      const PROBE_PATH = "/probe/sentinel/path";
+      await fsAsync.writeFile(PICK_FOLDER_SENTINEL_PATH, PROBE_PATH);
+      const probe = await vault.invokeTauriCommand<string | null>(
+        "filesystem_select_folder",
+        {},
+      );
+      console.log(
+        `[media-playback][sentinel-probe] expected=${PROBE_PATH} got=${JSON.stringify(probe)}`,
+      );
+      if (probe !== PROBE_PATH) {
+        throw new Error(
+          `sentinel override not honoured (got ${JSON.stringify(probe)}) — vault binary may predate haex-vault#539 or /tmp is not shared`,
+        );
+      }
+
       // Prime the e2e picker override: filesystem_select_folder reads
       // PICK_FOLDER_SENTINEL_PATH at dialog-open time when present (debug
       // build only — see haex-vault src-tauri/src/filesystem/commands.rs).
@@ -525,8 +545,26 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
           ),
           `space-add-share-folder-${spaceId} not found`,
         ).toBe(true);
-        // Toast + reactive store update settle.
-        await wait(2000);
+        // Poll the DB for the share row instead of waiting blindly. If it
+        // doesn't appear, addShareAsync silently no-op'd (picker returned
+        // null, exception swallowed by the composable's try/catch toast,
+        // etc.) — fail in arrange with detail rather than later in the
+        // assertion phase.
+        await pollUntil(
+          async () => {
+            const rows = await sqlQuery<{ id: string }>(
+              vault,
+              "SELECT id FROM haex_peer_shares WHERE space_id = ?1 AND name = ?2",
+              [spaceId, SHARE_NAME],
+            );
+            return rows.length === 1 ? rows[0] : null;
+          },
+          {
+            timeout: 10_000,
+            interval: 500,
+            label: `share row ${SHARE_NAME} in haex_peer_shares`,
+          },
+        );
       } finally {
         await fsAsync.unlink(PICK_FOLDER_SENTINEL_PATH).catch(() => {
           // best effort; a leftover sentinel only matters for the very next
