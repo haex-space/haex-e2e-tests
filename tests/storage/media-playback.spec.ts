@@ -1,10 +1,12 @@
-import * as crypto from "node:crypto";
+import * as fsAsync from "node:fs/promises";
 import { test, expect, VaultAutomation } from "../fixtures";
 import { sqlQuery, wait } from "../helpers/ui/utils";
+import { createLocalSpaceViaUI } from "../spaces/invitations/quic-helpers/ui-spaces";
 import {
-  createLocalSpaceViaUI,
-  ensureDeviceRegistered,
-} from "../spaces/invitations/quic-helpers/ui-spaces";
+  openSettingsCategory,
+  startP2PEndpoint,
+} from "../helpers/ui/ui-vault";
+import { mousedownClickTestId } from "../helpers/ui/ui-primitives";
 import {
   generateMediaFixtures,
   isFfmpegAvailable,
@@ -39,10 +41,9 @@ const SHARE_DIR = `/tmp/haex-e2e-media-${SUFFIX}`;
 const VIDEO_FILE = "clip.mp4";
 const AUDIO_FILE = "tone.mp3";
 
-interface PeerStorageStartInfo {
-  nodeId: string;
-  relayUrl: string | null;
-}
+// Default sentinel path the vault's filesystem_select_folder reads in debug
+// builds. See haex-vault PR #539 (src-tauri/src/filesystem/commands.rs).
+const PICK_FOLDER_SENTINEL_PATH = "/tmp/haex-e2e-pick-folder.txt";
 
 interface MediaElementState {
   found: boolean;
@@ -443,61 +444,55 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
     try {
       const media = generateMediaFixtures();
 
-      // Peer storage must be running to have a stable nodeId for the share row.
-      let nodeId: string;
-      try {
-        const info = await vault.invokeTauriCommand<PeerStorageStartInfo>(
-          "peer_storage_start",
-          {},
-        );
-        nodeId = info.nodeId;
-      } catch {
-        const status = await vault.invokeTauriCommand<PeerStorageStartInfo>(
-          "peer_storage_status",
-          {},
-        );
-        nodeId = status.nodeId;
-      }
-
-      const identities = await sqlQuery<{ did: string }>(
-        vault,
-        "SELECT did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
+      // Drop the media onto the filesystem the vault sees (test + vault run
+      // in the same container, so Node fs is the same /tmp). No Tauri
+      // command — Node fs keeps the arrange off the SUT command surface.
+      await fsAsync.mkdir(SHARE_DIR, { recursive: true });
+      await fsAsync.writeFile(
+        `${SHARE_DIR}/${VIDEO_FILE}`,
+        Buffer.from(media.videoBase64, "base64"),
       );
-      const did = identities[0]?.did;
-      if (!did) throw new Error("no local identity with a private key");
+      await fsAsync.writeFile(
+        `${SHARE_DIR}/${AUDIO_FILE}`,
+        Buffer.from(media.audioBase64, "base64"),
+      );
 
-      // Drop the media onto the vault filesystem inside the share folder.
-      await vault.invokeTauriCommand("filesystem_mkdir", { path: SHARE_DIR });
-      await vault.invokeTauriCommand("filesystem_write_file", {
-        path: `${SHARE_DIR}/${VIDEO_FILE}`,
-        data: media.videoBase64,
-      });
-      await vault.invokeTauriCommand("filesystem_write_file", {
-        path: `${SHARE_DIR}/${AUDIO_FILE}`,
-        data: media.audioBase64,
-      });
+      // Start P2P through the UI (Settings → Sync → Config → Start). Required
+      // because addShareAsync needs the leader to register the share.
+      await startP2PEndpoint(vault);
 
-      // Create the space through the UI, then seed the share row the same way
-      // the QUIC suite does (the OS picker is unreachable from WebDriver).
+      // Create the local space — also pure UI.
       const spaceId = await createLocalSpaceViaUI(vault, SPACE_NAME);
-      await ensureDeviceRegistered(vault, spaceId, nodeId, did);
 
-      const ownDevice = await sqlQuery<{ id: string }>(
-        vault,
-        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-        [nodeId],
-      );
-      if (ownDevice.length !== 1) throw new Error("own device row not found");
-
-      const shareId = crypto.randomUUID();
-      await vault.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT INTO haex_peer_shares
-                (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-        params: [shareId, spaceId, ownDevice[0].id, nodeId, SHARE_NAME, SHARE_DIR, did],
-      });
-      // Make the leader pick up the new share (mirrors addShareAsync).
-      await vault.invokeTauriCommand("peer_storage_reload_shares");
+      // Prime the e2e picker override: filesystem_select_folder reads
+      // PICK_FOLDER_SENTINEL_PATH at dialog-open time when present (debug
+      // build only — see haex-vault src-tauri/src/filesystem/commands.rs).
+      await fsAsync.writeFile(PICK_FOLDER_SENTINEL_PATH, SHARE_DIR);
+      try {
+        // Open Settings → Spaces, expand the just-created space card, click
+        // +Folder. The dropdown menu item triggers `useSpaceShares.addShareAsync`,
+        // which calls `filesystem_select_folder` (returns SHARE_DIR from the
+        // sentinel), then `store.addShareAsync(spaceId, name, path)` — the same
+        // path a real user takes, including peerStore + leader updates.
+        await openSettingsCategory(vault, "spaces");
+        await mousedownClickTestId(
+          vault,
+          `space-add-share-trigger-${spaceId}`,
+        );
+        await wait(500);
+        await mousedownClickTestId(
+          vault,
+          `space-add-share-folder-${spaceId}`,
+        );
+        // Toast + reactive store update settle.
+        await wait(2000);
+      } finally {
+        await fsAsync.unlink(PICK_FOLDER_SENTINEL_PATH).catch(() => {
+          // best effort; a leftover sentinel only matters for the very next
+          // Browse click in this debug build, and the next test that uses it
+          // would overwrite anyway.
+        });
+      }
 
       arrangeOk = true;
     } catch (e) {
@@ -507,22 +502,13 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   });
 
   test.afterAll(async () => {
-    // Remove the media files first — filesystem_remove won't delete a
-    // non-empty directory.
-    for (const f of [VIDEO_FILE, AUDIO_FILE]) {
-      try {
-        await vault.invokeTauriCommand("filesystem_remove", {
-          path: `${SHARE_DIR}/${f}`,
-        });
-      } catch {
-        // best effort
-      }
-    }
+    // Clean up the seeded media folder via Node fs.
     try {
-      await vault.invokeTauriCommand("filesystem_remove", { path: SHARE_DIR });
+      await fsAsync.rm(SHARE_DIR, { recursive: true, force: true });
     } catch {
       // best effort
     }
+    await fsAsync.unlink(PICK_FOLDER_SENTINEL_PATH).catch(() => {});
     // No close_database: vault A is opened by global-setup and shared across
     // the storage suites — closing it would break the ones that run after.
   });
