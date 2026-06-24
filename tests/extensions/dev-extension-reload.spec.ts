@@ -196,14 +196,14 @@ test.describe("extensions: replace_permissions clears stale rows (dev reload ana
 
     const reSeeded: EditablePermissions = {
       ...EMPTY_PERMISSIONS,
-      // Web entries default operation to All when empty, but the parsed
-      // action still goes through Action::from_str on the manifest path;
-      // keep `operation` explicit so future actions.rs changes (e.g.
-      // tightening the empty-string fallback) don't silently drop it.
+      // Omit `operation` for web entries: WebAction::from_str only
+      // accepts HTTP verbs (GET/POST/.../*); any other string drops the
+      // row. Leaving `operation` empty hits the explicit
+      // `if operation_str.is_empty() { Action::Web(WebAction::All) }`
+      // branch in manifest.rs::create_internal.
       http: [
         {
           target: "https://e2e-reload.example.com/*",
-          operation: "read",
           status: "granted",
         },
       ],
