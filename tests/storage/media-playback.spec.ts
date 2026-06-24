@@ -1,10 +1,12 @@
-import * as crypto from "node:crypto";
+import * as fsAsync from "node:fs/promises";
 import { test, expect, VaultAutomation } from "../fixtures";
-import { sqlQuery, wait } from "../helpers/ui/utils";
+import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
+import { createLocalSpaceViaUI } from "../spaces/invitations/quic-helpers/ui-spaces";
 import {
-  createLocalSpaceViaUI,
-  ensureDeviceRegistered,
-} from "../spaces/invitations/quic-helpers/ui-spaces";
+  openSettingsCategory,
+  startP2PEndpoint,
+} from "../helpers/ui/ui-vault";
+import { mousedownClickTestId } from "../helpers/ui/ui-primitives";
 import {
   generateMediaFixtures,
   isFfmpegAvailable,
@@ -39,10 +41,9 @@ const SHARE_DIR = `/tmp/haex-e2e-media-${SUFFIX}`;
 const VIDEO_FILE = "clip.mp4";
 const AUDIO_FILE = "tone.mp3";
 
-interface PeerStorageStartInfo {
-  nodeId: string;
-  relayUrl: string | null;
-}
+// Default sentinel path the vault's filesystem_select_folder reads in debug
+// builds. See haex-vault PR #539 (src-tauri/src/filesystem/commands.rs).
+const PICK_FOLDER_SENTINEL_PATH = "/tmp/haex-e2e-pick-folder.txt";
 
 interface MediaElementState {
   found: boolean;
@@ -176,47 +177,148 @@ async function openMediaPreview(
 const sel = (testId: string) => `[data-testid="${testId}"]`;
 
 /**
- * Open the Files window from the launcher — pure UI. Arrange leaves the
- * Settings window (and possibly a just-closed dialog) in focus, so dismiss
- * any overlay first, then open the launcher and click the Files item. Returns
- * whether the Files item became clickable; logs a DOM dump on failure.
+ * Close every NON-files system window via the windowManager Pinia store.
+ * Vault A is the shared session: by the time this suite runs ~300 tests have
+ * left various system windows (settings, marketplace, …) open. Their DOM /
+ * z-index can overlay a freshly-opened Files window. Sending Escape doesn't
+ * close them — they're full WM windows, not modal dialogs. We keep an
+ * already-open Files window so the singleton-check in openWindowAsync can
+ * just re-activate it. Returns the source ids that were closed.
+ */
+async function closeNonFilesSystemWindows(vault: VaultAutomation): Promise<string[]> {
+  const closed = await vault.executeScript<string[]>(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (!wm) return [];
+    const wins = (wm.currentWorkspaceWindows || []).slice();
+    const ids = [];
+    for (const w of wins) {
+      // Only target system windows. Vault A is shared across the workflows
+      // shard; user/app windows on the same workspace must NOT be torn down
+      // — that would create cross-test state loss far from this suite.
+      const wtype = w.type || w.tabs?.[0]?.type || null;
+      if (wtype !== 'system') continue;
+      const sid = w.sourceId || w.tabs?.[0]?.sourceId || 'unknown';
+      if (sid === 'files') continue;
+      ids.push(sid);
+      try { wm.closeWindow(w.id); } catch (_) {}
+    }
+    return ids;
+  `);
+  return closed ?? [];
+}
+
+/**
+ * Open the Files window via the windowManager Pinia store directly. The
+ * launcher-button → launcher-item-system-files dance is unreliable from
+ * WebDriver under shared-session load: the click creates the window in the
+ * store but the launcher drawer doesn't dismiss, leaving the Files content
+ * un-rendered (peers:[] in diag) even though `currentWorkspaceWindows`
+ * contains a `sourceId: 'files'` entry. The Settings opener in
+ * ui-vault.ts:166 uses the same direct API for the same reason; we mirror
+ * it here. Files is a singleton system window — re-calling openWindowAsync
+ * activates the existing tab if already open.
+ *
+ * Returns whether the store call succeeded (openWindowAsync existed and was
+ * invoked). The caller polls for `file-peer-*` to confirm the content
+ * actually rendered.
  */
 async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
-  // Dismiss leftover dialog/drawer (create-space dialog, etc.).
+  // Close any leftover non-files system windows (settings, marketplace, …)
+  // that the shared vault A session may have accumulated.
+  const closed = await closeNonFilesSystemWindows(vault);
+  if (closed.length > 0) {
+    console.log(
+      `[media-playback][open-files] closed leftover windows: ${JSON.stringify(closed)}`,
+    );
+  }
+  // Dismiss any modal dialog left over (create-space dialog, etc.).
   await vault.executeScript(
     `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
   );
-  await wait(500);
+  await wait(300);
 
-  await vault.clickBySelector(sel("launcher-button"), { timeout: 15000 });
-  await wait(500);
-  let found = await vault.waitForElement(sel("launcher-item-system-files"), {
-    timeout: 10000,
-  });
-  if (!found) {
-    // The launcher button toggles — a stale-open launcher would have closed
-    // on the click above. Try once more.
-    await vault.clickBySelector(sel("launcher-button"), { timeout: 5000 });
-    await wait(500);
-    found = await vault.waitForElement(sel("launcher-item-system-files"), {
-      timeout: 10000,
-    });
-  }
-  if (!found) {
+  const opened = await vault.executeScript<boolean>(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (!wm?.openWindowAsync) return false;
+    try {
+      // Await the async open so a deferred rejection (store/route mount race)
+      // surfaces as a falsy return and the outer retry loop kicks in. Without
+      // the await we'd report success on a pending promise and skip retries.
+      await wm.openWindowAsync({ sourceId: 'files', type: 'system' });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  `);
+  if (!opened) {
     const diag = await vault.executeScript(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
       return {
-        launcherButton: !!document.querySelector('[data-testid="launcher-button"]'),
-        launcherItems: [...document.querySelectorAll('[data-testid^="launcher-item-"]')].map(e => e.getAttribute('data-testid')),
-        dialogs: document.querySelectorAll('[role="dialog"]').length,
-        bodyText: document.body.innerText.slice(0, 1500),
+        hasPinia: !!pinia,
+        windowManagerKeys: pinia?._s?.get('windowManager') ? Object.keys(pinia._s.get('windowManager')) : [],
       };
     `);
-    console.log(`[media-playback][diag-launcher] ${JSON.stringify(diag)}`);
+    console.log(`[media-playback][diag-open] ${JSON.stringify(diag)}`);
     return false;
   }
-  return await vault.clickBySelector(sel("launcher-item-system-files"), {
-    timeout: 10000,
-  });
+  // Let the window mount + initial reactive data loads settle.
+  await wait(800);
+  return true;
+}
+
+/**
+ * Open Files and wait for the seeded share row to appear. Wraps the open +
+ * waitForElement in a retry loop: under shared-session load the Files
+ * window's initial reactive query for shares can lag, so we re-poke
+ * openWindowAsync (idempotent for singleton windows) before re-checking.
+ * Budgeted to stay under the 60s test timeout.
+ */
+async function openFilesAndExpectShare(
+  vault: VaultAutomation,
+  shareName: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!(await openFilesWindow(vault))) {
+      console.log(
+        `[media-playback][files-attempt-${attempt}] openFilesWindow returned false`,
+      );
+      continue;
+    }
+    if (
+      await vault.waitForElement(sel(`file-peer-${shareName}`), {
+        timeout: 12000,
+      })
+    ) {
+      return true;
+    }
+    const diag = await vault.executeScript(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const wm = pinia?._s?.get('windowManager');
+      const activeId = wm?.activeWindowId ?? null;
+      const wins = (wm?.currentWorkspaceWindows || []).map(w => ({
+        id: w.id,
+        sourceId: w.sourceId || w.tabs?.[0]?.sourceId || null,
+        active: w.id === activeId,
+      }));
+      return {
+        windows: wins,
+        activeId,
+        peers: [...document.querySelectorAll('[data-testid^="file-peer-"]')].map(e => e.getAttribute('data-testid')),
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+      };
+    `);
+    console.log(
+      `[media-playback][files-attempt-${attempt}] missing file-peer: ${JSON.stringify(diag)}`,
+    );
+    await wait(800);
+  }
+  return false;
 }
 
 /**
@@ -350,61 +452,126 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
     try {
       const media = generateMediaFixtures();
 
-      // Peer storage must be running to have a stable nodeId for the share row.
-      let nodeId: string;
-      try {
-        const info = await vault.invokeTauriCommand<PeerStorageStartInfo>(
-          "peer_storage_start",
-          {},
+      // Drop the media onto the filesystem the vault sees (test + vault run
+      // in the same container, so Node fs is the same /tmp). No Tauri
+      // command — Node fs keeps the arrange off the SUT command surface.
+      await fsAsync.mkdir(SHARE_DIR, { recursive: true });
+      await fsAsync.writeFile(
+        `${SHARE_DIR}/${VIDEO_FILE}`,
+        Buffer.from(media.videoBase64, "base64"),
+      );
+      await fsAsync.writeFile(
+        `${SHARE_DIR}/${AUDIO_FILE}`,
+        Buffer.from(media.audioBase64, "base64"),
+      );
+
+      // Start P2P through the UI (Settings → Sync → Config → Start). Required
+      // because addShareAsync needs the leader to register the share.
+      await startP2PEndpoint(vault);
+
+      // Create the local space — also pure UI.
+      const spaceId = await createLocalSpaceViaUI(vault, SPACE_NAME);
+
+      // startP2PEndpoint's leader-ready wait only fires when a local space
+      // ALREADY exists. We just created SPACE_NAME *after* P2P start, so the
+      // leader still needs a moment to register it. Adding the share before
+      // `activeSpaces` includes `spaceId` races the leader and addShareAsync
+      // can silently no-op. Mirrors the same pollUntil used in
+      // ui-vault.ts:306-315.
+      await pollUntil(
+        async () => {
+          const ds = await vault.invokeTauriCommand<{
+            isLeader: boolean;
+            activeSpaces: string[];
+          }>("local_delivery_status", {});
+          return ds.isLeader && (ds.activeSpaces ?? []).includes(spaceId)
+            ? ds
+            : null;
+        },
+        {
+          timeout: 15_000,
+          interval: 500,
+          label: `leader picked up local space ${spaceId}`,
+        },
+      );
+
+      // Sentinel-mechanism probe. The whole pure-UI arrange depends on the
+      // vault honouring `/tmp/haex-e2e-pick-folder.txt`. If this returns null
+      // (or hangs), either the vault binary doesn't have haex-vault PR #539,
+      // or /tmp isn't shared between the test runner and the vault process.
+      // Fail loud here instead of silently mis-seeding the share.
+      const PROBE_PATH = "/probe/sentinel/path";
+      await fsAsync.writeFile(PICK_FOLDER_SENTINEL_PATH, PROBE_PATH);
+      const probe = await vault.invokeTauriCommand<string | null>(
+        "filesystem_select_folder",
+        {},
+      );
+      console.log(
+        `[media-playback][sentinel-probe] expected=${PROBE_PATH} got=${JSON.stringify(probe)}`,
+      );
+      if (probe !== PROBE_PATH) {
+        throw new Error(
+          `sentinel override not honoured (got ${JSON.stringify(probe)}) — vault binary may predate haex-vault#539 or /tmp is not shared`,
         );
-        nodeId = info.nodeId;
-      } catch {
-        const status = await vault.invokeTauriCommand<PeerStorageStartInfo>(
-          "peer_storage_status",
-          {},
-        );
-        nodeId = status.nodeId;
       }
 
-      const identities = await sqlQuery<{ did: string }>(
-        vault,
-        "SELECT did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
-      );
-      const did = identities[0]?.did;
-      if (!did) throw new Error("no local identity with a private key");
-
-      // Drop the media onto the vault filesystem inside the share folder.
-      await vault.invokeTauriCommand("filesystem_mkdir", { path: SHARE_DIR });
-      await vault.invokeTauriCommand("filesystem_write_file", {
-        path: `${SHARE_DIR}/${VIDEO_FILE}`,
-        data: media.videoBase64,
-      });
-      await vault.invokeTauriCommand("filesystem_write_file", {
-        path: `${SHARE_DIR}/${AUDIO_FILE}`,
-        data: media.audioBase64,
-      });
-
-      // Create the space through the UI, then seed the share row the same way
-      // the QUIC suite does (the OS picker is unreachable from WebDriver).
-      const spaceId = await createLocalSpaceViaUI(vault, SPACE_NAME);
-      await ensureDeviceRegistered(vault, spaceId, nodeId, did);
-
-      const ownDevice = await sqlQuery<{ id: string }>(
-        vault,
-        "SELECT id FROM haex_devices WHERE endpoint_id = ?1 LIMIT 1",
-        [nodeId],
-      );
-      if (ownDevice.length !== 1) throw new Error("own device row not found");
-
-      const shareId = crypto.randomUUID();
-      await vault.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: `INSERT INTO haex_peer_shares
-                (id, space_id, device_id, endpoint_id, name, local_path, authored_by_did)
-              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-        params: [shareId, spaceId, ownDevice[0].id, nodeId, SHARE_NAME, SHARE_DIR, did],
-      });
-      // Make the leader pick up the new share (mirrors addShareAsync).
-      await vault.invokeTauriCommand("peer_storage_reload_shares");
+      // Prime the e2e picker override: filesystem_select_folder reads
+      // PICK_FOLDER_SENTINEL_PATH at dialog-open time when present (debug
+      // build only — see haex-vault src-tauri/src/filesystem/commands.rs).
+      await fsAsync.writeFile(PICK_FOLDER_SENTINEL_PATH, SHARE_DIR);
+      try {
+        // Open Settings → Spaces, expand the just-created space card, click
+        // +Folder. The dropdown menu item triggers `useSpaceShares.addShareAsync`,
+        // which calls `filesystem_select_folder` (returns SHARE_DIR from the
+        // sentinel), then `store.addShareAsync(spaceId, name, path)` — the same
+        // path a real user takes, including peerStore + leader updates.
+        await openSettingsCategory(vault, "spaces");
+        // Assert each click landed. `mousedownClickTestId` returns false when
+        // the element isn't there; ignoring it would let arrange "succeed"
+        // without a share, then the spec would fail later at "Files lists the
+        // share" — far from the broken setup step.
+        expect(
+          await mousedownClickTestId(
+            vault,
+            `space-add-share-trigger-${spaceId}`,
+          ),
+          `space-add-share-trigger-${spaceId} not found`,
+        ).toBe(true);
+        await wait(500);
+        expect(
+          await mousedownClickTestId(
+            vault,
+            `space-add-share-folder-${spaceId}`,
+          ),
+          `space-add-share-folder-${spaceId} not found`,
+        ).toBe(true);
+        // Poll the DB for the share row instead of waiting blindly. If it
+        // doesn't appear, addShareAsync silently no-op'd (picker returned
+        // null, exception swallowed by the composable's try/catch toast,
+        // etc.) — fail in arrange with detail rather than later in the
+        // assertion phase.
+        await pollUntil(
+          async () => {
+            const rows = await sqlQuery<{ id: string }>(
+              vault,
+              "SELECT id FROM haex_peer_shares WHERE space_id = ?1 AND name = ?2",
+              [spaceId, SHARE_NAME],
+            );
+            return rows.length === 1 ? rows[0] : null;
+          },
+          {
+            timeout: 10_000,
+            interval: 500,
+            label: `share row ${SHARE_NAME} in haex_peer_shares`,
+          },
+        );
+      } finally {
+        await fsAsync.unlink(PICK_FOLDER_SENTINEL_PATH).catch(() => {
+          // best effort; a leftover sentinel only matters for the very next
+          // Browse click in this debug build, and the next test that uses it
+          // would overwrite anyway.
+        });
+      }
 
       arrangeOk = true;
     } catch (e) {
@@ -414,22 +581,13 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   });
 
   test.afterAll(async () => {
-    // Remove the media files first — filesystem_remove won't delete a
-    // non-empty directory.
-    for (const f of [VIDEO_FILE, AUDIO_FILE]) {
-      try {
-        await vault.invokeTauriCommand("filesystem_remove", {
-          path: `${SHARE_DIR}/${f}`,
-        });
-      } catch {
-        // best effort
-      }
-    }
+    // Clean up the seeded media folder via Node fs.
     try {
-      await vault.invokeTauriCommand("filesystem_remove", { path: SHARE_DIR });
+      await fsAsync.rm(SHARE_DIR, { recursive: true, force: true });
     } catch {
       // best effort
     }
+    await fsAsync.unlink(PICK_FOLDER_SENTINEL_PATH).catch(() => {});
     // No close_database: vault A is opened by global-setup and shared across
     // the storage suites — closing it would break the ones that run after.
   });
@@ -437,14 +595,11 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   test("file browser lists the local media share with its files", async () => {
     test.skip(!arrangeOk, skipReason);
 
-    // Open the Files window from the launcher — pure UI.
-    expect(await openFilesWindow(vault)).toBe(true);
-
-    // The share shows up in the browser overview.
-    const sharePresent = await vault.waitForElement(
-      sel(`file-peer-${SHARE_NAME}`),
-      { timeout: 20000 },
-    );
+    // Open Files and wait for the share row to appear. Retries the
+    // close-system-windows + launcher-open + share-wait cycle, because under
+    // shared-session load a leftover Settings WM window can re-overlay Files
+    // after the first launch attempt.
+    const sharePresent = await openFilesAndExpectShare(vault, SHARE_NAME);
     if (!sharePresent) await diagnoseMissingShare(vault);
     expect(sharePresent).toBe(true);
 
