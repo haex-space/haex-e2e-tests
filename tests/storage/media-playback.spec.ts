@@ -176,15 +176,15 @@ async function openMediaPreview(
 const sel = (testId: string) => `[data-testid="${testId}"]`;
 
 /**
- * Close every system window via the windowManager Pinia store. Vault A is the
- * shared session: by the time this suite runs ~300 tests have left various
- * system windows (settings, marketplace, …) open. Their DOM/z-index can
- * overlay a freshly-opened Files window, hiding `file-peer-*` even though the
- * launcher click succeeded. Sending Escape doesn't close these — they're
- * full-fledged WM windows, not modal dialogs. Returns the source ids that
- * were closed (for diagnostics).
+ * Close every NON-files system window via the windowManager Pinia store.
+ * Vault A is the shared session: by the time this suite runs ~300 tests have
+ * left various system windows (settings, marketplace, …) open. Their DOM /
+ * z-index can overlay a freshly-opened Files window. Sending Escape doesn't
+ * close them — they're full WM windows, not modal dialogs. We keep an
+ * already-open Files window so the singleton-check in openWindowAsync can
+ * just re-activate it. Returns the source ids that were closed.
  */
-async function closeAllSystemWindows(vault: VaultAutomation): Promise<string[]> {
+async function closeNonFilesSystemWindows(vault: VaultAutomation): Promise<string[]> {
   const closed = await vault.executeScript<string[]>(`
     const app = document.getElementById('__nuxt')?.__vue_app__;
     const pinia = app?.config?.globalProperties?.$pinia;
@@ -194,6 +194,7 @@ async function closeAllSystemWindows(vault: VaultAutomation): Promise<string[]> 
     const ids = [];
     for (const w of wins) {
       const sid = w.sourceId || w.tabs?.[0]?.sourceId || 'unknown';
+      if (sid === 'files') continue;
       ids.push(sid);
       try { wm.closeWindow(w.id); } catch (_) {}
     }
@@ -203,66 +204,70 @@ async function closeAllSystemWindows(vault: VaultAutomation): Promise<string[]> 
 }
 
 /**
- * Open the Files window from the launcher — pure UI. Arrange leaves the
- * Settings window (and possibly a just-closed dialog) in focus. Settings is
- * a real WM window, not a modal — Escape can't close it — so we first ask
- * the windowManager to close every open system window, then open the
- * launcher and click the Files item. Returns whether the Files item became
- * clickable; logs a DOM dump on failure.
+ * Open the Files window via the windowManager Pinia store directly. The
+ * launcher-button → launcher-item-system-files dance is unreliable from
+ * WebDriver under shared-session load: the click creates the window in the
+ * store but the launcher drawer doesn't dismiss, leaving the Files content
+ * un-rendered (peers:[] in diag) even though `currentWorkspaceWindows`
+ * contains a `sourceId: 'files'` entry. The Settings opener in
+ * ui-vault.ts:166 uses the same direct API for the same reason; we mirror
+ * it here. Files is a singleton system window — re-calling openWindowAsync
+ * activates the existing tab if already open.
+ *
+ * Returns whether the store call succeeded (openWindowAsync existed and was
+ * invoked). The caller polls for `file-peer-*` to confirm the content
+ * actually rendered.
  */
 async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
-  // Close any leftover system windows (settings, marketplace, …) that the
-  // shared vault A session may have accumulated.
-  const closed = await closeAllSystemWindows(vault);
+  // Close any leftover non-files system windows (settings, marketplace, …)
+  // that the shared vault A session may have accumulated.
+  const closed = await closeNonFilesSystemWindows(vault);
   if (closed.length > 0) {
     console.log(
       `[media-playback][open-files] closed leftover windows: ${JSON.stringify(closed)}`,
     );
   }
-  // Dismiss leftover modal dialogs (create-space dialog, etc.).
+  // Dismiss any modal dialog left over (create-space dialog, etc.).
   await vault.executeScript(
     `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
   );
-  await wait(500);
+  await wait(300);
 
-  await vault.clickBySelector(sel("launcher-button"), { timeout: 15000 });
-  await wait(500);
-  let found = await vault.waitForElement(sel("launcher-item-system-files"), {
-    timeout: 10000,
-  });
-  if (!found) {
-    // The launcher button toggles — a stale-open launcher would have closed
-    // on the click above. Try once more.
-    await vault.clickBySelector(sel("launcher-button"), { timeout: 5000 });
-    await wait(500);
-    found = await vault.waitForElement(sel("launcher-item-system-files"), {
-      timeout: 10000,
-    });
-  }
-  if (!found) {
+  const opened = await vault.executeScript<boolean>(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (!wm?.openWindowAsync) return false;
+    try {
+      wm.openWindowAsync({ sourceId: 'files', type: 'system' });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  `);
+  if (!opened) {
     const diag = await vault.executeScript(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
       return {
-        launcherButton: !!document.querySelector('[data-testid="launcher-button"]'),
-        launcherItems: [...document.querySelectorAll('[data-testid^="launcher-item-"]')].map(e => e.getAttribute('data-testid')),
-        dialogs: document.querySelectorAll('[role="dialog"]').length,
-        bodyText: document.body.innerText.slice(0, 1500),
+        hasPinia: !!pinia,
+        windowManagerKeys: pinia?._s?.get('windowManager') ? Object.keys(pinia._s.get('windowManager')) : [],
       };
     `);
-    console.log(`[media-playback][diag-launcher] ${JSON.stringify(diag)}`);
+    console.log(`[media-playback][diag-open] ${JSON.stringify(diag)}`);
     return false;
   }
-  return await vault.clickBySelector(sel("launcher-item-system-files"), {
-    timeout: 10000,
-  });
+  // Let the window mount + initial reactive data loads settle.
+  await wait(800);
+  return true;
 }
 
 /**
- * Open Files and wait for the seeded share row to appear. Wraps
- * openFilesWindow + waitForElement in a retry loop: under shared-session
- * load the Files window can mount but the share row still misses its first
- * paint, OR a leftover Settings window can re-open behind the launcher click
- * (we have seen both). On miss, close every system window and re-open Files
- * before the next attempt. Budgeted to stay under the 60s test timeout.
+ * Open Files and wait for the seeded share row to appear. Wraps the open +
+ * waitForElement in a retry loop: under shared-session load the Files
+ * window's initial reactive query for shares can lag, so we re-poke
+ * openWindowAsync (idempotent for singleton windows) before re-checking.
+ * Budgeted to stay under the 60s test timeout.
  */
 async function openFilesAndExpectShare(
   vault: VaultAutomation,
@@ -286,13 +291,15 @@ async function openFilesAndExpectShare(
       const app = document.getElementById('__nuxt')?.__vue_app__;
       const pinia = app?.config?.globalProperties?.$pinia;
       const wm = pinia?._s?.get('windowManager');
+      const activeId = wm?.activeWindowId ?? null;
       const wins = (wm?.currentWorkspaceWindows || []).map(w => ({
         id: w.id,
         sourceId: w.sourceId || w.tabs?.[0]?.sourceId || null,
-        focused: !!w.focused,
+        active: w.id === activeId,
       }));
       return {
         windows: wins,
+        activeId,
         peers: [...document.querySelectorAll('[data-testid^="file-peer-"]')].map(e => e.getAttribute('data-testid')),
         dialogs: document.querySelectorAll('[role="dialog"]').length,
       };
