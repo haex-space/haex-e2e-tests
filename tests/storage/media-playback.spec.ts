@@ -176,13 +176,50 @@ async function openMediaPreview(
 const sel = (testId: string) => `[data-testid="${testId}"]`;
 
 /**
+ * Close every system window via the windowManager Pinia store. Vault A is the
+ * shared session: by the time this suite runs ~300 tests have left various
+ * system windows (settings, marketplace, …) open. Their DOM/z-index can
+ * overlay a freshly-opened Files window, hiding `file-peer-*` even though the
+ * launcher click succeeded. Sending Escape doesn't close these — they're
+ * full-fledged WM windows, not modal dialogs. Returns the source ids that
+ * were closed (for diagnostics).
+ */
+async function closeAllSystemWindows(vault: VaultAutomation): Promise<string[]> {
+  const closed = await vault.executeScript<string[]>(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const wm = pinia?._s?.get('windowManager');
+    if (!wm) return [];
+    const wins = (wm.currentWorkspaceWindows || []).slice();
+    const ids = [];
+    for (const w of wins) {
+      const sid = w.sourceId || w.tabs?.[0]?.sourceId || 'unknown';
+      ids.push(sid);
+      try { wm.closeWindow(w.id); } catch (_) {}
+    }
+    return ids;
+  `);
+  return closed ?? [];
+}
+
+/**
  * Open the Files window from the launcher — pure UI. Arrange leaves the
- * Settings window (and possibly a just-closed dialog) in focus, so dismiss
- * any overlay first, then open the launcher and click the Files item. Returns
- * whether the Files item became clickable; logs a DOM dump on failure.
+ * Settings window (and possibly a just-closed dialog) in focus. Settings is
+ * a real WM window, not a modal — Escape can't close it — so we first ask
+ * the windowManager to close every open system window, then open the
+ * launcher and click the Files item. Returns whether the Files item became
+ * clickable; logs a DOM dump on failure.
  */
 async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
-  // Dismiss leftover dialog/drawer (create-space dialog, etc.).
+  // Close any leftover system windows (settings, marketplace, …) that the
+  // shared vault A session may have accumulated.
+  const closed = await closeAllSystemWindows(vault);
+  if (closed.length > 0) {
+    console.log(
+      `[media-playback][open-files] closed leftover windows: ${JSON.stringify(closed)}`,
+    );
+  }
+  // Dismiss leftover modal dialogs (create-space dialog, etc.).
   await vault.executeScript(
     `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
   );
@@ -217,6 +254,55 @@ async function openFilesWindow(vault: VaultAutomation): Promise<boolean> {
   return await vault.clickBySelector(sel("launcher-item-system-files"), {
     timeout: 10000,
   });
+}
+
+/**
+ * Open Files and wait for the seeded share row to appear. Wraps
+ * openFilesWindow + waitForElement in a retry loop: under shared-session
+ * load the Files window can mount but the share row still misses its first
+ * paint, OR a leftover Settings window can re-open behind the launcher click
+ * (we have seen both). On miss, close every system window and re-open Files
+ * before the next attempt. Budgeted to stay under the 60s test timeout.
+ */
+async function openFilesAndExpectShare(
+  vault: VaultAutomation,
+  shareName: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!(await openFilesWindow(vault))) {
+      console.log(
+        `[media-playback][files-attempt-${attempt}] openFilesWindow returned false`,
+      );
+      continue;
+    }
+    if (
+      await vault.waitForElement(sel(`file-peer-${shareName}`), {
+        timeout: 12000,
+      })
+    ) {
+      return true;
+    }
+    const diag = await vault.executeScript(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const wm = pinia?._s?.get('windowManager');
+      const wins = (wm?.currentWorkspaceWindows || []).map(w => ({
+        id: w.id,
+        sourceId: w.sourceId || w.tabs?.[0]?.sourceId || null,
+        focused: !!w.focused,
+      }));
+      return {
+        windows: wins,
+        peers: [...document.querySelectorAll('[data-testid^="file-peer-"]')].map(e => e.getAttribute('data-testid')),
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+      };
+    `);
+    console.log(
+      `[media-playback][files-attempt-${attempt}] missing file-peer: ${JSON.stringify(diag)}`,
+    );
+    await wait(800);
+  }
+  return false;
 }
 
 /**
@@ -437,14 +523,11 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   test("file browser lists the local media share with its files", async () => {
     test.skip(!arrangeOk, skipReason);
 
-    // Open the Files window from the launcher — pure UI.
-    expect(await openFilesWindow(vault)).toBe(true);
-
-    // The share shows up in the browser overview.
-    const sharePresent = await vault.waitForElement(
-      sel(`file-peer-${SHARE_NAME}`),
-      { timeout: 20000 },
-    );
+    // Open Files and wait for the share row to appear. Retries the
+    // close-system-windows + launcher-open + share-wait cycle, because under
+    // shared-session load a leftover Settings WM window can re-overlay Files
+    // after the first launch attempt.
+    const sharePresent = await openFilesAndExpectShare(vault, SHARE_NAME);
     if (!sharePresent) await diagnoseMissingShare(vault);
     expect(sharePresent).toBe(true);
 
