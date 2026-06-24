@@ -43,6 +43,7 @@ test.describe("sync: owner-vault via DB copy", () => {
 
   let vaultA: VaultAutomation;
   let vaultB: VaultAutomation;
+  let aEndpointIdFromSource: string;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -82,7 +83,9 @@ test.describe("sync: owner-vault via DB copy", () => {
       "SELECT endpoint_id FROM haex_devices",
     );
     expect(devices.length).toBeGreaterThanOrEqual(1);
-    expect(devices[0]?.endpoint_id ?? "").not.toBe("");
+    const sourceEndpointId = devices[0]?.endpoint_id ?? "";
+    expect(sourceEndpointId).not.toBe("");
+    aEndpointIdFromSource = sourceEndpointId;
 
     const rows = await sqlQuery<{ id: string }>(
       vaultA,
@@ -112,6 +115,9 @@ test.describe("sync: owner-vault via DB copy", () => {
       "SELECT endpoint_id FROM haex_devices",
     );
     expect(bDevices.length).toBeGreaterThanOrEqual(1);
+    // Tightens the copied-vault contract: B must carry A's specific
+    // endpoint row from the imported DB, not just *some* device row.
+    expect(bDevices.map((d) => d.endpoint_id)).toContain(aEndpointIdFromSource);
 
     // Capture the post-import baseline on both sides so a downstream
     // convergence timeout has the "what does each side know?" view ready.
