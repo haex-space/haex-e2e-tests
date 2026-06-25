@@ -313,32 +313,34 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
     expect(await clickTestId(vaultA, "contacts-import-submit")).toBe(true);
 
     // onImportContactAsync chains several async DB writes (identity insert +
-    // claims + reactive store reload). The 1s wait raced the insert under
-    // shard load on a shared session and the assertion saw contacts.length=0.
-    // The submit click already returned true, so we know the button was
-    // present and triggered — only persistence is timing-sensitive.
-    const contacts = await pollUntil(
+    // claims + reactive store reload). The 1s wait raced these under
+    // workflows-shard load and the assertions saw both contacts.length=0
+    // and (when the identity row arrived first) the claim row missing.
+    // Poll for BOTH the identity AND its endpointId claim in one step.
+    const importRow = await pollUntil(
       async () => {
-        const r = await sqlQuery<{ id: string }>(
+        const identities = await sqlQuery<{ id: string }>(
           vaultA,
           `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
           [didB],
         );
-        return r.length === 1 ? r : null;
+        if (identities.length !== 1) return null;
+        const claims = await sqlQuery<{ type: string; value: string }>(
+          vaultA,
+          `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
+          [identities[0].id],
+        );
+        const ep = claims.find((c) => c.type === "endpointId");
+        return ep ? { identityId: identities[0].id, claim: ep } : null;
       },
-      { timeout: 10_000, interval: 500, label: "imported contact row on Vault A" },
+      {
+        timeout: 10_000,
+        interval: 500,
+        label: "imported contact + endpointId claim on Vault A",
+      },
     );
-    expect(contacts).not.toBeNull();
-    expect(contacts!.length).toBe(1);
-
-    const claims = await sqlQuery<{ type: string; value: string }>(
-      vaultA,
-      `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
-      [contacts![0].id],
-    );
-    const epClaim = claims.find((c) => c.type === "endpointId");
-    expect(epClaim).toBeDefined();
-    expect(epClaim!.value).toBe(endpointIdB);
+    expect(importRow).not.toBeNull();
+    expect(importRow!.claim.value).toBe(endpointIdB);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
