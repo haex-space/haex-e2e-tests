@@ -632,7 +632,7 @@ jobs:
           # Determine test directory based on shard
           case "${{ matrix.shard }}" in
             "workflows")
-              TEST_DIR="tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions"
+              TEST_DIR="tests/vault-lifecycle tests/sync tests/spaces tests/storage tests/identity-auth tests/extensions"
               ;;
             "other")
               TEST_DIR="tests/database tests/ui tests/browser-extension"
