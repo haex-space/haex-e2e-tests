@@ -441,6 +441,13 @@ test.describe("storage: inline media playback (local share, full UI)", () => {
   let skipReason = "";
 
   test.beforeAll(async () => {
+    // The arrange chains startP2PEndpoint (UI) + createLocalSpaceViaUI (UI)
+    // + leader-poll + add-share UI flow. Under workflows-shard load on a
+    // shared Vault A session the inner pollUntils can come close to the
+    // default 60s hook budget; bump to 120s so they have room to either
+    // succeed or throw cleanly (catch → arrangeOk=false → tests skip).
+    test.setTimeout(120_000);
+
     vault = new VaultAutomation("A");
     await vault.createSession();
 
