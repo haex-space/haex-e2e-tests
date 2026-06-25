@@ -299,26 +299,17 @@ test.describe("file-sync: peer-to-local sync rule via manifest", () => {
     await clickTestId(vaultA, "contacts-import-preview");
     await wait(500);
     await clickTestId(vaultA, "contacts-import-submit");
+    await wait(1000);
 
-    // Poll for the row — onImportContactAsync chains async DB writes
-    // (identity insert + claims + reactive store reload). The 1s wait
-    // raced the insert under shard load and returned length=0.
-    const contacts = await pollUntil(
-      async () => {
-        const r = await sqlQuery<{ id: string; name: string }>(
-          vaultA,
-          `SELECT id, name FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
-          [identityB.did],
-        );
-        return r.length === 1 ? r : null;
-      },
-      { timeout: 10_000, interval: 500, label: "imported contact row on Vault A" },
+    const contacts = await sqlQuery<{ id: string; name: string }>(
+      vaultA,
+      `SELECT id, name FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
+      [identityB.did],
     );
-    expect(contacts).not.toBeNull();
-    expect(contacts!.length).toBe(1);
+    expect(contacts.length).toBe(1);
     // Use the actual stored name — on reused vault containers a prior suite may
     // have already registered this DID under a different label (e.g. "Vault B").
-    actualContactLabel = contacts![0].name;
+    actualContactLabel = contacts[0].name;
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
