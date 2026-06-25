@@ -311,23 +311,36 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
     expect(await clickTestId(vaultA, "contacts-import-preview")).toBe(true);
     await wait(500);
     expect(await clickTestId(vaultA, "contacts-import-submit")).toBe(true);
-    await wait(1000);
 
-    const contacts = await sqlQuery<{ id: string }>(
-      vaultA,
-      `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
-      [didB],
+    // onImportContactAsync chains several async DB writes (identity insert +
+    // claims + reactive store reload). The 1s wait raced these under
+    // workflows-shard load and the assertions saw both contacts.length=0
+    // and (when the identity row arrived first) the claim row missing.
+    // Poll for BOTH the identity AND its endpointId claim in one step.
+    const importRow = await pollUntil(
+      async () => {
+        const identities = await sqlQuery<{ id: string }>(
+          vaultA,
+          `SELECT id FROM haex_identities WHERE did = ?1 AND private_key IS NULL`,
+          [didB],
+        );
+        if (identities.length !== 1) return null;
+        const claims = await sqlQuery<{ type: string; value: string }>(
+          vaultA,
+          `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
+          [identities[0].id],
+        );
+        const ep = claims.find((c) => c.type === "endpointId");
+        return ep ? { identityId: identities[0].id, claim: ep } : null;
+      },
+      {
+        timeout: 10_000,
+        interval: 500,
+        label: "imported contact + endpointId claim on Vault A",
+      },
     );
-    expect(contacts.length).toBe(1);
-
-    const claims = await sqlQuery<{ type: string; value: string }>(
-      vaultA,
-      `SELECT type, value FROM haex_identity_claims WHERE identity_id = ?1`,
-      [contacts[0].id],
-    );
-    const epClaim = claims.find((c) => c.type === "endpointId");
-    expect(epClaim).toBeDefined();
-    expect(epClaim!.value).toBe(endpointIdB);
+    expect(importRow).not.toBeNull();
+    expect(importRow!.claim.value).toBe(endpointIdB);
   });
 
   // ───────────────────────────────────────────────────────────────────────────
