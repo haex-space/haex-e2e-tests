@@ -431,6 +431,11 @@ services:
       - ../tests:/app/tests:ro
       - ../fixtures:/app/fixtures:ro
       - ../playwright.config.ts:/app/playwright.config.ts:ro
+      # Shared with vault-b. Used by owner-sync e2e specs to stage a copied
+      # vault DB so vault-b can import it from the filesystem (mirrors the
+      # real "user copies vault to new device" flow). Per-spec cleanup is the
+      # spec's responsibility — the volume persists across compose restarts.
+      - vault-exchange:/exchange
     shm_size: "2gb"
     depends_on:
       sync-server:
@@ -484,6 +489,10 @@ services:
       - ../tests:/app/tests:ro
       - ../fixtures:/app/fixtures:ro
       - ../playwright.config.ts:/app/playwright.config.ts:ro
+      # Shared with vault-a (see comment there). vault-b reads `/exchange/*.db`
+      # via the `import_vault` Tauri command to bootstrap the "vault copied
+      # from another device" scenario.
+      - vault-exchange:/exchange
     shm_size: "2gb"
     depends_on:
       sync-server:
@@ -501,6 +510,7 @@ networks:
 
 volumes:
   test-results:
+  vault-exchange:
   sync_db_data:
   marketplace_db_data:
   marketplace_storage_data:
