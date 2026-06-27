@@ -1,6 +1,6 @@
 import { test, expect, VaultAutomation } from "../fixtures";
-import { wait, pollUntil } from "../helpers/ui/utils";
-import { elementExists, mousedownClickFound } from "../helpers/ui/ui-primitives";
+import { pollUntil } from "../helpers/ui/utils";
+import { clickButton, elementExists, mousedownClickFound } from "../helpers/ui/ui-primitives";
 
 /**
  * Regression test for the password import dialogs (Bitwarden / LastPass / KeePass).
@@ -128,19 +128,21 @@ test.describe("ui: passwords import dialogs (regression for #520)", () => {
       expect(dialogVisible).toBe(true);
 
       // Step 4 — close the dialog so the next iteration starts from a clean
-      // state. Escape closes Nuxt UI's UModal.
-      await vault.executeScript(
-        `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));`,
-      );
-      await wait(400);
+      // state. document-level Escape doesn't reach reka-ui's focus-trapped
+      // modal in our automation setup; click the Cancel button instead, which
+      // ImportWizardShell wires to `open = false` directly.
+      await clickButton(vault, "Cancel", "Abbrechen");
 
-      // Sanity-check that the dialog actually went away — otherwise the next
-      // iteration's "dialog visible" assertion would always pass.
-      const stillOpen = await elementExists(
-        vault,
-        '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
+      // Poll for the dialog to disappear — reka-ui plays a close transition
+      // before flipping `data-state`. Without polling we'd race the animation.
+      await pollUntil(
+        async () =>
+          !(await elementExists(
+            vault,
+            '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]',
+          )),
+        { timeout: 3_000, label: `${variant} dialog closed` },
       );
-      expect(stillOpen).toBe(false);
     });
   }
 });
