@@ -1,6 +1,6 @@
 import { test, expect, VaultAutomation } from "../fixtures";
 import { pollUntil } from "../helpers/ui/utils";
-import { clickButton, elementExists, mousedownClickFound } from "../helpers/ui/ui-primitives";
+import { elementExists, mousedownClickFound } from "../helpers/ui/ui-primitives";
 
 /**
  * Regression test for the password import dialogs (Bitwarden / LastPass / KeePass).
@@ -128,10 +128,25 @@ test.describe("ui: passwords import dialogs (regression for #520)", () => {
       expect(dialogVisible).toBe(true);
 
       // Step 4 — close the dialog so the next iteration starts from a clean
-      // state. document-level Escape doesn't reach reka-ui's focus-trapped
-      // modal in our automation setup; click the Cancel button instead, which
-      // ImportWizardShell wires to `open = false` directly.
-      await clickButton(vault, "Cancel", "Abbrechen");
+      // state. The passwords header always mounts the BulkDelete / BulkTag /
+      // GroupEditor dialog components alongside the import dialogs, so a
+      // document-wide button query can pick up a hidden Cancel button in a
+      // closed sibling dialog. Scope the lookup to the OPEN dialog, and use
+      // the reka-ui activation sequence so the click reaches a focus-trapped
+      // UButton reliably.
+      await mousedownClickFound(
+        vault,
+        `
+          const dlg = document.querySelector('[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]');
+          if (!dlg) return null;
+          const labels = ['Cancel', 'Abbrechen'];
+          const btns = [...dlg.querySelectorAll('button, [role="button"]')];
+          return btns.find(b => {
+            const t = b.textContent?.trim() ?? '';
+            return labels.some(l => t === l || t.includes(l));
+          }) ?? null;
+        `,
+      );
 
       // Poll for the dialog to disappear — reka-ui plays a close transition
       // before flipping `data-state`. Without polling we'd race the animation.
