@@ -24,7 +24,10 @@ const EXTENSION_PATH = "/repos/haextension/apps/haex-pass-browser/extension";
 // WebSocket connection settings
 const WEBSOCKET_PORT = 19455;
 const WEBSOCKET_URL = `ws://localhost:${WEBSOCKET_PORT}`;
-const PROTOCOL_VERSION = 1;
+// Protocol v2: the vault's external bridge requires clients to declare their
+// requested permissions in the handshake (haex-vault#666); v1 handshakes are
+// rejected with PERMISSIONS_DECLARATION_REQUIRED.
+const PROTOCOL_VERSION = 2;
 const CLIENT_NAME = "E2E Test Client";
 
 // Multi-vault configuration for dual-container testing
@@ -313,6 +316,14 @@ export class VaultBridgeClient {
         clientId: this.clientId,
         clientName: CLIENT_NAME,
         publicKey: this.publicKeyBase64,
+        // Protocol v2: declare full core passwords access up front. The
+        // external-bridge specs exercise get-logins/create-item/update-item/
+        // TOTP against core, so the approved grant must cover read + write.
+        permissions: {
+          core: {
+            passwords: [{ target: "*", operation: "readWrite" }],
+          },
+        },
       },
     };
 
