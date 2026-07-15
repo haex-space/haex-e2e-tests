@@ -23,6 +23,22 @@ export async function initializeVaultViaUI(
   const href = await vault.executeScript<string>("return location.href");
   if (href?.includes("/vault/")) {
     console.log(`[QUIC] Already open on ${vault.getInstance()}: ${href}`);
+    // A Playwright retry re-enters here with the vault still open. If the
+    // first attempt missed a late-appearing WelcomeDialog (CI under load —
+    // the 12s poll below is a best-effort window, not a guarantee), that
+    // dialog is now blocking the desktop and no haex_devices row exists,
+    // so every retry fails deterministically (peer_storage_start: "no
+    // haex_devices row"; settings never visible). Complete it here instead
+    // of returning into that dead end. Short timeout: on an already-
+    // onboarded vault the dialog never appears and this is a quick no-op.
+    const handled = await completeWelcomeOnboarding(vault, {
+      userName: `E2E User ${vault.getInstance()}`,
+      deviceName: `e2e-vault-${vault.getInstance().toLowerCase()}`,
+      timeout: 3000,
+    });
+    if (handled) {
+      console.log(`[QUIC] Late WelcomeDialog completed on re-entry (${vault.getInstance()})`);
+    }
     return;
   }
 
