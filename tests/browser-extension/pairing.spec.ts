@@ -61,7 +61,7 @@ test.describe("browser-extension: pairing with haex-vault core", () => {
         pending!.clientId,
         pending!.clientName,
         pending!.publicKey,
-        "__core__",
+        ["__core__"],
       );
 
       // It must now be a persisted authorized client.
