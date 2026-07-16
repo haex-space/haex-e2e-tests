@@ -405,9 +405,6 @@ jobs:
           fi
           echo "  marketplace: from $HAEX_MARKETPLACE_PATH"
 
-          # Ensure prebuilt directory exists (even if empty)
-          mkdir -p prebuilt
-
           # Build vault-a, sync-server, and marketplace (vault-b uses same image as vault-a)
           # CI override adds GHA layer cache so apt-get/cargo/playwright layers are reused
           echo "Building Docker images..."
