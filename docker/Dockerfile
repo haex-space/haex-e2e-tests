@@ -6,7 +6,7 @@
 #
 # Supports two modes:
 # 1. Build from source: Set HAEX_VAULT_REF to a git ref (default)
-# 2. Use pre-built binary: Set USE_PREBUILT_VAULT=true and copy binary to prebuilt/haex-vault/
+# 2. Use pre-built binary: Set USE_PREBUILT_VAULT=true and copy binary to docker/prebuilt/haex-vault/
 
 FROM ghcr.io/haex-space/haex-e2e-base:latest
 
@@ -25,8 +25,10 @@ ENV USE_LOCAL_VAULT=${USE_LOCAL_VAULT}
 
 WORKDIR /repos
 
-# Copy pre-built artifacts (if any) - these are provided by the build context
-COPY prebuilt/ /prebuilt/
+# Copy pre-built artifacts (if any). The build context is the repo root
+# (compose: `context: ..`), so this must reference docker/prebuilt/ — the
+# directory the CI workflows download the haex-vault artifact into.
+COPY docker/prebuilt/ /prebuilt/
 
 # Obtain haex-vault source: either copy from local mount or clone from GitHub.
 # The `local-vault` named build context is bind-mounted read-only for the
