@@ -458,12 +458,14 @@ jobs:
       matrix:
         shard:
           - "workflows"    # vault-lifecycle, sync, spaces, storage, identity-auth, extensions
-          - "other"        # database, ui, browser-extension
+          - "other"        # database, ui, browser-extension, external-bridge
           # haex-pass shard removed: passwords are now first-class in haex-vault
           # via the `passwords::commands::extension_password_*` Tauri handlers,
           # so the dedicated haex-pass extension is no longer the source of
-          # truth for that flow. The tests under `tests/external-bridge/` still
-          # exist for historical reference but should not gate haex-vault CI.
+          # truth for that flow. `tests/external-bridge/` now covers the core
+          # external-bridge API directly (get-items/get-totp/passkeys, tag-scope
+          # enforcement, multi-target grants) and gates haex-vault CI via the
+          # "other" shard — see haex-vault PR #674.
 
     outputs:
       success: ${{ steps.test.outcome == 'success' }}
@@ -632,7 +634,7 @@ jobs:
               TEST_DIR="tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions"
               ;;
             "other")
-              TEST_DIR="tests/database tests/ui tests/browser-extension"
+              TEST_DIR="tests/database tests/ui tests/browser-extension tests/external-bridge"
               ;;
           esac
 
