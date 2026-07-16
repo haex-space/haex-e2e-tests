@@ -39,6 +39,7 @@ test.describe("external-bridge: scope-enforcement", () => {
   let outScopeEntry: string;
   let inScopePasskeyCredentialId: string;
   let outScopePasskeyCredentialId: string;
+  let standalonePasskeyCredentialId: string;
 
   test.beforeAll(async () => {
     vault = new VaultAutomation();
@@ -86,10 +87,12 @@ test.describe("external-bridge: scope-enforcement", () => {
       tag_id: tagId,
     });
 
-    // A standalone (item-less) passkey outside every tag scope, inserted
-    // directly — it must never be reachable by a scoped grant regardless of
-    // relying-party or credential-id matches. Dummy key material is fine:
-    // the scope check in passkey-get short-circuits before any crypto use.
+    // A passkey linked to the out-of-scope item, inserted directly — it
+    // must never be reachable by a scoped grant regardless of relying-party
+    // or credential-id matches. Dummy key material is fine: the scope check
+    // in passkey-get short-circuits before any crypto use. The separate
+    // standalone-passkey policy (itemId = null) is covered below by the
+    // passkey-create tests.
     outScopePasskeyCredentialId = crypto
       .randomBytes(32)
       .toString("base64");
@@ -215,6 +218,7 @@ test.describe("external-bridge: scope-enforcement", () => {
 
     expect(response.success).toBe(true);
     expect(typeof response.data.credentialId).toBe("string");
+    standalonePasskeyCredentialId = response.data.credentialId;
   });
 
   // ---------------------------------------------------------------------
@@ -233,6 +237,9 @@ test.describe("external-bridge: scope-enforcement", () => {
     const credentialIds = response.data.passkeys.map((p) => p.credentialId);
     expect(credentialIds).toContain(inScopePasskeyCredentialId);
     expect(credentialIds).not.toContain(outScopePasskeyCredentialId);
+    // A standalone passkey (itemId = null) can't belong to any tag scope —
+    // a restricted grant must not see it either.
+    expect(credentialIds).not.toContain(standalonePasskeyCredentialId);
   });
 
   test("passkey-list for an unrestricted client sees passkeys of both scopes", async () => {
@@ -247,21 +254,26 @@ test.describe("external-bridge: scope-enforcement", () => {
     const credentialIds = response.data.passkeys.map((p) => p.credentialId);
     expect(credentialIds).toContain(inScopePasskeyCredentialId);
     expect(credentialIds).toContain(outScopePasskeyCredentialId);
+    expect(credentialIds).toContain(standalonePasskeyCredentialId);
   });
 
   // ---------------------------------------------------------------------
   // Finding 2: passkey-get
   // ---------------------------------------------------------------------
 
-  test("passkey-get with an out-of-scope allowCredentials entry finds no match", async () => {
+  test("passkey-get with only out-of-scope allowCredentials entries finds no match", async () => {
     const response = await sendRequestWithRetry<{
       success: boolean;
       error?: string;
     }>(scopedClient, BRIDGE_METHODS.PASSKEY_GET, {
       relyingPartyId: RELYING_PARTY_ID,
       challenge: crypto.randomBytes(32).toString("base64"),
+      // Covers both out-of-scope shapes: item-linked to the out-of-scope
+      // entry, and standalone (itemId = null) — neither is in the scoped
+      // client's tag scope.
       allowCredentials: [
         { id: outScopePasskeyCredentialId, type: "public-key" },
+        { id: standalonePasskeyCredentialId, type: "public-key" },
       ],
     });
 
