@@ -278,16 +278,17 @@ jobs:
           download_artifact() {
             local branch="$1"
             local run_ids
-            # Use -f/-F so gh api URL-encodes the branch name into the query
-            # string. Worktree branches conventionally contain "+" (e.g.
-            # worktree-fix+foo); interpolated raw into "?head_branch=${branch}"
-            # a literal "+" is decoded by GitHub as a space, the filter then
-            # matches no branch, and the API silently falls back to the most
-            # recent runs across ALL branches — downloading an unrelated PR's
-            # binary instead of failing loudly.
-            run_ids=$(gh api "repos/haex-space/haex-vault/actions/workflows/build.yml/runs" \
-              -f "head_branch=${branch}" -f "per_page=10" \
-              --jq '.workflow_runs | .[].id' \
+            # The API's own `head_branch` query filter does not reliably match
+            # branch names containing "+" (worktree branches conventionally
+            # do, e.g. worktree-fix+foo) — true regardless of encoding, this
+            # is a server-side matching gap, not a client escaping issue.
+            # A silently-empty filter previously made the endpoint fall back
+            # to its default (most recent runs across ALL branches),
+            # downloading an unrelated PR's binary instead of failing loudly.
+            # Fetch unfiltered and match head_branch client-side instead.
+            run_ids=$(gh api --method GET "repos/haex-space/haex-vault/actions/workflows/build.yml/runs" \
+              -f "per_page=100" \
+              --jq ".workflow_runs | map(select(.head_branch == \"${branch}\")) | .[].id" \
               2>/dev/null || echo "")
 
             for rid in $run_ids; do
