@@ -184,8 +184,31 @@ export class VaultBridgeClient {
   private stateChangeHandlers: Set<(state: VaultConnectionState) => void> =
     new Set();
   private initPromise: Promise<void>;
+  // Declared core passwords permissions sent in the handshake. Defaults to
+  // an unrestricted grant; pass e.g. [{ target: "work", operation: "readWrite" }]
+  // to declare a tag-scoped grant instead.
+  private passwordsPermissions: Array<{ target: string; operation: string }>;
+  // Extensions (beyond core) this client declares at handshake time, so a
+  // grant can cover core + one or more extensions in a single approval.
+  private requestedExtensions: Array<{
+    name: string;
+    extensionPublicKey: string;
+    actions: string[];
+  }>;
 
-  constructor(options?: { keyPair?: KeyPair }) {
+  constructor(options?: {
+    keyPair?: KeyPair;
+    passwordsPermissions?: Array<{ target: string; operation: string }>;
+    requestedExtensions?: Array<{
+      name: string;
+      extensionPublicKey: string;
+      actions: string[];
+    }>;
+  }) {
+    this.passwordsPermissions = options?.passwordsPermissions ?? [
+      { target: "*", operation: "readWrite" },
+    ];
+    this.requestedExtensions = options?.requestedExtensions ?? [];
     this.initPromise = this.initialize(options?.keyPair);
   }
 
@@ -316,14 +339,15 @@ export class VaultBridgeClient {
         clientId: this.clientId,
         clientName: CLIENT_NAME,
         publicKey: this.publicKeyBase64,
-        // Protocol v2: declare full core passwords access up front. The
-        // external-bridge specs exercise get-logins/create-item/update-item/
-        // TOTP against core, so the approved grant must cover read + write.
+        // Protocol v2: declare core passwords access up front. Defaults to
+        // an unrestricted grant (read + write on every entry); pass
+        // `passwordsPermissions` to the constructor for a tag-scoped grant.
         permissions: {
           core: {
-            passwords: [{ target: "*", operation: "readWrite" }],
+            passwords: this.passwordsPermissions,
           },
         },
+        requestedExtensions: this.requestedExtensions,
       },
     };
 
@@ -1522,30 +1546,56 @@ export class VaultAutomation {
   }
 
   /**
+   * Get all "allow once" (session-only) authorizations — one entry per
+   * (clientId, extensionId) target.
+   */
+  async getSessionAuthorizations(): Promise<
+    Array<{ clientId: string; extensionId: string }>
+  > {
+    return this.invokeTauriCommand<Array<{ clientId: string; extensionId: string }>>(
+      TAURI_COMMANDS.externalBridge.getSessionAuthorizations
+    );
+  }
+
+  /**
+   * Revoke all session ("allow once") authorizations for a client, across
+   * every granted target.
+   */
+  async revokeSessionAuthorization(clientId: string): Promise<void> {
+    await this.invokeTauriCommand(
+      TAURI_COMMANDS.externalBridge.revokeSessionAuthorization,
+      { clientId }
+    );
+  }
+
+  /**
    * Allow a client authorization (approve)
    */
   async approveClient(
     clientId: string,
     clientName: string,
     publicKey: string,
-    extensionId: string
+    extensionIds: string[],
+    remember = true
   ): Promise<void> {
     console.log("[E2E] Calling external_bridge_client_allow with:", {
       clientId,
       clientName,
       publicKey: publicKey.substring(0, 50) + "...",
-      extensionId,
-      remember: true,
+      extensionIds,
+      remember,
     });
     try {
       const result = await this.invokeTauriCommand(TAURI_COMMANDS.externalBridge.clientAllow, {
         clientId,
         clientName,
         publicKey,
-        extensionId,
-        remember: true, // Store permanently in database
+        extensionIds,
+        remember,
       });
       console.log("[E2E] external_bridge_client_allow result:", result);
+
+      if (!remember) return;
 
       // Verify the client was actually saved to the database
       const authorizedClients = await this.invokeTauriCommand<Array<{clientId: string}>>(
@@ -3110,7 +3160,7 @@ export async function authorizeClient(
         pendingAuth.clientId,
         pendingAuth.clientName,
         pendingAuth.publicKey,
-        vaultExtensionId
+        [vaultExtensionId]
       );
 
       // Wait for authorization update
@@ -3119,7 +3169,7 @@ export async function authorizeClient(
 
     // If no pending auth found, try to approve with the client's info
     if (clientId && publicKey) {
-      await vault.approveClient(clientId, CLIENT_NAME, publicKey, vaultExtensionId);
+      await vault.approveClient(clientId, CLIENT_NAME, publicKey, [vaultExtensionId]);
       return await client.waitForAuthorization(timeout);
     }
 
