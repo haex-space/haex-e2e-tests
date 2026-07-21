@@ -680,6 +680,7 @@ jobs:
             test-results/html-report/
             test-results/results.json
             test-results/screenshots/
+            test-results/haex-logs-freeze-repro/
           retention-days: 90
 
       - name: Stop services
