@@ -74,6 +74,7 @@ export async function acceptServerInvite(
 ): Promise<Response> {
   const bodyObj = {
     keyPackages: [crypto.randomBytes(64).toString("base64")],
+    pops: [crypto.randomBytes(64).toString("base64")],
   };
   const bodyStr = JSON.stringify(bodyObj);
 
@@ -189,6 +190,7 @@ export async function claimInviteToken(
   const bodyObj = {
     label: label ?? "E2E Claimer",
     keyPackages: [crypto.randomBytes(64).toString("base64")],
+    pops: [crypto.randomBytes(64).toString("base64")],
   };
   const bodyStr = JSON.stringify(bodyObj);
 
