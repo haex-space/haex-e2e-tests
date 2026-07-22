@@ -81,8 +81,11 @@ export async function uploadKeyPackages(
   const keyPackages = Array.from({ length: count }, () =>
     crypto.randomBytes(64).toString("base64"),
   );
+  const pops = Array.from({ length: count }, () =>
+    crypto.randomBytes(64).toString("base64"),
+  );
 
-  const bodyStr = JSON.stringify({ keyPackages });
+  const bodyStr = JSON.stringify({ keyPackages, pops });
   const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
 
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages`, {
