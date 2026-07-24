@@ -40,6 +40,65 @@ interface FileEntry {
 }
 
 /**
+ * Base58btc (Bitcoin alphabet) encoder — matches `src/utils/auth/spaceId.ts`
+ * in haex-vault so this test constructs a `space_id` the vault's Phase-2
+ * `verify_space_id_binding` will accept. `@haex-space/ucan` exports a
+ * `base58btcEncode` but it prepends the multibase `z` prefix which the
+ * space_id format does NOT use, so we inline the raw encoder instead of
+ * pulling one in and having to strip the prefix.
+ */
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function base58Encode(bytes: Uint8Array): string {
+  if (bytes.length === 0) return "";
+  let zeros = 0;
+  while (zeros < bytes.length && bytes[zeros] === 0) zeros++;
+  const size = Math.ceil(((bytes.length - zeros) * 138) / 100) + 1;
+  const b58 = new Uint8Array(size);
+  let length = 0;
+  for (let i = zeros; i < bytes.length; i++) {
+    let carry: number = bytes[i]!;
+    let j = 0;
+    for (let k = size - 1; (carry !== 0 || j < length) && k >= 0; k--, j++) {
+      carry += 256 * b58[k]!;
+      b58[k] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    length = j;
+  }
+  let it = size - length;
+  while (it < size && b58[it] === 0) it++;
+  let out = "1".repeat(zeros);
+  for (; it < size; it++) out += BASE58_ALPHABET[b58[it]!];
+  return out;
+}
+
+/**
+ * Derive a self-certifying `space_id` from `rootDid` using a fresh random
+ * 16-byte nonce. Layout: `nonce (16 B) ‖ sha256_16(domain_tag ‖ nonce ‖
+ * root_did_utf8)`. Mirrors `deriveSpaceIdAsync` in haex-vault's
+ * `src/utils/auth/spaceId.ts` — Phase 2's `walk_prf_chain` requires the
+ * resolved root DID to bind back to `space_id` via this exact algorithm.
+ */
+const SPACE_ID_DOMAIN_TAG = new TextEncoder().encode("haex/space-id/v1");
+const SPACE_ID_NONCE_LEN = 16;
+const SPACE_ID_HASH_LEN = 16;
+async function deriveSpaceIdAsync(rootDid: string): Promise<string> {
+  const nonce = crypto.webcrypto.getRandomValues(new Uint8Array(SPACE_ID_NONCE_LEN));
+  const didBytes = new TextEncoder().encode(rootDid);
+  const preimage = new Uint8Array(
+    SPACE_ID_DOMAIN_TAG.length + nonce.length + didBytes.length,
+  );
+  preimage.set(SPACE_ID_DOMAIN_TAG, 0);
+  preimage.set(nonce, SPACE_ID_DOMAIN_TAG.length);
+  preimage.set(didBytes, SPACE_ID_DOMAIN_TAG.length + nonce.length);
+  const fullHash = new Uint8Array(await subtle.digest("SHA-256", preimage));
+  const bytes = new Uint8Array(SPACE_ID_NONCE_LEN + SPACE_ID_HASH_LEN);
+  bytes.set(nonce, 0);
+  bytes.set(fullHash.slice(0, SPACE_ID_HASH_LEN), SPACE_ID_NONCE_LEN);
+  return base58Encode(bytes);
+}
+
+/**
  * Load this device's persistent ed25519 key into the peer endpoint before
  * starting it. Both vaults are opened through the UI (Vault A by global-setup,
  * Vault B in beforeAll), so initVaultAsync has registered the own haex_devices
@@ -79,7 +138,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
   let nodeIdA: string;
   let nodeIdB: string;
   let relayUrlA: string | null;
-  const spaceId = `e2e-p2p-space-${Date.now()}`;
+  // Assigned in beforeAll — the self-certifying `space_id` is derived from
+  // the freshly-minted Space-Root DID via `deriveSpaceIdAsync`, so we can't
+  // hard-code it up here anymore. Phase 2's `verify_space_id_binding` on the
+  // vault side rejects any UCAN whose resolved root DID doesn't recompute
+  // this id.
+  let spaceId: string;
   const testDir = `/tmp/e2e-p2p-test-${Date.now()}`;
   let ucanToken: string;
   let ownerIdentityId: string;
@@ -156,13 +220,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
       data: nestedBase64,
     });
 
-    // Create the space record on both vaults so FK constraints on
-    // haex_peer_shares and haex_space_devices are satisfied.
-    // haex_spaces requires owner_identity_id — use the vault's own identity.
-    // We also capture each vault's own DID so subsequent INSERTs into the
-    // CRDT-synced device tables can carry authored_by_did. The Phase 2
+    // Capture each vault's own identity id + DID. The DIDs feed
+    // authored_by_did on subsequent CRDT-synced INSERTs (Phase 2
     // haex_space_devices_ensure_refs / haex_peer_shares_ensure_refs triggers
-    // need that DID to auto-create the haex_devices stub the FK points at.
+    // need that DID to auto-create the haex_devices stub the FK points at).
+    // The identity ids feed haex_spaces.owner_identity_id below.
+    let identityIdB = "";
     for (const vault of [vaultA, vaultB]) {
       const rows = await vault.invokeTauriCommand<[string, string][]>("sql_select_with_crdt", {
         sql: "SELECT id, did FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1",
@@ -173,33 +236,63 @@ test.describe("storage: P2P connectivity between vaults", () => {
         ownerIdentityId = identityId;
         ownDidA = identityDid;
       } else {
+        identityIdB = identityId;
         ownDidB = identityDid;
       }
+    }
 
+    // Mint the Space-Root keypair first so we can derive the self-certifying
+    // `space_id` bound to its DID before creating the haex_spaces rows.
+    //
+    // The UCAN is a two-hop chain that Phase 2's `walk_prf_chain` accepts:
+    //
+    // - Root:  iss = aud = issuerDid, cap = space/admin, prf = []
+    //          (the self-signed Space-Root the walker terminates on)
+    // - Leaf:  iss = issuerDid, aud = ownDidB, cap = space/admin,
+    //          prf = [rootToken] (the delegated grant on the wire)
+    //
+    // The leaf's `aud` MUST equal the DID Vault B signs its quic_did_auth
+    // handshake with — peer_storage's Layer 1.25 check rejects any UCAN
+    // whose `aud` does not match the cryptographically verified peer DID.
+    // Vault B signs with the identity row joined to its device row
+    // (i.did = d.owner_did), which is the same row this beforeAll captured
+    // into `ownDidB`.
+    const keyPair = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+    const rawPublicKey = new Uint8Array(await subtle.exportKey("raw", keyPair.publicKey));
+    const issuerDid = publicKeyToDid(rawPublicKey);
+    const signer = createWebCryptoSigner(keyPair.privateKey);
+    spaceId = await deriveSpaceIdAsync(issuerDid);
+
+    // Create the space record on both vaults so FK constraints on
+    // haex_peer_shares and haex_space_devices are satisfied. haex_spaces
+    // requires owner_identity_id — use each vault's own identity.
+    for (const [vault, identityId] of [
+      [vaultA, ownerIdentityId] as const,
+      [vaultB, identityIdB] as const,
+    ]) {
       await vault.invokeTauriCommand("sql_execute_with_crdt", {
         sql: `INSERT OR IGNORE INTO haex_spaces (id, type, name, owner_identity_id) VALUES (?1, ?2, ?3, ?4)`,
         params: [spaceId, "local", "E2E P2P Space", identityId],
       });
     }
 
-    // Generate a signed UCAN token for P2P authorization.
-    //
-    // The audience must equal the DID Vault B will sign its quic_did_auth
-    // handshake with — peer_storage's Layer 1.25 check rejects any UCAN
-    // whose `aud` does not match the cryptographically verified peer DID
-    // bound to the connection. Vault B signs with the identity row joined
-    // to its device row (i.did = d.owner_did), which is the same row this
-    // beforeAll captured into `ownDidB`.
-    const keyPair = await subtle.generateKey("Ed25519", true, ["sign", "verify"]);
-    const rawPublicKey = new Uint8Array(await subtle.exportKey("raw", keyPair.publicKey));
-    const issuerDid = publicKeyToDid(rawPublicKey);
-    const signer = createWebCryptoSigner(keyPair.privateKey);
+    const expirationUnix = Math.floor(Date.now() / 1000) + 86400;
+    const rootUcan = await createUcan(
+      {
+        issuer: issuerDid,
+        audience: issuerDid,
+        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        expiration: expirationUnix,
+      },
+      signer,
+    );
     ucanToken = await createUcan(
       {
         issuer: issuerDid,
         audience: ownDidB,
         capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
-        expiration: Math.floor(Date.now() / 1000) + 86400,
+        proofs: [rootUcan],
+        expiration: expirationUnix,
       },
       signer,
     );
