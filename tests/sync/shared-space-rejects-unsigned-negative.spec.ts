@@ -49,7 +49,19 @@ const HAS_SEED_HOOK = process.env.E2E_HAS_SEED_HOOK === "1";
 const VAULT_NAME = `shared-space-negative-${Date.now()}`;
 const VAULT_PASSWORD = "shared-space-negative-pw-1234";
 
-test.describe("sync: shared-space apply-gate rejects unsigned changes", () => {
+// Conditional describe. When the vault hook isn't available we use
+// `test.describe.skip` — the ENTIRE describe (fixtures, beforeAll session
+// setup, afterAll teardown) is skipped by Playwright. Putting the gate
+// inside beforeAll would still spin up the WebDriver sessions on both
+// vaults before deciding to skip; CodeRabbit flagged that as needless
+// work when the suite will do nothing.
+//
+// TODO(pr#739): drop the conditional once test_seed_shared_space_delete_log_entry
+// is available in the vault image (Cargo feature `e2e-hooks`) and CI
+// sets E2E_HAS_SEED_HOOK=1 on that image.
+const describeOrSkip = HAS_SEED_HOOK ? test.describe : test.describe.skip;
+
+describeOrSkip("sync: shared-space apply-gate rejects unsigned changes", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 
@@ -57,14 +69,6 @@ test.describe("sync: shared-space apply-gate rejects unsigned changes", () => {
   let vaultB: VaultAutomation;
 
   test.beforeAll(async () => {
-    // TODO(pr#739): remove this skip once test_seed_shared_space_delete_log_entry
-    // is available in the vault image (Cargo feature `e2e-hooks`) and CI sets
-    // E2E_HAS_SEED_HOOK=1 on that image.
-    test.skip(
-      !HAS_SEED_HOOK,
-      "Requires vault Tauri hook test_seed_shared_space_delete_log_entry (haex-vault PR #739, feature=e2e-hooks). Set E2E_HAS_SEED_HOOK=1 to enable.",
-    );
-
     vaultA = new VaultAutomation("A");
     vaultB = new VaultAutomation("B");
     await vaultA.createSession();
@@ -78,7 +82,6 @@ test.describe("sync: shared-space apply-gate rejects unsigned changes", () => {
   });
 
   test.afterAll(async () => {
-    if (!HAS_SEED_HOOK) return;
     await restoreOriginalVault(vaultA, VAULT_NAME).catch(() => {});
     await restoreOriginalVault(vaultB, VAULT_NAME).catch(() => {});
   });

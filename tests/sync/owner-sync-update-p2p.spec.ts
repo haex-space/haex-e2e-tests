@@ -111,6 +111,10 @@ test.describe("sync: owner-vault UPDATE via P2P", () => {
       params: [PWD_UPDATED, PWD_ID],
     });
 
+    // Nudge BOTH sides. Sibling specs (create-p2p, bidirectional) nudge
+    // both — reduces autostart-interval flake when A hasn't yet pushed
+    // and B hasn't yet pulled.
+    await vaultA.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
     await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
 
     await diagnosedSync(

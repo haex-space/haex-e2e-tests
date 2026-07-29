@@ -98,33 +98,63 @@ test.describe("sync: owner-vault convergence across B restart", () => {
   });
 
   test(
-    "DELETE on A, restart B, verify B converges after re-boot",
+    "close B FIRST, DELETE on A while B offline, reopen B, verify convergence",
     async () => {
-      // A performs the DELETE while B is up. We deliberately do NOT
-      // wait for convergence here — the whole point is to force B to
-      // apply the change AFTER its restart, from cold state.
-      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
-        sql: "DELETE FROM haex_passwords_item_details WHERE id = ?1",
-        params: [PWD_ID],
-      });
-
-      // Tear B down. close_database drops AppState; navigate("/") clears
-      // the cached /vault/... URL so the re-open via initializeVaultViaUI
-      // goes through the picker again (fresh onboarding path).
+      // ── 1. Tear B down BEFORE A mutates. ─────────────────────────────────
+      // Sequencing is load-bearing: if B is online when A DELETEs, owner-sync
+      // may converge the delete LIVE (over the existing P2P connection)
+      // BEFORE we close B. Then the subsequent close+reopen becomes cosmetic
+      // — the DB on disk already has the delete applied and any "restart"
+      // path is untested. CodeRabbit flagged the original order as a false
+      // regression guard. Close B first so any convergence must go through
+      // a cold-boot apply cycle.
       await vaultB.invokeTauriCommand("close_database", {}).catch(() => {});
       await vaultB.navigateTo("/");
       await wait(2000);
 
-      // Bring B back. This re-fires the PR #511 autostart:
-      // peer_storage_start + owner_sync_start from a cold AppState.
+      // ── 2. Prove B is actually offline before we touch A. ────────────────
+      // sql_select_with_crdt requires an open database + live AppState. If
+      // close_database really tore down state, this call throws (or returns
+      // an error result). If it succeeds we have a real live DB on B and
+      // the sequencing guarantee is void — surface that immediately rather
+      // than silently retesting live convergence dressed up as cold-boot.
+      let bIsOffline = false;
+      try {
+        await vaultB.invokeTauriCommand("sql_select_with_crdt", {
+          sql: "SELECT id FROM haex_passwords_item_details LIMIT 1",
+          params: [],
+        });
+      } catch {
+        bIsOffline = true;
+      }
+      expect(
+        bIsOffline,
+        "B must be closed (sql_select_with_crdt must throw) before A DELETEs — otherwise this spec tests live convergence, not cold-boot recovery",
+      ).toBe(true);
+
+      // ── 3. DELETE on A with B provably down. ─────────────────────────────
+      // Because B has no live DB / no active peer_storage, this DELETE
+      // cannot arrive on B until B re-boots and pulls it via a fresh sync
+      // cycle. That is the code path this spec is here to test.
+      await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
+        sql: "DELETE FROM haex_passwords_item_details WHERE id = ?1",
+        params: [PWD_ID],
+      });
+      // Small window so any (hypothetical) live-sync path would have fired
+      // before we bring B back up. Any "B raced the close" outcome here is
+      // wrong and should fail below.
+      await wait(1500);
+
+      // ── 4. Bring B back — this re-fires PR #511 autostart from cold. ────
       await diagnosed(vaultB, "restart/reopen-B", () =>
         initializeVaultViaUI(vaultB, VAULT_NAME, VAULT_PASSWORD),
       );
 
-      // Give autostart a beat to bring the endpoint up, then nudge it.
+      // Give autostart a beat, then nudge the loop.
       await wait(3000);
       await vaultB.invokeTauriCommand("owner_sync_force", {}).catch(() => {});
 
+      // ── 5. Assert convergence happens ON THE POST-BOOT PATH. ────────────
       await diagnosedSync(
         { a: vaultA, b: vaultB },
         "restart/post-boot-converge",
