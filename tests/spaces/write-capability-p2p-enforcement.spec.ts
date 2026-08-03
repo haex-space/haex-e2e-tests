@@ -327,6 +327,11 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
       vaultB, `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
       [writeSpaceId, identityB.did],
     );
+    // The invite grants both space/read and space/write (write is always
+    // additive to the base read grant — see SpaceInviteDialog.vue). Both
+    // must land as independent rows: capabilities are orthogonal grants,
+    // not a rank, so claiming must not collapse the set down to one.
+    expect(ucans.some((u) => u.capability === "space/read")).toBe(true);
     expect(ucans.some((u) => u.capability === "space/write")).toBe(true);
   });
 
