@@ -131,6 +131,26 @@ async function registerContactViaJsonImport(
     [identityBDid],
   );
   expect(contacts.length).toBe(1);
+
+  // The DB row landing is not sufficient: `sendInviteViaUI` selects the
+  // contact by reading the reactive `identityStore.contacts` list, which is
+  // a separate (Pinia-cached) read path from the SQL query above. On a slow
+  // CI run the store can still be serving its pre-import snapshot for a
+  // few hundred ms after the DB write commits — `sendInviteViaUI` would
+  // then see only contacts imported by *other* spec files sharing this
+  // vault-A instance and throw "not selectable in invite dialog". Poll the
+  // store directly (not just the DB) so this helper only returns once the
+  // contact this test actually needs is there to select.
+  await pollUntil(
+    () => vaultA.executeScript<boolean>(`
+      const app = document.getElementById('__nuxt')?.__vue_app__;
+      const pinia = app?.config?.globalProperties?.$pinia;
+      const identityStore = pinia?._s?.get('identityStore');
+      const list = identityStore?.contacts ?? [];
+      return list.some(c => c.did === ${JSON.stringify(identityBDid)});
+    `),
+    { timeout: 10_000, interval: 500, label: `identityStore.contacts includes ${label}` },
+  );
 }
 
 /**
@@ -170,7 +190,9 @@ async function attachOwnShare(
 
 /** Starts (if needed) and waits until `local_delivery` is actively syncing `spaceId`. */
 async function ensureLocalDeliveryActive(vault: VaultAutomation, spaceId: string): Promise<void> {
-  await vault.invokeTauriCommand("local_delivery_start", { spaceId }).catch(() => { /* already running */ });
+  await vault.invokeTauriCommand("local_delivery_start", { spaceId }).catch((err) => {
+    console.log(`[QUIC] local_delivery_start(${spaceId}) returned: ${err}`);
+  });
   await pollUntil(
     async () => {
       const status = await vault.invokeTauriCommand<{ activeSpaces?: string[] }>("local_delivery_status", {});
