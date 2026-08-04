@@ -105,6 +105,12 @@ on:
       e2e_tests_ref:
         description: 'haex-e2e-tests branch or SHA for test files (default: main)'
         default: ''
+      haex_vault_artifact:
+        description: 'GitHub artifact name containing a pre-built haex-vault binary (e.g. haex-vault-windows-e2e) — leave empty to build from haex_vault_version instead'
+        default: ''
+      haex_vault_artifact_run_id:
+        description: 'haex-vault build.yml run ID to download haex_vault_artifact from (required if haex_vault_artifact is set)'
+        default: ''
       haex_vault_platform:
         description: 'Which haex-vault binary to test'
         type: choice
