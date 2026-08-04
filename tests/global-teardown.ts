@@ -5,7 +5,7 @@ import * as path from "node:path";
 
 const SESSION_FILE = path.join(os.tmpdir(), "e2e-webdriver-session.json");
 const TAURI_DRIVER_URL = "http://localhost:4444";
-const FFMPEG_PID_FILE = "/tmp/e2e-ffmpeg-recording.pid";
+const FFMPEG_PID_FILE = path.join(os.tmpdir(), "e2e-ffmpeg-recording.pid");
 const VIDEO_OUTPUT_PATH = "/app/test-results/artifacts/desktop-recording.webm";
 
 /**

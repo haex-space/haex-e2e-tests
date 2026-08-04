@@ -1182,7 +1182,7 @@ jobs:
   e2e-results:
     name: E2E Test Results
     runs-on: ubuntu-latest
-    needs: [e2e, e2e-windows, e2e-macos]
+    needs: [e2e, e2e-backend-windows, e2e-windows, e2e-backend-macos, e2e-macos]
     if: always()
 
     outputs:
@@ -1195,11 +1195,19 @@ jobs:
       - name: Check test results
         id: check
         run: |
-          # Only one of e2e/e2e-windows/e2e-macos actually runs per
-          # haex_vault_platform value — the other two report 'skipped',
-          # which must count as OK, not as a failure.
+          # Only one platform's leg (backend + native) actually runs per
+          # haex_vault_platform value — the rest report 'skipped', which
+          # must count as OK, not as a failure. Backend jobs are included so
+          # a backend failure is never masked: after the deadlock fix, the
+          # native job no longer needs-depends on its backend (see e2e-windows/
+          # e2e-macos comments), so it runs standalone and fails on its own
+          # readiness-poll timeout if the backend never came up — but listing
+          # the backend result here too keeps the gate correct even if that
+          # readiness poll ever races past a since-crashed backend.
           FAILED=false
-          for result in "${{ needs.e2e.result }}" "${{ needs.e2e-windows.result }}" "${{ needs.e2e-macos.result }}"; do
+          for result in "${{ needs.e2e.result }}" \
+                        "${{ needs.e2e-backend-windows.result }}" "${{ needs.e2e-windows.result }}" \
+                        "${{ needs.e2e-backend-macos.result }}" "${{ needs.e2e-macos.result }}"; do
             if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               FAILED=true
             fi
