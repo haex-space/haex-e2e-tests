@@ -38,6 +38,7 @@ const PWD_FROM_B_SECRET = "secret-authored-on-b";
  *    on both vaults. Convergence is the assertion.
  */
 test.describe("sync: owner-vault via DB copy", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

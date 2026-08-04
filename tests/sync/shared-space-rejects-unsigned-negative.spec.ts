@@ -62,6 +62,7 @@ const VAULT_PASSWORD = "shared-space-negative-pw-1234";
 const describeOrSkip = HAS_SEED_HOOK ? test.describe : test.describe.skip;
 
 describeOrSkip("sync: shared-space apply-gate rejects unsigned changes", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

@@ -819,7 +819,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Backend ready, waiting for 'E2E Windows' job to finish..."
-          for i in $(seq 1 280); do
+          for _ in $(seq 1 280); do
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
               --jq '.jobs[] | select(.name == "E2E Windows") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
@@ -837,7 +837,12 @@ jobs:
   e2e-windows:
     name: E2E Windows
     runs-on: windows-latest
-    needs: [build-env, e2e-backend-windows]
+    # Deliberately NOT depending on e2e-backend-windows: that job blocks on
+    # this one's conclusion (see its "Wait for Windows E2E job to finish"
+    # step), so needs-ing it back here would deadlock both jobs until the
+    # backend's poll loop times out and tears the stack down unused.
+    # Readiness is gated below instead ("Wait for backend to be ready").
+    needs: build-env
     if: inputs.haex_vault_platform == 'windows'
     timeout-minutes: 45
 
@@ -879,12 +884,18 @@ jobs:
       - name: Install matching Microsoft Edge WebDriver
         shell: pwsh
         run: |
-          $edgeVersion = (Get-Item "$env:ProgramFiles (x86)\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
+          $edgeVersion = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
           Write-Host "Detected Edge version: $edgeVersion"
-          $driverUrl = "https://msedgedriver.azureedge.net/$edgeVersion/edgedriver_win64.zip"
+          $driverUrl = "https://msedgedriver.microsoft.com/$edgeVersion/edgedriver_win64.zip"
           Invoke-WebRequest -Uri $driverUrl -OutFile edgedriver.zip
           Expand-Archive -Path edgedriver.zip -DestinationPath "$env:USERPROFILE\edgedriver"
           echo "$env:USERPROFILE\edgedriver" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Require a pre-built artifact run ID
+        if: inputs.haex_vault_artifact_run_id == ''
+        run: |
+          Write-Host "::error::haex_vault_artifact_run_id is required when haex_vault_platform is 'windows' — there is no build-from-source fallback for native runners yet."
+          exit 1
 
       - name: Download haex-vault Windows binary
         uses: actions/download-artifact@v4
@@ -899,6 +910,28 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
+
+      # e2e-backend-windows is no longer a `needs` dependency (see the comment
+      # on this job's `needs` above), so it may still be pulling/starting its
+      # Docker services when we get here — poll until its port is reachable
+      # over the Tailscale mesh instead of assuming it's already up.
+      - name: Wait for backend to be ready
+        env:
+          BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
+        run: |
+          Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+              if (Test-NetConnection -ComputerName $env:BACKEND_HOST -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
+                  $ready = $true
+                  break
+              }
+              Start-Sleep -Seconds 5
+          }
+          if (!$ready) {
+              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          }
+          Write-Host "Backend is reachable."
 
       - name: Start haex-vault + tauri-driver
         shell: pwsh
@@ -1016,7 +1049,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Backend ready, waiting for 'E2E macOS' job to finish..."
-          for i in $(seq 1 280); do
+          for _ in $(seq 1 280); do
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
               --jq '.jobs[] | select(.name == "E2E macOS") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
@@ -1034,7 +1067,11 @@ jobs:
   e2e-macos:
     name: E2E macOS
     runs-on: macos-latest
-    needs: [build-env, e2e-backend-macos]
+    # Deliberately NOT depending on e2e-backend-macos — see the matching
+    # comment on e2e-windows' `needs` for why (avoids a needs/wait-loop
+    # deadlock). Readiness is gated below instead ("Wait for backend to be
+    # ready").
+    needs: build-env
     if: inputs.haex_vault_platform == 'macos'
     timeout-minutes: 45
 
@@ -1068,13 +1105,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # TODO: verify the exact install command/binary name against
-      # github.com/Choochmeque/tauri-webdriver's README before merging — the
-      # CLI name and cargo-install invocation below are our best reading of
-      # the project's docs at the time of writing, not yet run against a
-      # real macOS runner.
-      - name: Install tauri-webdriver CLI
-        run: cargo install --git https://github.com/Choochmeque/tauri-webdriver tauri-webdriver-cli
+      # Package/binary name confirmed against crates.io metadata for
+      # tauri-webdriver (published as `tauri-webdriver`, binary of the same
+      # name) — still not yet run against a real macOS runner.
+      - name: Install tauri-webdriver
+        run: cargo install tauri-webdriver --locked
+
+      - name: Require a pre-built artifact run ID
+        if: inputs.haex_vault_artifact_run_id == ''
+        run: |
+          echo "::error::haex_vault_artifact_run_id is required when haex_vault_platform is 'macos' — there is no build-from-source fallback for native runners yet."
+          exit 1
 
       - name: Download haex-vault macOS binary
         uses: actions/download-artifact@v4
@@ -1089,6 +1130,25 @@ jobs:
         with:
           authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
+
+      # e2e-backend-macos is no longer a `needs` dependency (see the comment
+      # on this job's `needs` above), so it may still be pulling/starting its
+      # Docker services when we get here — poll until its port is reachable
+      # over the Tailscale mesh instead of assuming it's already up.
+      - name: Wait for backend to be ready
+        env:
+          BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
+        run: |
+          echo "Waiting for backend ($BACKEND_HOST:8000) to become reachable..."
+          for _ in $(seq 1 60); do
+            if nc -z -w 2 "$BACKEND_HOST" 8000 2>/dev/null; then
+              echo "Backend is reachable."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          exit 1
 
       - name: Start haex-vault + tauri-webdriver
         env:

@@ -130,6 +130,7 @@ async function ensureDeviceKeyLoaded(vault: VaultAutomation): Promise<void> {
 }
 
 test.describe("storage: P2P connectivity between vaults", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(30_000); // P2P connection can take a few seconds
 

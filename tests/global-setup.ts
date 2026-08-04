@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { setupMarketplace } from "./marketplace-setup";
 import { VaultAutomation } from "./fixtures";
@@ -6,7 +8,7 @@ import { completeWelcomeOnboarding } from "./helpers/ui/ui-welcome";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
-const SESSION_FILE = "/tmp/e2e-webdriver-session.json";
+const SESSION_FILE = path.join(os.tmpdir(), "e2e-webdriver-session.json");
 const FFMPEG_PID_FILE = "/tmp/e2e-ffmpeg-recording.pid";
 const VIDEO_OUTPUT_PATH = "/app/test-results/artifacts/desktop-recording.webm";
 

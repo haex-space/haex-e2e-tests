@@ -43,6 +43,7 @@ interface PeerStorageStatus {
 }
 
 test.describe("invitations: public invite cannot be claimed with a foreign DID", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(120_000);
 

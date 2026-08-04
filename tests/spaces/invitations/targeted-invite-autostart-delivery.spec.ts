@@ -45,6 +45,7 @@ const VAULT_B_NAME = "Autostart Invitee B";
 const VAULT_B_PASSWORD = "test-password-b";
 
 test.describe("invitations: targeted invite reaches a passive (autostart-only) invitee", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(180_000);
 

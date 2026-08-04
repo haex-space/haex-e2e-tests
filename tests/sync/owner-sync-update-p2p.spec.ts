@@ -35,6 +35,7 @@ const PWD_INITIAL = "initial-secret";
 const PWD_UPDATED = "updated-secret";
 
 test.describe("sync: owner-vault UPDATE via P2P", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

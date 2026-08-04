@@ -54,6 +54,7 @@ const BOOKMARK_COLLECTION_NAME = "multi-table-created-on-A";
 const IDENTITY_UPDATED_NAME = `E2E owner renamed ${Date.now()}`;
 
 test.describe("sync: owner-vault multi-table CRUD via P2P", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

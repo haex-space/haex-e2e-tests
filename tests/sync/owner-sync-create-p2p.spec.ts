@@ -40,6 +40,7 @@ const PWD_ID = "pw-created-post-copy";
 const PWD_SECRET = "secret-authored-after-pairing";
 
 test.describe("sync: owner-vault CREATE via P2P (post-pairing)", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

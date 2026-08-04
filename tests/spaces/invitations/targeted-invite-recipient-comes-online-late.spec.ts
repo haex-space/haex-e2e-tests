@@ -39,6 +39,7 @@ interface PeerStorageStatus {
 }
 
 test.describe("invitations: targeted invite is delivered after recipient comes online late", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   // The flow includes a "wait for at least one transient retry before B
   // comes online" phase which has to outlast the 30-second outbox poll

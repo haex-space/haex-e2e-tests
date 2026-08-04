@@ -27,6 +27,7 @@ const PWD_SECRET = "secret-to-be-deleted";
  * primary key.
  */
 test.describe("sync: owner-vault delete convergence", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

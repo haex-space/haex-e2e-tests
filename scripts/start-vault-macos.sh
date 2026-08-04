@@ -22,7 +22,11 @@ BACKEND_HOST="$2"
 app_dir="$VAULT_BIN_DIR/Haex Vault.app"
 app_exe=""
 for candidate in "$app_dir/Contents/MacOS"/*; do
-  if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+  # actions/download-artifact re-extracts its zip with default (non-executable)
+  # file modes, so the binary needs +x restored before it can be launched —
+  # same reasoning as the Linux job's `chmod +x` after its artifact download.
+  if [ -f "$candidate" ]; then
+    chmod +x "$candidate"
     app_exe="$candidate"
     break
   fi
@@ -53,13 +57,11 @@ fi
 # driver launch below needs it exported directly too.
 export HAEX_VAULT_BINARY_PATH="$app_exe"
 
-# TODO: verify the actual tauri-webdriver CLI binary name/invocation against
-# github.com/Choochmeque/tauri-webdriver's README before merging — this is
-# our best reading of the project's docs at the time of writing, not yet run
-# against a real macOS runner. See the matching TODO on the "Install
-# tauri-webdriver CLI" step in .github/workflows/e2e-tests.yml.
-echo "Starting tauri-webdriver CLI..."
-nohup tauri-webdriver-cli > "$RUNNER_TEMP/tauri-webdriver.log" 2>&1 &
+# Binary name confirmed against crates.io metadata — see the matching note
+# on the "Install tauri-webdriver" step in .github/workflows/e2e-tests.yml.
+# Still not yet run against a real macOS runner.
+echo "Starting tauri-webdriver..."
+nohup tauri-webdriver > "$RUNNER_TEMP/tauri-webdriver.log" 2>&1 &
 echo $! > "$RUNNER_TEMP/tauri-webdriver.pid"
 
 echo "Waiting for WebDriver server to be ready..."
