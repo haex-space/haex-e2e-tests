@@ -209,11 +209,14 @@ native Prozess braucht (die Linux-Jobs bleiben unverändert rein intern).
 
 **Damit das läuft, muss einmalig eingerichtet werden:**
 
-1. Ein Tailscale-Tailnet (kostenloser Tier reicht) + ein OAuth-Client mit
-   Rechten, ephemere Geräte mit dem Tag `tag:ci-e2e` zu registrieren.
-2. Repo-Secrets `TS_OAUTH_CLIENT_ID` / `TS_OAUTH_CLIENT_SECRET` — sowohl in
-   diesem Repo (für direkte push/PR-Trigger) als auch in haex-vault (der
-   `e2e-tests`-Job dort forwarded sie per `secrets: inherit`).
+1. Ein Tailscale-Tailnet (kostenloser Tier reicht) + ein Auth Key (Settings →
+   Keys → Auth keys) mit Tag `tag:ci-e2e`, **Reusable** und **Ephemeral**
+   beide aktiviert (sonst funktioniert nur der allererste CI-Lauf, und alte
+   Geräte räumen sich nie automatisch auf). Läuft nach spätestens 90 Tagen ab
+   und muss dann manuell erneuert werden.
+2. Repo-Secret `TS_AUTHKEY` — sowohl in diesem Repo (für direkte push/PR-
+   Trigger) als auch in haex-vault (der `e2e-tests`-Job dort forwarded es per
+   `secrets: inherit`).
 3. In haex-vault: die Actions-Variable `TAILSCALE_TAILNET_DOMAIN` (die
    MagicDNS-Domain des Tailnets, z.B. `tailXXXX.ts.net`) — wird beim
    E2E-Binary-Build in die CSP eingetragen (`connect-src`), da die

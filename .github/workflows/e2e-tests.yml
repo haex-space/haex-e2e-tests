@@ -62,11 +62,8 @@ on:
       ARTIFACT_TOKEN:
         description: 'Token with permission to download artifacts from other repos'
         required: false
-      TS_OAUTH_CLIENT_ID:
-        description: 'Tailscale OAuth client ID — only required for haex_vault_platform windows/macos (bridges the Linux-hosted backend stack to the native runner)'
-        required: false
-      TS_OAUTH_CLIENT_SECRET:
-        description: 'Tailscale OAuth client secret — see TS_OAUTH_CLIENT_ID'
+      TS_AUTHKEY:
+        description: 'Tailscale reusable + ephemeral auth key (tagged tag:ci-e2e) — only required for haex_vault_platform windows/macos (bridges the Linux-hosted backend stack to the native runner)'
         required: false
     outputs:
       success:
@@ -807,8 +804,7 @@ jobs:
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
           hostname: e2e-backend-win-${{ github.run_id }}
 
@@ -895,8 +891,7 @@ jobs:
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
 
       - name: Start haex-vault + tauri-driver
@@ -1006,8 +1001,7 @@ jobs:
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
           hostname: e2e-backend-mac-${{ github.run_id }}
 
@@ -1087,8 +1081,7 @@ jobs:
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-client-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          authkey: ${{ secrets.TS_AUTHKEY }}
           tags: tag:ci-e2e
 
       - name: Start haex-vault + tauri-webdriver
