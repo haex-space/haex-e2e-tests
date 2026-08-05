@@ -98,7 +98,10 @@ RUN if [ "$USE_PREBUILT_VAULT" = "true" ] && [ -f "/prebuilt/haex-vault/haex-vau
       touch /repos/haex-vault/src-tauri/target/release/.cargo-lock; \
     else \
       echo "Building haex-vault from source (USE_PREBUILT_VAULT=$USE_PREBUILT_VAULT)"; \
-      /root/.cargo/bin/cargo tauri build --no-bundle; \
+      # e2e-hooks: enables test-only Tauri commands (test_seed_shared_space_delete_log_entry)
+      # used by shared-space adversarial specs. Off by default in every non-e2e build.
+      # See haex-vault PR #739.
+      /root/.cargo/bin/cargo tauri build --no-bundle --features e2e-hooks; \
     fi
 
 # Build vault-sdk
