@@ -65,7 +65,7 @@ nohup tauri-webdriver > "$RUNNER_TEMP/tauri-webdriver.log" 2>&1 &
 echo $! > "$RUNNER_TEMP/tauri-webdriver.pid"
 
 echo "Waiting for WebDriver server to be ready..."
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   if curl -s http://localhost:4444/status > /dev/null 2>&1; then
     echo "WebDriver server is ready."
     exit 0

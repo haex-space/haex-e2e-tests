@@ -70,6 +70,10 @@ for ($i = 0; $i -lt 30; $i++) {
     Start-Sleep -Seconds 2
 }
 if (!$ready) {
+    Write-Host '--- tauri-driver stdout ---'
+    Get-Content "$env:RUNNER_TEMP\tauri-driver.log" -ErrorAction SilentlyContinue
+    Write-Host '--- tauri-driver stderr ---'
+    Get-Content "$env:RUNNER_TEMP\tauri-driver-err.log" -ErrorAction SilentlyContinue
     throw 'tauri-driver did not become ready within 60 seconds'
 }
 Write-Host 'tauri-driver is ready.'

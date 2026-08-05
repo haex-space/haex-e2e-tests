@@ -925,15 +925,18 @@ jobs:
         run: |
           Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
           $ready = $false
-          for ($i = 0; $i -lt 60; $i++) {
+          # 12 minutes: observed backend startup (docker image load + compose
+          # health-wait + Tailscale join) takes up to ~8 minutes on a cold
+          # cache, and the client and backend jobs start at the same time.
+          for ($i = 0; $i -lt 90; $i++) {
               if (Test-NetConnection -ComputerName $env:BACKEND_HOST -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
                   $ready = $true
                   break
               }
-              Start-Sleep -Seconds 5
+              Start-Sleep -Seconds 8
           }
           if (!$ready) {
-              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 5 minutes"
+              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 12 minutes"
           }
           Write-Host "Backend is reachable."
 
@@ -1148,14 +1151,17 @@ jobs:
           BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
         run: |
           echo "Waiting for backend ($BACKEND_HOST:8000) to become reachable..."
-          for _ in $(seq 1 60); do
+          # 12 minutes: observed backend startup (docker image load + compose
+          # health-wait + Tailscale join) takes up to ~8 minutes on a cold
+          # cache, and the client and backend jobs start at the same time.
+          for _ in $(seq 1 90); do
             if nc -z -w 2 "$BACKEND_HOST" 8000 2>/dev/null; then
               echo "Backend is reachable."
               exit 0
             fi
-            sleep 5
+            sleep 8
           done
-          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 12 minutes"
           exit 1
 
       - name: Start haex-vault + tauri-webdriver
