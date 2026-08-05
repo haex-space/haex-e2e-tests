@@ -477,6 +477,28 @@ jobs:
           retention-days: 1
           compression-level: 0  # Already gzipped
 
+      # The Linux e2e job gets these for free — they're baked into the
+      # vault-a image it runs directly. The native Windows/macOS runners
+      # never build or load that image (their vault binary is a plain
+      # download), so marketplace-setup.ts's haex-notes bundle + signing key
+      # need to be extracted here and shipped separately.
+      - name: Extract marketplace bundle for native runners
+        run: |
+          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          cid=$(docker create "$VAULT_IMAGE")
+          mkdir -p marketplace-bundle
+          docker cp "$cid:/app/haex-notes.haex" marketplace-bundle/haex-notes.haex
+          docker cp "$cid:/app/haex-notes-public.key" marketplace-bundle/haex-notes-public.key
+          docker rm "$cid" > /dev/null
+          ls -lh marketplace-bundle/
+
+      - name: Upload marketplace bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: marketplace-bundle/
+          retention-days: 1
+
   # Parallel test execution using matrix strategy
   e2e:
     name: E2E Tests - ${{ matrix.shard }}
@@ -915,6 +937,12 @@ jobs:
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
 
+      - name: Download marketplace bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: ./marketplace-bundle
+
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
@@ -958,6 +986,8 @@ jobs:
         id: test
         env:
           CI: true
+          HAEX_NOTES_BUNDLE_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes.haex
+          HAEX_NOTES_PUBLIC_KEY_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes-public.key
         # Not `pnpm test`: that script is `DISPLAY=:1 playwright test` for
         # the Linux container's xvfb, and `DISPLAY=:1 cmd` isn't valid
         # PowerShell/cmd syntax ("'DISPLAY' is not recognized...").
@@ -1151,6 +1181,12 @@ jobs:
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
 
+      - name: Download marketplace bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: ./marketplace-bundle
+
       - name: Join Tailscale
         uses: tailscale/github-action@v3
         with:
@@ -1199,6 +1235,8 @@ jobs:
         id: test
         env:
           CI: true
+          HAEX_NOTES_BUNDLE_PATH: ${{ github.workspace }}/marketplace-bundle/haex-notes.haex
+          HAEX_NOTES_PUBLIC_KEY_PATH: ${{ github.workspace }}/marketplace-bundle/haex-notes-public.key
         # Not `pnpm test`: see the matching note in the Windows job — same
         # DISPLAY=:1 prefix, irrelevant (and unnecessary) outside the Linux
         # container's xvfb setup.

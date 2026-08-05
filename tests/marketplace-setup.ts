@@ -26,9 +26,12 @@ const MARKETPLACE_ANON_KEY = process.env.MARKETPLACE_ANON_KEY ||
 const TEST_EMAIL = "e2e-publisher@haex.space";
 const TEST_PASSWORD = "e2e-test-password-12345";
 
-// Extension bundle path (created by Dockerfile)
-const HAEX_NOTES_BUNDLE = "/app/haex-notes.haex";
-const HAEX_NOTES_PUBLIC_KEY_FILE = "/app/haex-notes-public.key";
+// Extension bundle path — created by the Dockerfile at these exact paths for
+// the Linux job's vault-a container. Native Windows/macOS runners have no
+// such container, so their CI steps download the same files (extracted from
+// the built image) and point here via env vars instead.
+const HAEX_NOTES_BUNDLE = process.env.HAEX_NOTES_BUNDLE_PATH || "/app/haex-notes.haex";
+const HAEX_NOTES_PUBLIC_KEY_FILE = process.env.HAEX_NOTES_PUBLIC_KEY_PATH || "/app/haex-notes-public.key";
 
 // Source of truth for the published version: the haex-notes package the bundle
 // was built from. The Dockerfile clones haextension to /repos and does NOT prune
