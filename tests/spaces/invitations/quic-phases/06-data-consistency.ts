@@ -258,7 +258,7 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     console.log(`[QUIC] Vault B UCAN cleared on leave (was: ${tokenBefore.slice(0, 24)}…) ✓`);
   });
 
-  test("re-invite to same space results in exactly one UCAN row (not two)", async () => {
+  test("re-invite to same space leaves no duplicate UCAN row per capability", async () => {
     const vaultA = state.vaultA!;
     const vaultB = state.vaultB!;
     const identityB = state.identityB!;
@@ -356,10 +356,11 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     `);
     expect(acceptResult.ok, `acceptLocalInviteAsync failed: ${acceptResult.error}`).toBe(true);
 
-    // The actual assertion: exactly one UCAN for (space, B). Before the
-    // fix this was 2 — the stale one + the new one. The poll waits for the
-    // freshly-claimed row to arrive, then a settle window absorbs the case
-    // where the stale duplicate lands a moment AFTER the new one — without
+    // The actual assertion: no duplicate UCAN for (space, B, capability).
+    // Before the fix a capability appeared twice — the stale row plus the
+    // freshly-claimed one. The poll waits for the freshly-claimed row to
+    // arrive, then a settle window absorbs the case where the stale
+    // duplicate lands a moment AFTER the new one — without
     // the settle, the test could see the transient single-row state and
     // pass even though the regression is reproducing. ClaimInvite writes
     // are async wrt. the UI confirmation, so the late-duplicate race is
@@ -377,7 +378,7 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
       { timeout: 30_000, interval: 500, label: "new UCAN row after re-invite" },
     );
     // Settle so a late duplicate insert/replication has a chance to surface
-    // before we assert "exactly one". 2s matches the upper bound of
+    // before we assert "no duplicates". 2s matches the upper bound of
     // ClaimInvite's UCAN-write tail observed on CI.
     await wait(2_000);
     const rows = await sqlQuery<{ token: string; issued_at: number; capability: string }>(
@@ -389,11 +390,24 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     );
 
     // The bug we are guarding against: two coexisting rows for the same
-    // (space_id, audience_did) — the stale leftover from before the leave
-    // and the freshly-claimed one. `persist_claimed_ucan` now writes the
-    // new row first and then DELETEs older rows for the same audience.
-    expect(rows.length).toBe(1);
-    console.log(`[QUIC] Vault B UCAN count after re-invite = ${rows.length} (capability=${rows[0].capability}) ✓`);
+    // (space_id, audience_did, capability) — the stale leftover from before
+    // the leave and the freshly-claimed one. `persist_claimed_ucan` now
+    // writes the new row first and then DELETEs older rows for the same
+    // audience.
+    //
+    // Not a plain `rows.length === 1`: this re-invite grants
+    // ["space/read", "space/write"], and a claim issues one delegated UCAN
+    // *per* granted capability — capabilities are orthogonal grants, not a
+    // rank (haex-vault#756). Counting rows would therefore conflate "stale
+    // duplicate survived" with "second capability was granted". One row per
+    // *distinct* capability is the invariant that actually pins the bug, and
+    // it holds both before and after that change: the stale leftover always
+    // duplicates a capability the re-claim grants again.
+    expect(rows.length, "no UCAN rows survived the settle window").toBeGreaterThan(0);
+    const caps = rows.map((r) => r.capability);
+    expect(new Set(caps).size, `duplicate UCAN rows per capability: ${JSON.stringify(caps)}`)
+      .toBe(rows.length);
+    console.log(`[QUIC] Vault B UCAN rows after re-invite = ${rows.length} (capabilities=${JSON.stringify(caps)}) ✓`);
 
     // Wait briefly for the spaces store to reflect the re-accept (status
     // back to 'active' and member row reinstated) so any later phase that
