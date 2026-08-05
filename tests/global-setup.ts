@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawn, execSync, execFileSync } from "node:child_process";
 import { setupMarketplace } from "./marketplace-setup";
 import { VaultAutomation } from "./fixtures";
@@ -6,8 +8,8 @@ import { completeWelcomeOnboarding } from "./helpers/ui/ui-welcome";
 
 // tauri-driver WebDriver URL
 const TAURI_DRIVER_URL = "http://localhost:4444";
-const SESSION_FILE = "/tmp/e2e-webdriver-session.json";
-const FFMPEG_PID_FILE = "/tmp/e2e-ffmpeg-recording.pid";
+const SESSION_FILE = path.join(os.tmpdir(), "e2e-webdriver-session.json");
+const FFMPEG_PID_FILE = path.join(os.tmpdir(), "e2e-ffmpeg-recording.pid");
 const VIDEO_OUTPUT_PATH = "/app/test-results/artifacts/desktop-recording.webm";
 
 // Test vault configuration
@@ -161,6 +163,11 @@ async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
  * Create a WebDriver session with tauri-driver
  */
 async function createWebDriverSession(): Promise<string> {
+  // Defaults to the Linux Docker container path; the native Windows/macOS
+  // runners (see scripts/start-vault-windows.ps1, start-vault-macos.sh) set
+  // HAEX_VAULT_BINARY_PATH to the downloaded artifact's actual location.
+  const applicationPath =
+    process.env.HAEX_VAULT_BINARY_PATH || "/repos/haex-vault/src-tauri/target/release/haex-vault";
   const response = await fetch(`${TAURI_DRIVER_URL}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -168,7 +175,7 @@ async function createWebDriverSession(): Promise<string> {
       capabilities: {
         alwaysMatch: {
           "tauri:options": {
-            application: "/repos/haex-vault/src-tauri/target/release/haex-vault",
+            application: applicationPath,
           },
         },
       },

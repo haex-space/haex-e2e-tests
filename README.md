@@ -192,6 +192,46 @@ gh workflow run e2e-tests.yml \
 CI=true docker compose -f docker/docker-compose.yml run --rm e2e-test-env pnpm test
 ```
 
+### Windows / macOS E2E (haex_vault_platform)
+
+Standardmäßig läuft die Suite nur gegen die Linux-Binary (Docker, wie oben).
+`haex_vault_platform: windows` bzw. `macos` schaltet zusätzliche Jobs frei,
+die die jeweilige native Binary auf einem GitHub-gehosteten `windows-latest`/
+`macos-latest`-Runner testen — ohne eigene (self-hosted) Runner-Infrastruktur.
+
+Da diese Runner den Docker-Backend-Stack nicht selbst hosten können (kein
+Linux-Container-Support auf `windows-latest`, kein Docker überhaupt auf
+`macos-latest`), läuft der Backend-Stack weiterhin auf einem Linux-Runner und
+wird per **ephemerem Tailscale-Mesh** für die Dauer des jeweiligen Runs
+erreichbar gemacht (`e2e-backend-windows`/`e2e-backend-macos` Jobs).
+`docker/docker-compose.tailscale.yml` published dafür die Ports, die der
+native Prozess braucht (die Linux-Jobs bleiben unverändert rein intern).
+
+**Damit das läuft, muss einmalig eingerichtet werden:**
+
+1. Ein Tailscale-Tailnet (kostenloser Tier reicht) + ein Auth Key (Settings →
+   Keys → Auth keys) mit Tag `tag:ci-e2e`, **Reusable** und **Ephemeral**
+   beide aktiviert (sonst funktioniert nur der allererste CI-Lauf, und alte
+   Geräte räumen sich nie automatisch auf). Läuft nach spätestens 90 Tagen ab
+   und muss dann manuell erneuert werden.
+2. Repo-Secret `TS_AUTHKEY` — sowohl in diesem Repo (für direkte push/PR-
+   Trigger) als auch in haex-vault (der `e2e-tests`-Job dort forwarded es per
+   `secrets: inherit`).
+3. In haex-vault: die Actions-Variable `TAILSCALE_TAILNET_DOMAIN` (die
+   MagicDNS-Domain des Tailnets, z.B. `tailXXXX.ts.net`) — wird beim
+   E2E-Binary-Build in die CSP eingetragen (`connect-src`), da die
+   Tailscale-Hostnamen sonst von der WebView blockiert würden.
+
+**macOS-Sonderfall:** tauri-driver hat kein WKWebView-Support. Der macOS-Pfad
+nutzt stattdessen das community-Projekt
+[Choochmeque/tauri-webdriver](https://github.com/Choochmeque/tauri-webdriver)
+(ein Tauri-Plugin, feature-gated in haex-vaults `Cargo.toml` hinter
+`e2e-webdriver-macos`, nie in Produktions-Builds aktiv). Das Projekt ist noch
+jung (Stand: früh 2026) und nicht offiziell von tauri-apps unterstützt — die
+exakten Install-/CLI-Details in `.github/workflows/e2e-tests.yml` und
+`scripts/start-vault-macos.sh` sind gegen dessen README zu verifizieren,
+bevor der Windows/macOS-Pfad das erste Mal produktiv läuft.
+
 ## Lizenz
 
 MIT

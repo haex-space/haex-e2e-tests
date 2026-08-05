@@ -159,6 +159,7 @@ async function acceptInviteViaUI(
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 test.describe("file-sync: peer-to-local sync rule via manifest", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(120_000);
 

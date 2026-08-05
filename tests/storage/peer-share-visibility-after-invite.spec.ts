@@ -343,6 +343,7 @@ async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string):
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 test.describe("storage: P2P file visibility after QUIC invite accept", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(120_000);
 

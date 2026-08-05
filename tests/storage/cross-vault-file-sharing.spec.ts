@@ -280,6 +280,7 @@ async function dumpSyncDiagnostics(
 // ─── Test Suite ───────────────────────────────────────────────────────────────
 
 test.describe("cross-vault P2P file sharing after real invite", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   // retries=0: Playwright reuses the same WebDriver session across retries,
   // so a failed run leaves the Tauri app in a polluted state (active loops,
   // half-accepted invites, lingering rows). Retries here typically fail with

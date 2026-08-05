@@ -37,6 +37,7 @@ const PWD_INITIAL = "initial-authored-on-A";
 const PWD_UPDATED = "updated-authored-on-B";
 
 test.describe("sync: owner-vault REVERSE UPDATE via P2P (B → A)", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

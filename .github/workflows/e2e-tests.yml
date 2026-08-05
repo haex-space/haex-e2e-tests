@@ -54,9 +54,16 @@ on:
         description: 'haex-e2e-tests branch, tag, or SHA for test files (overrides PR head / main default)'
         type: string
         default: ''
+      haex_vault_platform:
+        description: 'Which haex-vault binary to test: linux (default, Docker-based), windows, or macos (native runner + Tailscale-bridged backend)'
+        type: string
+        default: 'linux'
     secrets:
       ARTIFACT_TOKEN:
         description: 'Token with permission to download artifacts from other repos'
+        required: false
+      TS_AUTHKEY:
+        description: 'Tailscale reusable + ephemeral auth key (tagged tag:ci-e2e) — only required for haex_vault_platform windows/macos (bridges the Linux-hosted backend stack to the native runner)'
         required: false
     outputs:
       success:
@@ -98,6 +105,20 @@ on:
       e2e_tests_ref:
         description: 'haex-e2e-tests branch or SHA for test files (default: main)'
         default: ''
+      haex_vault_artifact:
+        description: 'GitHub artifact name containing a pre-built haex-vault binary (e.g. haex-vault-windows-e2e) — leave empty to build from haex_vault_version instead'
+        default: ''
+      haex_vault_artifact_run_id:
+        description: 'haex-vault build.yml run ID to download haex_vault_artifact from (required if haex_vault_artifact is set)'
+        default: ''
+      haex_vault_platform:
+        description: 'Which haex-vault binary to test'
+        type: choice
+        options:
+          - linux
+          - windows
+          - macos
+        default: linux
 
 jobs:
   # Build Docker image and save it for parallel test jobs
@@ -461,6 +482,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: build-env
+    # inputs.haex_vault_platform is only populated for workflow_call/
+    # workflow_dispatch; direct push/PR triggers on this repo leave it empty,
+    # which must still run the (default) Linux suite unchanged.
+    if: inputs.haex_vault_platform == '' || inputs.haex_vault_platform == 'linux'
 
     strategy:
       fail-fast: false
@@ -688,11 +713,484 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.yml down -v
 
-  # Aggregate results from parallel test jobs
+  # ===========================================================================
+  # WINDOWS / macOS E2E — native runner + Tailscale-bridged backend
+  #
+  # GitHub's windows-latest/macos-latest runners can't run the Linux backend
+  # containers directly (no Linux-container support on windows-latest, no
+  # Docker at all on macos-latest), so each platform gets a paired job: a
+  # Linux job builds the same backend stack as the `e2e` job above (minus
+  # vault-a/vault-b, which run natively on the other runner instead), joins
+  # an ephemeral Tailscale mesh, and stays up until its native-runner partner
+  # finishes (there's no built-in "block until sibling job done" primitive in
+  # Actions, so it polls this run's own job list via `gh api`). The native
+  # job joins the same mesh and reaches the backend via Tailscale MagicDNS
+  # instead of `localhost`/Docker service names.
+  # ===========================================================================
+
+  e2e-backend-windows:
+    name: E2E Backend (for Windows)
+    runs-on: ubuntu-latest
+    needs: build-env
+    if: inputs.haex_vault_platform == 'windows'
+    timeout-minutes: 50
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: ${{ inputs.e2e_tests_ref || ((github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || 'main') }}
+
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+
+      - name: Load Docker images
+        run: |
+          echo "Loading Docker images..."
+          gunzip -c docker-images.tar.gz | docker load
+          docker images
+
+      - name: Pull base images
+        run: |
+          docker pull supabase/postgres:15.8.1.085
+          docker pull supabase/gotrue:v2.169.0
+          docker pull kong:2.8.1
+          docker pull postgrest/postgrest:v12.2.0
+          docker pull supabase/storage-api:v1.14.3
+
+      # Identical to the `e2e` job's "Start services" step — see that step's
+      # inline comments. Deliberately not deduplicated into a composite
+      # action here to keep this change a plain diff against the existing,
+      # battle-tested Linux path.
+      - name: Start backend services
+        env:
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
+          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_db 2>/dev/null | grep -q healthy; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-gotrue sync-realtime sync-kong sync-server
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace-db
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace_db 2>/dev/null | grep -q healthy; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
+          for i in {1..60}; do
+            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
+            REALTIME_STATUS=$(docker inspect --format='{{.State.Health.Status}}' realtime.haex_e2e_sync 2>/dev/null || echo "starting")
+            MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
+            if [ "$SYNC_STATUS" == "healthy" ] && [ "$REALTIME_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
+              echo "All services ready after ~$((i*5))s"
+              break
+            fi
+            sleep 5
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml ps
+
+      # tailnet name is deterministic (run-id based) so the Windows job can
+      # compute the same MagicDNS hostname without querying anything.
+      - name: Join Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci-e2e
+          hostname: e2e-backend-win-${{ github.run_id }}
+
+      - name: Wait for Windows E2E job to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Backend ready, waiting for 'E2E Windows' job to finish..."
+          for _ in $(seq 1 280); do
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+              --jq '.jobs[] | select(.name == "E2E Windows") | .conclusion' 2>/dev/null | head -1)
+            if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
+              echo "E2E Windows finished with: $CONCLUSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Timed out waiting for E2E Windows job — tearing down anyway"
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml down -v
+
+  e2e-windows:
+    name: E2E Windows
+    runs-on: windows-latest
+    # Deliberately NOT depending on e2e-backend-windows: that job blocks on
+    # this one's conclusion (see its "Wait for Windows E2E job to finish"
+    # step), so needs-ing it back here would deadlock both jobs until the
+    # backend's poll loop times out and tears the stack down unused.
+    # Readiness is gated below instead ("Wait for backend to be ready").
+    needs: build-env
+    if: inputs.haex_vault_platform == 'windows'
+    timeout-minutes: 45
+
+    outputs:
+      success: ${{ steps.test.outcome == 'success' }}
+      test_result: ${{ steps.test.outcome }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: ${{ inputs.e2e_tests_ref || ((github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || 'main') }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # package.json has no "packageManager" field (unlike haex-vault),
+          # so pnpm/action-setup can't infer a version on its own — pin the
+          # same major version haex-vault uses for consistency.
+          version: 10
+          run_install: false
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver
+
+      # Microsoft Edge WebDriver must match the Edge build already on the
+      # runner image (tauri-driver on Windows proxies WebView2 through it).
+      - name: Install matching Microsoft Edge WebDriver
+        shell: pwsh
+        run: |
+          $edgeVersion = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
+          Write-Host "Detected Edge version: $edgeVersion"
+          $driverUrl = "https://msedgedriver.microsoft.com/$edgeVersion/edgedriver_win64.zip"
+          Invoke-WebRequest -Uri $driverUrl -OutFile edgedriver.zip
+          Expand-Archive -Path edgedriver.zip -DestinationPath "$env:USERPROFILE\edgedriver"
+          echo "$env:USERPROFILE\edgedriver" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Require a pre-built artifact run ID
+        if: inputs.haex_vault_artifact_run_id == ''
+        run: |
+          Write-Host "::error::haex_vault_artifact_run_id is required when haex_vault_platform is 'windows' — there is no build-from-source fallback for native runners yet."
+          exit 1
+
+      - name: Download haex-vault Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: haex-vault-windows-e2e
+          run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+          path: ./vault-bin
+
+      - name: Join Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci-e2e
+
+      # e2e-backend-windows is no longer a `needs` dependency (see the comment
+      # on this job's `needs` above), so it may still be pulling/starting its
+      # Docker services when we get here — poll until its port is reachable
+      # over the Tailscale mesh instead of assuming it's already up.
+      - name: Wait for backend to be ready
+        env:
+          BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
+        run: |
+          Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
+          $ready = $false
+          for ($i = 0; $i -lt 60; $i++) {
+              if (Test-NetConnection -ComputerName $env:BACKEND_HOST -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
+                  $ready = $true
+                  break
+              }
+              Start-Sleep -Seconds 5
+          }
+          if (!$ready) {
+              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          }
+          Write-Host "Backend is reachable."
+
+      - name: Start haex-vault + tauri-driver
+        shell: pwsh
+        env:
+          # Same run-id-derived hostname the backend job registered under —
+          # Tailscale MagicDNS resolves it without any extra discovery step.
+          BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
+        run: ./scripts/start-vault-windows.ps1 -VaultBinDir "$PWD\vault-bin" -BackendHost $env:BACKEND_HOST
+
+      - name: Run E2E tests (windows)
+        id: test
+        env:
+          CI: true
+        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ inputs.build_type || 'build' }}-${{ github.run_id }}-windows
+          path: |
+            test-results/artifacts/
+            test-results/html-report/
+            test-results/results.json
+          retention-days: 90
+
+      - name: Stop haex-vault + tauri-driver
+        if: always()
+        shell: pwsh
+        run: ./scripts/stop-vault-windows.ps1
+
+  e2e-backend-macos:
+    name: E2E Backend (for macOS)
+    runs-on: ubuntu-latest
+    needs: build-env
+    if: inputs.haex_vault_platform == 'macos'
+    timeout-minutes: 50
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: ${{ inputs.e2e_tests_ref || ((github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || 'main') }}
+
+      - name: Clone dependency repositories
+        run: |
+          mkdir -p repos
+          git clone --depth 1 https://github.com/haex-space/haex-sync-server.git repos/haex-sync-server
+          git clone --depth 1 https://github.com/haex-space/haex-marketplace.git repos/haex-marketplace
+
+      - name: Download Docker images
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-docker-image-${{ github.run_id }}
+
+      - name: Load Docker images
+        run: |
+          gunzip -c docker-images.tar.gz | docker load
+          docker images
+
+      - name: Pull base images
+        run: |
+          docker pull supabase/postgres:15.8.1.085
+          docker pull supabase/gotrue:v2.169.0
+          docker pull kong:2.8.1
+          docker pull postgrest/postgrest:v12.2.0
+          docker pull supabase/storage-api:v1.14.3
+
+      # Identical to the `e2e` job's "Start services" step — see that step's
+      # inline comments.
+      - name: Start backend services
+        env:
+          USE_PREBUILT_VAULT: ${{ needs.build-env.outputs.use_prebuilt_vault }}
+          SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
+          HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_db 2>/dev/null | grep -q healthy; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-gotrue sync-realtime sync-kong sync-server
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace-db
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace_db 2>/dev/null | grep -q healthy; then
+              break
+            fi
+            sleep 2
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace-gotrue marketplace-rest marketplace-storage marketplace-kong marketplace
+          for i in {1..60}; do
+            SYNC_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_sync_server 2>/dev/null || echo "starting")
+            REALTIME_STATUS=$(docker inspect --format='{{.State.Health.Status}}' realtime.haex_e2e_sync 2>/dev/null || echo "starting")
+            MARKETPLACE_STATUS=$(docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null || echo "starting")
+            if [ "$SYNC_STATUS" == "healthy" ] && [ "$REALTIME_STATUS" == "healthy" ] && [ "$MARKETPLACE_STATUS" == "healthy" ]; then
+              echo "All services ready after ~$((i*5))s"
+              break
+            fi
+            sleep 5
+          done
+          docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml ps
+
+      - name: Join Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci-e2e
+          hostname: e2e-backend-mac-${{ github.run_id }}
+
+      - name: Wait for macOS E2E job to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Backend ready, waiting for 'E2E macOS' job to finish..."
+          for _ in $(seq 1 280); do
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+              --jq '.jobs[] | select(.name == "E2E macOS") | .conclusion' 2>/dev/null | head -1)
+            if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
+              echo "E2E macOS finished with: $CONCLUSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Timed out waiting for E2E macOS job — tearing down anyway"
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml down -v
+
+  e2e-macos:
+    name: E2E macOS
+    runs-on: macos-latest
+    # Deliberately NOT depending on e2e-backend-macos — see the matching
+    # comment on e2e-windows' `needs` for why (avoids a needs/wait-loop
+    # deadlock). Readiness is gated below instead ("Wait for backend to be
+    # ready").
+    needs: build-env
+    if: inputs.haex_vault_platform == 'macos'
+    timeout-minutes: 45
+
+    outputs:
+      success: ${{ steps.test.outcome == 'success' }}
+      test_result: ${{ steps.test.outcome }}
+
+    steps:
+      - name: Checkout E2E tests
+        uses: actions/checkout@v4
+        with:
+          repository: haex-space/haex-e2e-tests
+          ref: ${{ inputs.e2e_tests_ref || ((github.event_name == 'pull_request' && github.repository == 'haex-space/haex-e2e-tests') && github.event.pull_request.head.sha || 'main') }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # package.json has no "packageManager" field (unlike haex-vault),
+          # so pnpm/action-setup can't infer a version on its own — pin the
+          # same major version haex-vault uses for consistency.
+          version: 10
+          run_install: false
+
+      - name: Install pnpm dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Package/binary name confirmed against crates.io metadata for
+      # tauri-webdriver (published as `tauri-webdriver`, binary of the same
+      # name) — still not yet run against a real macOS runner.
+      - name: Install tauri-webdriver
+        run: cargo install tauri-webdriver --locked
+
+      - name: Require a pre-built artifact run ID
+        if: inputs.haex_vault_artifact_run_id == ''
+        run: |
+          echo "::error::haex_vault_artifact_run_id is required when haex_vault_platform is 'macos' — there is no build-from-source fallback for native runners yet."
+          exit 1
+
+      - name: Download haex-vault macOS binary
+        uses: actions/download-artifact@v4
+        with:
+          name: haex-vault-macos-e2e
+          run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
+          path: ./vault-bin
+
+      - name: Join Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          tags: tag:ci-e2e
+
+      # e2e-backend-macos is no longer a `needs` dependency (see the comment
+      # on this job's `needs` above), so it may still be pulling/starting its
+      # Docker services when we get here — poll until its port is reachable
+      # over the Tailscale mesh instead of assuming it's already up.
+      - name: Wait for backend to be ready
+        env:
+          BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
+        run: |
+          echo "Waiting for backend ($BACKEND_HOST:8000) to become reachable..."
+          for _ in $(seq 1 60); do
+            if nc -z -w 2 "$BACKEND_HOST" 8000 2>/dev/null; then
+              echo "Backend is reachable."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          exit 1
+
+      - name: Start haex-vault + tauri-webdriver
+        env:
+          BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
+        run: ./scripts/start-vault-macos.sh "$PWD/vault-bin" "$BACKEND_HOST"
+
+      - name: Run E2E tests (macos)
+        id: test
+        env:
+          CI: true
+        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-${{ inputs.build_type || 'build' }}-${{ github.run_id }}-macos
+          path: |
+            test-results/artifacts/
+            test-results/html-report/
+            test-results/results.json
+          retention-days: 90
+
+      - name: Stop haex-vault + tauri-webdriver
+        if: always()
+        run: ./scripts/stop-vault-macos.sh
+
+  # Aggregate results from parallel test jobs. Legs not requested for this
+  # platform run show up as 'skipped' (not 'success'/'failure') and must not
+  # fail the gate — only an actually-run leg failing should.
   e2e-results:
     name: E2E Test Results
     runs-on: ubuntu-latest
-    needs: e2e
+    needs: [e2e, e2e-backend-windows, e2e-windows, e2e-backend-macos, e2e-macos]
     if: always()
 
     outputs:
@@ -705,8 +1203,25 @@ jobs:
       - name: Check test results
         id: check
         run: |
-          # Check if all matrix jobs succeeded
-          if [ "${{ needs.e2e.result }}" == "success" ]; then
+          # Only one platform's leg (backend + native) actually runs per
+          # haex_vault_platform value — the rest report 'skipped', which
+          # must count as OK, not as a failure. Backend jobs are included so
+          # a backend failure is never masked: after the deadlock fix, the
+          # native job no longer needs-depends on its backend (see e2e-windows/
+          # e2e-macos comments), so it runs standalone and fails on its own
+          # readiness-poll timeout if the backend never came up — but listing
+          # the backend result here too keeps the gate correct even if that
+          # readiness poll ever races past a since-crashed backend.
+          FAILED=false
+          for result in "${{ needs.e2e.result }}" \
+                        "${{ needs.e2e-backend-windows.result }}" "${{ needs.e2e-windows.result }}" \
+                        "${{ needs.e2e-backend-macos.result }}" "${{ needs.e2e-macos.result }}"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              FAILED=true
+            fi
+          done
+
+          if [ "$FAILED" == "false" ]; then
             echo "success=true" >> $GITHUB_OUTPUT
             echo "result=success" >> $GITHUB_OUTPUT
             echo "✅ All E2E tests passed" >> $GITHUB_STEP_SUMMARY

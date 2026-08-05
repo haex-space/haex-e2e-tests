@@ -9,6 +9,8 @@ import { WebSocket as WS } from "ws";
 import * as crypto from "crypto";
 import * as fs from "node:fs";
 import * as http from "node:http";
+import * as os from "node:os";
+import * as path from "node:path";
 
 // Import command constants from vault-sdk
 // In container: vault-sdk is linked via pnpm link /repos/vault-sdk
@@ -1000,7 +1002,7 @@ export interface SyncEvent {
 }
 
 // Session file path (shared with global-setup.ts)
-const SESSION_FILE = "/tmp/e2e-webdriver-session.json";
+const SESSION_FILE = path.join(os.tmpdir(), "e2e-webdriver-session.json");
 
 /**
  * Helper class for automating haex-vault via tauri-driver WebDriver
@@ -1045,7 +1047,7 @@ export class VaultAutomation {
     // For multi-vault tests, each instance has its own session file
     const sessionFile = this.instance === "A"
       ? SESSION_FILE
-      : `/tmp/e2e-webdriver-session-${this.instance.toLowerCase()}.json`;
+      : path.join(os.tmpdir(), `e2e-webdriver-session-${this.instance.toLowerCase()}.json`);
 
     try {
       const fs = await import("node:fs");
@@ -1084,7 +1086,9 @@ export class VaultAutomation {
    * Uses http module when Host header override is needed (Node.js fetch doesn't handle this)
    */
   async createNewSession(): Promise<void> {
-    const vaultBinaryPath = "/repos/haex-vault/src-tauri/target/release/haex-vault";
+    // See global-setup.ts's createWebDriverSession for the same override.
+    const vaultBinaryPath =
+      process.env.HAEX_VAULT_BINARY_PATH || "/repos/haex-vault/src-tauri/target/release/haex-vault";
 
     const capabilities = {
       capabilities: {
@@ -1136,7 +1140,7 @@ export class VaultAutomation {
     const nodeFs = await import("node:fs");
     const sessionFile = this.instance === "A"
       ? SESSION_FILE
-      : `/tmp/e2e-webdriver-session-${this.instance.toLowerCase()}.json`;
+      : path.join(os.tmpdir(), `e2e-webdriver-session-${this.instance.toLowerCase()}.json`);
     nodeFs.writeFileSync(sessionFile, JSON.stringify({ sessionId: this.sessionId }));
 
     // Wait for the app to be fully ready
@@ -1953,9 +1957,9 @@ export class VaultAutomation {
       base64Data = data.value;
     }
 
-    // Save to /tmp with timestamp
+    // Save to the OS temp dir with timestamp
     const timestamp = Date.now();
-    const filepath = `/tmp/e2e-screenshot-${this.instance}-${filename}-${timestamp}.png`;
+    const filepath = path.join(os.tmpdir(), `e2e-screenshot-${this.instance}-${filename}-${timestamp}.png`);
 
     // Write base64 to file using Node.js fs
     const fs = await import("fs");

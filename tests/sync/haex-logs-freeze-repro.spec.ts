@@ -62,6 +62,7 @@ const SYNC_LOOP_SOURCE = "SyncLoop";
 const ARTEFACT_DIR = "test-results/haex-logs-freeze-repro";
 
 test.describe("sync: haex_logs_no_sync 2-device freeze repro (capture-only)", () => {
+  test.skip(!!process.env.HAEX_VAULT_BINARY_PATH, "multi-vault instance B is not available on native Windows/macOS E2E runners yet");
   test.describe.configure({ mode: "serial" });
   test.setTimeout(240_000);
 

@@ -1,0 +1,35 @@
+# Tailscale-bridge overrides: publish the backend ports a native
+# Windows/macOS runner needs to reach over the Tailscale mesh (see the
+# e2e-backend-windows/e2e-backend-macos jobs in .github/workflows/e2e-tests.yml).
+# The Linux `e2e` job never uses this file — vault-a/vault-b there talk to
+# these services over the internal `e2e-network` bridge, which needs no
+# host-published ports at all.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d ...
+#
+# marketplace-kong is remapped to host 8001 (not 8000) because sync-kong
+# already claims host 8000 — both listen on container port 8000 internally,
+# which is fine on the docker bridge but collides if both map to the same
+# host port.
+
+services:
+  sync-kong:
+    ports:
+      - "8000:8000"
+
+  marketplace-kong:
+    ports:
+      - "8001:8000"
+
+  marketplace:
+    ports:
+      - "3001:3001"
+
+  sync-db:
+    ports:
+      - "5432:5432"
+
+  iroh-relay:
+    ports:
+      - "3340:3340"
