@@ -53,10 +53,12 @@ $driverProcess = Start-Process -FilePath 'tauri-driver' -PassThru `
 $driverProcess.Id | Out-File -FilePath "$env:RUNNER_TEMP\tauri-driver.pid" -Encoding utf8
 
 Write-Host "Waiting for tauri-driver to be ready..."
+# A cold runner's first launch needs longer than the original 60s budget —
+# observed run took ~2 minutes just to start answering /status at all.
 $ready = $false
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 60; $i++) {
     try {
-        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 5
         if ($response.StatusCode -eq 200) {
             $ready = $true
             break
@@ -67,13 +69,13 @@ for ($i = 0; $i -lt 30; $i++) {
             throw "tauri-driver exited early with code $($driverProcess.ExitCode)"
         }
     }
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 }
 if (!$ready) {
     Write-Host '--- tauri-driver stdout ---'
     Get-Content "$env:RUNNER_TEMP\tauri-driver.log" -ErrorAction SilentlyContinue
     Write-Host '--- tauri-driver stderr ---'
     Get-Content "$env:RUNNER_TEMP\tauri-driver-err.log" -ErrorAction SilentlyContinue
-    throw 'tauri-driver did not become ready within 60 seconds'
+    throw 'tauri-driver did not become ready within 8 minutes'
 }
 Write-Host 'tauri-driver is ready.'

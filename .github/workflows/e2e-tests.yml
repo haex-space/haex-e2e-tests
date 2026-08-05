@@ -822,7 +822,7 @@ jobs:
           echo "Backend ready, waiting for 'E2E Windows' job to finish..."
           for _ in $(seq 1 280); do
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name == "E2E Windows") | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name | endswith("E2E Windows")) | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E Windows finished with: $CONCLUSION"
               exit 0
@@ -1060,7 +1060,7 @@ jobs:
           echo "Backend ready, waiting for 'E2E macOS' job to finish..."
           for _ in $(seq 1 280); do
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name == "E2E macOS") | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name | endswith("E2E macOS")) | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E macOS finished with: $CONCLUSION"
               exit 0
@@ -1165,6 +1165,12 @@ jobs:
             sleep 8
           done
           echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 12 minutes"
+          echo "--- tailscale status ---"
+          sudo tailscale status || true
+          echo "--- tailscale ping ($BACKEND_HOST) ---"
+          sudo tailscale ping -c 1 "$BACKEND_HOST" || true
+          echo "--- DNS resolution ---"
+          dscacheutil -q host -a name "$BACKEND_HOST" || true
           exit 1
 
       - name: Start haex-vault + tauri-webdriver
