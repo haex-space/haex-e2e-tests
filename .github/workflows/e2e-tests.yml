@@ -1169,12 +1169,17 @@ jobs:
           # 12 minutes: observed backend startup (docker image load + compose
           # health-wait + Tailscale join) takes up to ~8 minutes on a cold
           # cache, and the client and backend jobs start at the same time.
+          # -w 2 was too tight: these two ephemeral cloud runners never get a
+          # direct P2P path (both behind NAT), so every connection goes
+          # through a DERP relay — `tailscale ping` confirmed the tunnel
+          # itself was up (pong via DERP) while a 2s nc connect still failed
+          # 90/90 times, so the relayed handshake needs more than 2s to land.
           for _ in $(seq 1 90); do
-            if nc -z -w 2 "$BACKEND_HOST" 8000 2>/dev/null; then
+            if nc -z -w 6 "$BACKEND_HOST" 8000 2>/dev/null; then
               echo "Backend is reachable."
               exit 0
             fi
-            sleep 8
+            sleep 4
           done
           echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 12 minutes"
           echo "--- tailscale status ---"
