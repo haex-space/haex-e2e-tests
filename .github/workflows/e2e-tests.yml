@@ -954,7 +954,11 @@ jobs:
         id: test
         env:
           CI: true
-        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+        # Not `pnpm test`: that script is `DISPLAY=:1 playwright test` for
+        # the Linux container's xvfb, and `DISPLAY=:1 cmd` isn't valid
+        # PowerShell/cmd syntax ("'DISPLAY' is not recognized...").
+        # Windows/macOS have a real GUI, so DISPLAY is irrelevant here.
+        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
 
       - name: Upload test artifacts
         if: always()
@@ -1182,7 +1186,10 @@ jobs:
         id: test
         env:
           CI: true
-        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+        # Not `pnpm test`: see the matching note in the Windows job — same
+        # DISPLAY=:1 prefix, irrelevant (and unnecessary) outside the Linux
+        # container's xvfb setup.
+        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
 
       - name: Upload test artifacts
         if: always()
