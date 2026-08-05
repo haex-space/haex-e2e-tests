@@ -821,8 +821,12 @@ jobs:
         run: |
           echo "Backend ready, waiting for 'E2E Windows' job to finish..."
           for _ in $(seq 1 280); do
+            # Exact names only: an `endswith` match here also catches the
+            # linux/macos legs' OWN "E2E Windows" placeholder job (skipped
+            # immediately by its `if:`), which made this resolve after 1s
+            # against the wrong leg and tear the backend down mid-test.
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name | endswith("E2E Windows")) | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name == "E2E Windows" or .name == "e2e-tests (windows, haex-vault-windows-e2e) / E2E Windows") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E Windows finished with: $CONCLUSION"
               exit 0
@@ -1063,8 +1067,12 @@ jobs:
         run: |
           echo "Backend ready, waiting for 'E2E macOS' job to finish..."
           for _ in $(seq 1 280); do
+            # Exact names only: an `endswith` match here also catches the
+            # linux/windows legs' OWN "E2E macOS" placeholder job (skipped
+            # immediately by its `if:`), which made this resolve after 1s
+            # against the wrong leg and tear the backend down mid-test.
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name | endswith("E2E macOS")) | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name == "E2E macOS" or .name == "e2e-tests (macos, haex-vault-macos-e2e) / E2E macOS") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E macOS finished with: $CONCLUSION"
               exit 0
