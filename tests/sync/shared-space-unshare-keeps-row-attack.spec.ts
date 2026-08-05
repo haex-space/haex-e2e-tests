@@ -42,6 +42,7 @@ import { test, expect, VaultAutomation } from "../fixtures";
 import { initializeVaultViaUI } from "../helpers/ui/ui-vault";
 import {
   ensureStubExtensionTable,
+  ensureSpaceRow,
   insertBusinessRow,
   deleteBusinessRow,
   businessRowExists,
@@ -70,6 +71,10 @@ test.describe("sync: shared-space unshare keeps row (delete-log with no local re
     await initializeVaultViaUI(vault, "Delete Propagation Test", "test-pw");
 
     await ensureStubExtensionTable(vault);
+
+    // The scenario's premise is that this vault *was* in SPACE_X before the
+    // unshare, so the space exists locally — only its register entry is gone.
+    await ensureSpaceRow(vault, SPACE_X, "Unshare Race Space X");
 
     // Best-effort cleanup from prior runs.
     await deleteBusinessRow(vault, rowId);

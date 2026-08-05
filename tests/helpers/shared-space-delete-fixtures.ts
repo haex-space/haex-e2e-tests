@@ -17,7 +17,7 @@
 // hook does not exercise. That task needs a different driver.
 
 import type { VaultAutomation } from "../fixtures";
-import { sqlQuery } from "./ui/utils";
+import { pollUntil, sqlQuery } from "./ui/utils";
 
 // ============================================================================
 // Types — mirror the vault's ts-rs bindings for `TestSeedDeleteLogReport` etc.
@@ -91,6 +91,44 @@ export async function ensureStubExtensionTable(vault: VaultAutomation): Promise<
       haex_hlc TEXT
     )`,
     params: [],
+  });
+}
+
+/** Ensure `spaceId` exists as a row in `haex_spaces`.
+ *
+ * `haex_shared_space_sync.space_id` carries a FK to `haex_spaces(id)`, so
+ * `insertRegisterRow` fails with "FOREIGN KEY constraint failed" for a space
+ * id these specs invented. The specs model membership purely through register
+ * rows — the space row itself is only needed to satisfy that constraint and to
+ * keep the scenario coherent (the attacker *is* in SPACE_X, the victim *is* in
+ * SPACE_Y), so a minimal raw row is enough. No CRDT plumbing, matching
+ * `ensureStubExtensionTable`.
+ *
+ * `owner_identity_id` is NOT NULL with its own FK to `haex_identities(id)`, so
+ * it is filled from this vault's own identity. Idempotent across reruns on a
+ * persistent vault.
+ */
+export async function ensureSpaceRow(
+  vault: VaultAutomation,
+  spaceId: string,
+  name = spaceId,
+): Promise<void> {
+  // The identity is written asynchronously after vault init, so poll rather
+  // than read once — same pattern the QUIC specs use for their identities.
+  const ownerId = await pollUntil(
+    async () => {
+      const rows = await sqlQuery<{ id: string }>(
+        vault,
+        `SELECT id FROM haex_identities WHERE private_key IS NOT NULL LIMIT 1`,
+      );
+      return rows.length > 0 ? rows[0].id : null;
+    },
+    { timeout: 30_000, interval: 1_000, label: "own identity for space owner" },
+  );
+  await vault.invokeTauriCommand("sql_execute", {
+    sql: `INSERT OR IGNORE INTO haex_spaces (id, type, status, name, owner_identity_id)
+          VALUES (?1, 'local', 'active', ?2, ?3)`,
+    params: [spaceId, name, ownerId],
   });
 }
 

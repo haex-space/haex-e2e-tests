@@ -39,6 +39,7 @@ import { test, expect, VaultAutomation } from "../fixtures";
 import { initializeVaultViaUI } from "../helpers/ui/ui-vault";
 import {
   ensureStubExtensionTable,
+  ensureSpaceRow,
   insertBusinessRow,
   deleteBusinessRow,
   businessRowExists,
@@ -77,6 +78,13 @@ test.describe("sync: shared-space delete NotSharedInSpace forgery attack", () =>
 
     // Ensure the stub-extension business table exists on this vault.
     await ensureStubExtensionTable(vault);
+
+    // Both spaces need a row in `haex_spaces`: `haex_shared_space_sync
+    // .space_id` carries a FK to it, so the SPACE_Y register insert below
+    // fails without one. SPACE_X gets a row too — the forgery premise is that
+    // the attacker really is in SPACE_X, they just don't share this row there.
+    await ensureSpaceRow(vault, SPACE_Y, "Victim Space Y");
+    await ensureSpaceRow(vault, SPACE_X, "Attacker Space X");
 
     // Best-effort cleanup of any residual state from a prior run.
     await deleteBusinessRow(vault, rowId);
