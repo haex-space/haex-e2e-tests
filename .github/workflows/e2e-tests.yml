@@ -254,6 +254,7 @@ jobs:
         with:
           name: ${{ inputs.haex_vault_artifact }}
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./docker/prebuilt/haex-vault
 
@@ -906,6 +907,7 @@ jobs:
         with:
           name: haex-vault-windows-e2e
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
 
@@ -1133,6 +1135,7 @@ jobs:
         with:
           name: haex-vault-macos-e2e
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
 
