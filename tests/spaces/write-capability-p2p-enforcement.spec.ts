@@ -67,13 +67,21 @@ const CONTACT_LABEL = "WriteCap Vault B Contact";
  * Registers `identityBDid` as a contact on `vaultA` via the JSON-import flow
  * (Settings → Contacts → Add → From file). Duplicated from
  * `quic-phases/01-setup.ts` — see file header for why.
+ *
+ * Returns the label the contact is *actually* stored under, which is not
+ * necessarily `label`: contacts are keyed by DID, and the import upserts
+ * without renaming an existing row. Vault A is shared with every other spec
+ * in this shard, and `quic-phases/01-setup.ts` imports the same Vault B DID
+ * as "Vault B Contact" — so whichever spec runs first wins the name, and
+ * `sendInviteViaUI` (which selects by rendered label, not DID) must be given
+ * the surviving one.
  */
 async function registerContactViaJsonImport(
   vaultA: VaultAutomation,
   identityBDid: string,
   nodeIdB: string,
   label: string,
-): Promise<void> {
+): Promise<string> {
   const identityPayload = JSON.stringify({
     did: identityBDid,
     name: label,
@@ -141,16 +149,25 @@ async function registerContactViaJsonImport(
   // vault-A instance and throw "not selectable in invite dialog". Poll the
   // store directly (not just the DB) so this helper only returns once the
   // contact this test actually needs is there to select.
-  await pollUntil(
-    () => vaultA.executeScript<boolean>(`
+  //
+  // Read the name back out of the same store the dropdown renders from,
+  // rather than trusting `label`: if another spec already imported this DID,
+  // the upsert kept that spec's name and the dropdown will never show ours.
+  const effectiveLabel = await pollUntil(
+    () => vaultA.executeScript<string | null>(`
       const app = document.getElementById('__nuxt')?.__vue_app__;
       const pinia = app?.config?.globalProperties?.$pinia;
       const identityStore = pinia?._s?.get('identityStore');
       const list = identityStore?.contacts ?? [];
-      return list.some(c => c.did === ${JSON.stringify(identityBDid)});
+      const hit = list.find(c => c.did === ${JSON.stringify(identityBDid)});
+      return hit?.name || null;
     `),
     { timeout: 10_000, interval: 500, label: `identityStore.contacts includes ${label}` },
   );
+  if (effectiveLabel !== label) {
+    console.log(`[QUIC] Contact for Vault B is stored as "${effectiveLabel}", not "${label}" — using the stored name`);
+  }
+  return effectiveLabel!;
 }
 
 /**
@@ -214,6 +231,8 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
   let identityB: { id: string; did: string };
   let readOnlySpaceId: string;
   let writeSpaceId: string;
+  // Resolved from the store after the import — see registerContactViaJsonImport.
+  let contactLabel: string;
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -268,7 +287,8 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
   });
 
   test("register Vault B as a contact on Vault A", async () => {
-    await registerContactViaJsonImport(vaultA, identityB.did, nodeIdB, CONTACT_LABEL);
+    contactLabel = await registerContactViaJsonImport(vaultA, identityB.did, nodeIdB, CONTACT_LABEL);
+    expect(contactLabel).toBeTruthy();
   });
 
   test("create read-only-test space on Vault A, invite Vault B read-only, and accept", async () => {
@@ -277,7 +297,7 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
     await ensureDeviceRegistered(vaultA, readOnlySpaceId, nodeIdA, identityA.did);
     await ensureLocalDeliveryActive(vaultA, readOnlySpaceId);
 
-    await sendInviteViaUI(vaultA, READ_ONLY_SPACE_NAME, CONTACT_LABEL, false);
+    await sendInviteViaUI(vaultA, READ_ONLY_SPACE_NAME, contactLabel, false);
     await pollUntil(
       async () => {
         const invites = await sqlQuery<{ id: string }>(
@@ -332,7 +352,7 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
     await ensureDeviceRegistered(vaultA, writeSpaceId, nodeIdA, identityA.did);
     await ensureLocalDeliveryActive(vaultA, writeSpaceId);
 
-    await sendInviteViaUI(vaultA, WRITE_SPACE_NAME, CONTACT_LABEL, true);
+    await sendInviteViaUI(vaultA, WRITE_SPACE_NAME, contactLabel, true);
     await pollUntil(
       async () => {
         const invites = await sqlQuery<{ id: string }>(
