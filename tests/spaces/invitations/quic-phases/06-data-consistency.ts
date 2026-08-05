@@ -403,6 +403,7 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     // *distinct* capability is the invariant that actually pins the bug, and
     // it holds both before and after that change: the stale leftover always
     // duplicates a capability the re-claim grants again.
+    expect(rows.length, "no UCAN rows survived the settle window").toBeGreaterThan(0);
     const caps = rows.map((r) => r.capability);
     expect(new Set(caps).size, `duplicate UCAN rows per capability: ${JSON.stringify(caps)}`)
       .toBe(rows.length);
