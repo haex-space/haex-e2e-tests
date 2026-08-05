@@ -865,6 +865,10 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
+          # package.json has no "packageManager" field (unlike haex-vault),
+          # so pnpm/action-setup can't infer a version on its own — pin the
+          # same major version haex-vault uses for consistency.
+          version: 10
           run_install: false
 
       - name: Install pnpm dependencies
@@ -1094,6 +1098,10 @@ jobs:
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
+          # package.json has no "packageManager" field (unlike haex-vault),
+          # so pnpm/action-setup can't infer a version on its own — pin the
+          # same major version haex-vault uses for consistency.
+          version: 10
           run_install: false
 
       - name: Install pnpm dependencies
