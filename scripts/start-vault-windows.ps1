@@ -79,3 +79,22 @@ if (!$ready) {
     throw 'tauri-driver did not become ready within 8 minutes'
 }
 Write-Host 'tauri-driver is ready.'
+
+# Diagnostic: every check of this port so far (this script's own, and the
+# Playwright test process's later ones) has been cross-process/cross-tool,
+# so it was never clear whether the port stops responding at some point
+# after this, or whether "readiness" itself is somehow tool-dependent.
+# Re-check from THIS SAME process/tool for the next ~30s to isolate that.
+Write-Host 'Re-checking tauri-driver readiness for the next 30s (diagnostic)...'
+for ($i = 0; $i -lt 15; $i++) {
+    Start-Sleep -Seconds 2
+    $httpOk = $false
+    try {
+        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 3
+        $httpOk = ($response.StatusCode -eq 200)
+    } catch {
+        $httpOk = $false
+    }
+    $tcpOk = Test-NetConnection -ComputerName 'localhost' -Port 4444 -InformationLevel Quiet -WarningAction SilentlyContinue
+    Write-Host "  +$((($i + 1) * 2))s: HTTP=$httpOk TCP=$tcpOk process.HasExited=$($driverProcess.HasExited)"
+}
