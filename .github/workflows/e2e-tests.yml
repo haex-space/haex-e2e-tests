@@ -1202,6 +1202,17 @@ jobs:
           BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
         run: |
           echo "Waiting for backend ($BACKEND_HOST:8000) to become reachable..."
+          # Root cause (found via the route/curl diagnostics below on a prior
+          # run): routing is fine (utun4 correctly owns 100.64.0.0/10) and
+          # `tailscale ping` succeeds, but that's resolved through tailscaled's
+          # own control socket, not the OS resolver — `curl`/`nc` against the
+          # MagicDNS hostname fail with "Could not resolve host", and
+          # dscacheutil has been empty in every diagnostic dump for the same
+          # reason. MagicDNS split-DNS isn't usable by ordinary processes on
+          # this runner. Resolve the peer's IP via `tailscale ip` (proven to
+          # work — it's answered the same way `tailscale ping` is) and use
+          # that IP for everything downstream instead of the hostname.
+          #
           # 18 minutes, wall-clock (not iteration count): observed backend
           # startup (docker image load + compose health-wait + Tailscale
           # join) has ranged from ~8 to ~12 minutes across runs. A fixed
@@ -1209,46 +1220,47 @@ jobs:
           # the per-attempt timeout or sleep — e.g. bumping nc's -w from 2
           # to 6 while cutting sleep 8->4 (for DERP-relayed connections
           # needing more than 2s to land) accidentally HALVED the total
-          # budget to 6 minutes whenever nc fails fast (host not yet known
-          # to DNS), which is exactly what happened on a run where the
-          # backend needed 11m50s to even join Tailscale.
+          # budget to 6 minutes whenever nc fails fast, which is exactly
+          # what happened on a run where the backend needed 11m50s to even
+          # join Tailscale.
           DEADLINE=$((SECONDS + 18 * 60))
+          BACKEND_IP=""
           while [ $SECONDS -lt $DEADLINE ]; do
-            if nc -z -w 6 "$BACKEND_HOST" 8000 2>/dev/null; then
-              echo "Backend is reachable."
+            if [ -z "$BACKEND_IP" ]; then
+              BACKEND_IP=$(tailscale ip -4 "$BACKEND_HOST" 2>/dev/null || true)
+            fi
+            if [ -n "$BACKEND_IP" ] && nc -z -w 6 "$BACKEND_IP" 8000 2>/dev/null; then
+              echo "Backend is reachable at $BACKEND_IP."
+              echo "BACKEND_IP=$BACKEND_IP" >> "$GITHUB_ENV"
               exit 0
             fi
             sleep 5
           done
-          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 18 minutes"
+          echo "::error::Backend at $BACKEND_HOST:8000 (resolved: ${BACKEND_IP:-<unresolved>}) did not become reachable within 18 minutes"
           echo "--- tailscale status ---"
           sudo tailscale status || true
           echo "--- tailscale ping ($BACKEND_HOST) ---"
           sudo tailscale ping -c 1 "$BACKEND_HOST" || true
           echo "--- DNS resolution ---"
           dscacheutil -q host -a name "$BACKEND_HOST" || true
-          # Userspace-networking (no kernel route) theory is ruled out: 5
-          # real utun interfaces exist and `tailscale netcheck` reports a
-          # fully healthy daemon (UDP ok, DERP reachable). But `tailscale
-          # ping` doesn't prove OS-level routing either — it's answered by
-          # tailscaled itself over its own control socket, never touching
-          # the kernel routing table a plain nc/curl connection depends on.
-          # Check that table directly, and get a real TCP-level error
-          # (nc -z just reports pass/fail with no reason).
           echo "--- utun interfaces ---"
           ifconfig | grep -A3 utun || true
           echo "--- tailscale netcheck ---"
           sudo tailscale netcheck || true
-          BACKEND_IP=$(tailscale ip -4 "$BACKEND_HOST" 2>/dev/null || true)
           echo "--- route to $BACKEND_HOST ($BACKEND_IP) ---"
           [ -n "$BACKEND_IP" ] && route -n get "$BACKEND_IP" || true
-          echo "--- curl -v attempt ---"
-          curl -v --connect-timeout 6 "http://$BACKEND_HOST:8000/" 2>&1 || true
+          echo "--- curl -v attempt (by IP) ---"
+          [ -n "$BACKEND_IP" ] && curl -v --connect-timeout 6 "http://$BACKEND_IP:8000/" 2>&1 || true
           exit 1
 
       - name: Start haex-vault + tauri-webdriver
         env:
-          BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
+          # MagicDNS hostname resolution doesn't work for ordinary processes
+          # on this runner (see the note above) — BACKEND_IP was resolved via
+          # `tailscale ip` and exported by the previous step; falling back to
+          # the hostname would only matter if that step exited 0 without ever
+          # setting it, which doesn't happen.
+          BACKEND_HOST: ${{ env.BACKEND_IP }}
         run: ./scripts/start-vault-macos.sh "$PWD/vault-bin" "$BACKEND_HOST"
 
       - name: Run E2E tests (macos)

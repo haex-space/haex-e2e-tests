@@ -155,9 +155,12 @@ async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
       lastError = `HTTP ${response.status}`;
     } catch (error) {
       // Silently swallowing this was exactly why waitForTauriDriver's
-      // repeated 60s timeouts on Windows were a mystery for so long — log
-      // whenever the failure reason changes so the next run says why.
-      const message = error instanceof Error ? error.message : String(error);
+      // repeated 60s timeouts on Windows were a mystery for so long. Once
+      // logged, it turned out to be undici's generic "fetch failed" —
+      // that's just a wrapper; the actual errno/reason is on .cause and
+      // was still being lost. Log both so the next run says why.
+      const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
+      const message = `${error instanceof Error ? error.message : String(error)}${cause ? ` (cause: ${cause instanceof Error ? cause.message : String(cause)})` : ""}`;
       if (message !== lastError) {
         console.log("[Setup] tauri-driver not ready yet:", message);
         lastError = message;
