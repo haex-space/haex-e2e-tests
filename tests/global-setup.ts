@@ -696,11 +696,17 @@ async function globalSetup() {
     console.log("[Setup] Tier seeding skipped:", (error as Error).message?.substring(0, 100));
   }
 
-  // Wait for X11 display to be ready before starting screen recording
-  await waitForX11Display();
+  // X11 + ffmpeg screen recording only apply to the Linux container's
+  // virtual display. Native Windows/macOS runners (HAEX_VAULT_BINARY_PATH
+  // set — see the note on createWebDriverSession below) have a real GUI
+  // and no X11 server at all, so both would just burn their timeouts here.
+  if (!process.env.HAEX_VAULT_BINARY_PATH) {
+    // Wait for X11 display to be ready before starting screen recording
+    await waitForX11Display();
 
-  // Start screen recording early to capture the entire test session
-  startScreenRecording();
+    // Start screen recording early to capture the entire test session
+    startScreenRecording();
+  }
 
   // Clean up any old WebDriver session before creating a new one
   await cleanupOldSession();
