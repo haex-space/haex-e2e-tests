@@ -1227,15 +1227,23 @@ jobs:
           sudo tailscale ping -c 1 "$BACKEND_HOST" || true
           echo "--- DNS resolution ---"
           dscacheutil -q host -a name "$BACKEND_HOST" || true
-          # tailscale ping succeeding via DERP while nc never once connects
-          # in 18 real minutes (backend confirmed online 11+ of those) points
-          # at tailscaled running in userspace-networking mode here (no real
-          # utun/kernel route, so only tailscaled's own internal ping works —
-          # any other process has no route to the tailnet at all). Confirm.
+          # Userspace-networking (no kernel route) theory is ruled out: 5
+          # real utun interfaces exist and `tailscale netcheck` reports a
+          # fully healthy daemon (UDP ok, DERP reachable). But `tailscale
+          # ping` doesn't prove OS-level routing either — it's answered by
+          # tailscaled itself over its own control socket, never touching
+          # the kernel routing table a plain nc/curl connection depends on.
+          # Check that table directly, and get a real TCP-level error
+          # (nc -z just reports pass/fail with no reason).
           echo "--- utun interfaces ---"
           ifconfig | grep -A3 utun || true
           echo "--- tailscale netcheck ---"
           sudo tailscale netcheck || true
+          BACKEND_IP=$(tailscale ip -4 "$BACKEND_HOST" 2>/dev/null || true)
+          echo "--- route to $BACKEND_HOST ($BACKEND_IP) ---"
+          [ -n "$BACKEND_IP" ] && route -n get "$BACKEND_IP" || true
+          echo "--- curl -v attempt ---"
+          curl -v --connect-timeout 6 "http://$BACKEND_HOST:8000/" 2>&1 || true
           exit 1
 
       - name: Start haex-vault + tauri-webdriver
