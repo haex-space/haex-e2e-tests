@@ -2783,7 +2783,34 @@ export class VaultAutomation {
       throw new Error(`Install dialog for ${extensionName} did not appear or complete`);
     }
 
+    // The dialog closing is not proof the backend actually registered the
+    // extension — on native macOS runners this UI closes near-instantly
+    // (no confirmation modal renders at all) while the Rust-side install
+    // (bundle verification, migrations) is still in flight, so callers used
+    // to race ahead into get_all_extensions() before it landed. Confirm
+    // against the same source the specs assert on instead of trusting the UI.
+    const confirmed = await this.waitForExtensionInstalled(extensionName, 30000);
+    if (!confirmed) {
+      throw new Error(`Extension ${extensionName} did not appear in get_all_extensions after install`);
+    }
+
     console.log(`[E2E] Extension ${extensionName} installation completed via UI`);
+  }
+
+  private async waitForExtensionInstalled(extensionName: string, timeout: number): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        const extensions = await this.invokeTauriCommand<{ name: string }[]>("get_all_extensions", {});
+        if (extensions.some((ext) => ext.name === extensionName)) {
+          return true;
+        }
+      } catch {
+        // Backend may still be mid-install; keep polling until timeout.
+      }
+      await this.wait(500);
+    }
+    return false;
   }
 
   /**

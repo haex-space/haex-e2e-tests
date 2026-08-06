@@ -992,7 +992,15 @@ jobs:
         # the Linux container's xvfb, and `DISPLAY=:1 cmd` isn't valid
         # PowerShell/cmd syntax ("'DISPLAY' is not recognized...").
         # Windows/macOS have a real GUI, so DISPLAY is irrelevant here.
-        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+        #
+        # --project=chromium excludes the `flake-prone-first` project
+        # (playwright.config.ts), which is exclusively the two-vault QUIC
+        # invite-flow suite (spaces/invitations/quic-invite-flow.spec.ts).
+        # That suite needs a second app instance (Vault B); this job's
+        # start-vault-windows.ps1 only starts one, so it fails with
+        # `getaddrinfo ENOTFOUND vault-b` every time — a scoping mismatch,
+        # not a bug to chase here.
+        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge --project=chromium
 
       - name: Upload test artifacts
         if: always()
@@ -1272,7 +1280,11 @@ jobs:
         # Not `pnpm test`: see the matching note in the Windows job — same
         # DISPLAY=:1 prefix, irrelevant (and unnecessary) outside the Linux
         # container's xvfb setup.
-        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+        #
+        # --project=chromium: see the matching note in the Windows job —
+        # this leg also only starts a single app instance (Vault A), so the
+        # two-vault `flake-prone-first` QUIC suite can't run here either.
+        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge --project=chromium
 
       - name: Upload test artifacts
         if: always()
