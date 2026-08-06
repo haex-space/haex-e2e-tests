@@ -144,6 +144,7 @@ function startScreenRecording(): void {
  */
 async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
   const start = Date.now();
+  let lastError = "";
   while (Date.now() - start < timeout) {
     try {
       const response = await fetch(`${TAURI_DRIVER_URL}/status`);
@@ -151,11 +152,20 @@ async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
         console.log("[Setup] tauri-driver is ready");
         return true;
       }
-    } catch {
-      // Not ready yet
+      lastError = `HTTP ${response.status}`;
+    } catch (error) {
+      // Silently swallowing this was exactly why waitForTauriDriver's
+      // repeated 60s timeouts on Windows were a mystery for so long — log
+      // whenever the failure reason changes so the next run says why.
+      const message = error instanceof Error ? error.message : String(error);
+      if (message !== lastError) {
+        console.log("[Setup] tauri-driver not ready yet:", message);
+        lastError = message;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  console.log("[Setup] waitForTauriDriver giving up, last error:", lastError);
   return false;
 }
 
