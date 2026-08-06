@@ -48,10 +48,27 @@ foreach ($key in $envVars.Keys) {
 }
 
 Write-Host "Starting tauri-driver..."
-$driverProcess = Start-Process -FilePath 'tauri-driver' -PassThru `
-    -RedirectStandardOutput "$env:RUNNER_TEMP\tauri-driver.log" `
-    -RedirectStandardError "$env:RUNNER_TEMP\tauri-driver-err.log"
-$driverProcess.Id | Out-File -FilePath "$env:RUNNER_TEMP\tauri-driver.pid" -Encoding utf8
+# GitHub's Windows runner assigns each step's process tree to a Job Object
+# that is torn down (killing all descendants) when the step's own process
+# exits. A Start-Process child inherits that job, so tauri-driver was
+# reliably alive for this entire step (confirmed via a same-process
+# HTTP+TCP re-check that stayed green for 30 straight seconds) yet
+# completely unreachable in the very next step, every single run — not
+# flaky timing, a step-boundary kill. Win32_Process.Create() launches via
+# WMI's provider host (wmiprvse.exe) instead of as a child of this shell,
+# so the process survives past this step. Use the resolved binary path
+# rather than relying on PATH lookup, since a WMI-launched process doesn't
+# necessarily inherit this shell's PATH.
+$logPath = "$env:RUNNER_TEMP\tauri-driver.log"
+$errPath = "$env:RUNNER_TEMP\tauri-driver-err.log"
+$tauriDriverExe = "$env:CARGO_HOME\bin\tauri-driver.exe"
+$commandLine = "cmd.exe /c `"$tauriDriverExe`" > `"$logPath`" 2> `"$errPath`""
+$processInfo = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $commandLine; CurrentDirectory = (Get-Location).Path }
+if ($processInfo.ReturnValue -ne 0) {
+    throw "Failed to start tauri-driver via WMI (ReturnValue=$($processInfo.ReturnValue))"
+}
+$driverProcessId = $processInfo.ProcessId
+$driverProcessId | Out-File -FilePath "$env:RUNNER_TEMP\tauri-driver.pid" -Encoding utf8
 
 Write-Host "Waiting for tauri-driver to be ready..."
 # A cold runner's first launch needs longer than the original 60s budget —
@@ -65,37 +82,18 @@ for ($i = 0; $i -lt 60; $i++) {
             break
         }
     } catch {
-        if ($driverProcess.HasExited) {
-            Get-Content "$env:RUNNER_TEMP\tauri-driver-err.log" -ErrorAction SilentlyContinue
-            throw "tauri-driver exited early with code $($driverProcess.ExitCode)"
+        if (-not (Get-Process -Id $driverProcessId -ErrorAction SilentlyContinue)) {
+            Get-Content $errPath -ErrorAction SilentlyContinue
+            throw "tauri-driver exited early (PID $driverProcessId no longer running)"
         }
     }
     Start-Sleep -Seconds 3
 }
 if (!$ready) {
     Write-Host '--- tauri-driver stdout ---'
-    Get-Content "$env:RUNNER_TEMP\tauri-driver.log" -ErrorAction SilentlyContinue
+    Get-Content $logPath -ErrorAction SilentlyContinue
     Write-Host '--- tauri-driver stderr ---'
-    Get-Content "$env:RUNNER_TEMP\tauri-driver-err.log" -ErrorAction SilentlyContinue
+    Get-Content $errPath -ErrorAction SilentlyContinue
     throw 'tauri-driver did not become ready within 8 minutes'
 }
 Write-Host 'tauri-driver is ready.'
-
-# Diagnostic: every check of this port so far (this script's own, and the
-# Playwright test process's later ones) has been cross-process/cross-tool,
-# so it was never clear whether the port stops responding at some point
-# after this, or whether "readiness" itself is somehow tool-dependent.
-# Re-check from THIS SAME process/tool for the next ~30s to isolate that.
-Write-Host 'Re-checking tauri-driver readiness for the next 30s (diagnostic)...'
-for ($i = 0; $i -lt 15; $i++) {
-    Start-Sleep -Seconds 2
-    $httpOk = $false
-    try {
-        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 3
-        $httpOk = ($response.StatusCode -eq 200)
-    } catch {
-        $httpOk = $false
-    }
-    $tcpOk = Test-NetConnection -ComputerName 'localhost' -Port 4444 -InformationLevel Quiet -WarningAction SilentlyContinue
-    Write-Host "  +$((($i + 1) * 2))s: HTTP=$httpOk TCP=$tcpOk process.HasExited=$($driverProcess.HasExited)"
-}
