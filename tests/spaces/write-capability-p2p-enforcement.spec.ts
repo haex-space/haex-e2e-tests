@@ -40,7 +40,6 @@ import { pollUntil, sqlQuery, wait } from "../helpers/ui/utils";
 import { clickTestId, elementExists, mousedownClickFound } from "../helpers/ui/ui-primitives";
 import { initializeVaultViaUI, openSettingsCategory, startP2PEndpoint } from "../helpers/ui/ui-vault";
 import {
-  acceptInviteViaUI,
   createLocalSpaceViaUI,
   ensureDeviceRegistered,
   sendInviteViaUI,
@@ -219,6 +218,103 @@ async function ensureLocalDeliveryActive(vault: VaultAutomation, spaceId: string
   );
 }
 
+/**
+ * Accepts the pending invite for `spaceId` by driving the same store action
+ * the Accept button issues, with the invite payload loaded from the DB.
+ *
+ * Not `acceptInviteViaUI`: that helper clicks the first Accept button inside
+ * the first `[class*="rounded-lg"]` element whose text contains the space
+ * name. `querySelectorAll` returns document order, so an outer wrapper that
+ * contains our card also "contains the space name" — and its first Accept
+ * button can belong to a *different* pending invite. Vault B is shared with
+ * every other spec in this shard and accumulates pending invites, so the
+ * click reports success while our invite stays `pending` until the poll
+ * times out — exactly what CI showed: `Accept button clicked: true` followed
+ * by 45s without a single status transition.
+ *
+ * `quic-phases/06-data-consistency.ts` hit the same selector ambiguity (two
+ * cards matching one space name) and resolved it the same way. Selecting the
+ * row by `space_id` is unambiguous where the rendered name is not, and a
+ * failing claim now surfaces its actual error instead of a silent timeout.
+ */
+async function acceptInviteViaStore(vault: VaultAutomation, spaceId: string): Promise<void> {
+  // `acceptInviteViaUI` navigated here first; keep that so the spaces store is
+  // instantiated in Pinia by the time we reach for it.
+  await openSettingsCategory(vault, "spaces");
+  await wait(1000);
+
+  const rows = await sqlQuery<{
+    id: string;
+    space_id: string;
+    space_name: string | null;
+    space_type: string | null;
+    origin_url: string | null;
+    inviter_did: string;
+    inviter_label: string | null;
+    inviter_avatar: string | null;
+    inviter_avatar_options: string | null;
+    inviter_relay_url: string | null;
+    space_endpoints: string | null;
+    token_id: string | null;
+  }>(
+    vault,
+    `SELECT id, space_id, space_name, space_type, origin_url,
+            inviter_did, inviter_label, inviter_avatar, inviter_avatar_options, inviter_relay_url,
+            space_endpoints, token_id
+     FROM haex_pending_invites
+     WHERE space_id = ?1 AND status = 'pending'
+     ORDER BY created_at DESC LIMIT 1`,
+    [spaceId],
+  );
+  expect(rows.length, `no pending invite row for space ${spaceId}`).toBe(1);
+  const invite = rows[0];
+
+  const result = await vault.executeScript<{ ok: boolean; error: string | null }>(`
+    const app = document.getElementById('__nuxt')?.__vue_app__;
+    const pinia = app?.config?.globalProperties?.$pinia;
+    const spacesStore = pinia?._s?.get('spacesStore');
+    if (!spacesStore) {
+      return { ok: false, error: 'spacesStore not found in pinia' };
+    }
+    try {
+      // snake_case DB columns → the camelCase invite shape
+      // acceptLocalInviteAsync expects.
+      await spacesStore.acceptLocalInviteAsync({
+        id: ${JSON.stringify(invite.id)},
+        spaceId: ${JSON.stringify(invite.space_id)},
+        spaceName: ${JSON.stringify(invite.space_name)},
+        spaceType: ${JSON.stringify(invite.space_type)},
+        originUrl: ${JSON.stringify(invite.origin_url)},
+        inviterDid: ${JSON.stringify(invite.inviter_did)},
+        inviterLabel: ${JSON.stringify(invite.inviter_label)},
+        inviterAvatar: ${JSON.stringify(invite.inviter_avatar)},
+        inviterAvatarOptions: ${JSON.stringify(invite.inviter_avatar_options)},
+        inviterRelayUrl: ${JSON.stringify(invite.inviter_relay_url)},
+        spaceEndpoints: ${JSON.stringify(invite.space_endpoints)},
+        tokenId: ${JSON.stringify(invite.token_id)},
+      });
+      return { ok: true, error: null };
+    } catch (e) {
+      return { ok: false, error: e?.message ?? String(e) };
+    }
+  `);
+  expect(result.ok, `acceptLocalInviteAsync failed: ${result.error}`).toBe(true);
+
+  // ClaimInvite is an async QUIC roundtrip — the store call returns before
+  // the status lands.
+  await pollUntil(
+    async () => {
+      const r = await sqlQuery<{ status: string }>(
+        vault,
+        `SELECT status FROM haex_pending_invites WHERE id = ?1`,
+        [invite.id],
+      );
+      return r[0]?.status === "accepted";
+    },
+    { timeout: 45_000, interval: 1_000, label: `invite ${invite.id.slice(0, 8)}… accepted` },
+  );
+}
+
 test.describe("shared spaces: write-capability enforcement on the real P2P apply path", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(180_000);
@@ -307,7 +403,7 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
       },
       { timeout: 60_000, interval: 2_000, label: "read-only invite delivery to Vault B" },
     );
-    await acceptInviteViaUI(vaultB, READ_ONLY_SPACE_NAME, readOnlySpaceId);
+    await acceptInviteViaStore(vaultB, readOnlySpaceId);
 
     const ucans = await sqlQuery<{ capability: string }>(
       vaultB, `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
@@ -363,7 +459,7 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
       { timeout: 60_000, interval: 2_000, label: "write-capability invite delivery to Vault B" },
     );
 
-    await acceptInviteViaUI(vaultB, WRITE_SPACE_NAME, writeSpaceId);
+    await acceptInviteViaStore(vaultB, writeSpaceId);
 
     const ucans = await sqlQuery<{ capability: string }>(
       vaultB, `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
