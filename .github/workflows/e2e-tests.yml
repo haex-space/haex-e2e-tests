@@ -1227,6 +1227,15 @@ jobs:
           sudo tailscale ping -c 1 "$BACKEND_HOST" || true
           echo "--- DNS resolution ---"
           dscacheutil -q host -a name "$BACKEND_HOST" || true
+          # tailscale ping succeeding via DERP while nc never once connects
+          # in 18 real minutes (backend confirmed online 11+ of those) points
+          # at tailscaled running in userspace-networking mode here (no real
+          # utun/kernel route, so only tailscaled's own internal ping works —
+          # any other process has no route to the tailnet at all). Confirm.
+          echo "--- utun interfaces ---"
+          ifconfig | grep -A3 utun || true
+          echo "--- tailscale netcheck ---"
+          sudo tailscale netcheck || true
           exit 1
 
       - name: Start haex-vault + tauri-webdriver

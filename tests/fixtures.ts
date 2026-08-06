@@ -7,10 +7,21 @@ import {
 } from "@playwright/test";
 import { WebSocket as WS } from "ws";
 import * as crypto from "crypto";
+import * as dns from "node:dns";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// tauri-driver binds "localhost:4444" to 127.0.0.1 only. On the native
+// Windows runner, Node's default DNS order resolves "localhost" to ::1
+// first, so every fetch() to it hit a refused/unreachable IPv6 loopback and
+// never fell back — global-setup.ts's waitForTauriDriver() failed for the
+// full 60s timeout even though tauri-driver was confirmed up (the fixture
+// PowerShell script's own check, a separate HTTP client, succeeded in ~2s).
+// Forcing IPv4-first here (not changing the URL) keeps the Host header
+// exactly "localhost:4444", which tauri-driver validates (see below).
+dns.setDefaultResultOrder("ipv4first");
 
 // Import command constants from vault-sdk
 // In container: vault-sdk is linked via pnpm link /repos/vault-sdk
