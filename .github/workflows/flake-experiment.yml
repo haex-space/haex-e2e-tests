@@ -212,7 +212,19 @@ jobs:
           download_artifact() {
             local branch="$1"
             local run_ids
-            run_ids=$(gh api "repos/haex-space/haex-vault/actions/workflows/build.yml/runs?head_branch=${branch}&per_page=10" \
+            # The filter parameter for this endpoint is `branch`. `head_branch`
+            # is not one — the API ignores unknown query parameters, so it
+            # silently returned the most recent runs across ALL branches and we
+            # downloaded an unrelated branch's binary while logging it as this
+            # one. Verified 2026-08-06 against haex-vault (3443 runs total):
+            #   -f head_branch=develop → 3443, all from another branch
+            #   -f branch=develop      →  277, all head_branch == develop
+            #   -f branch=<no-runs>    →    0  (correctly empty, no fallback)
+            # Server-side filtering also means page 1 already holds the newest
+            # matching runs, so no pagination over unrelated history is needed.
+            run_ids=$(gh api --method GET "repos/haex-space/haex-vault/actions/workflows/build.yml/runs" \
+              -f "branch=${branch}" \
+              -f "per_page=10" \
               --jq '.workflow_runs | .[].id' \
               2>/dev/null || echo "")
 
