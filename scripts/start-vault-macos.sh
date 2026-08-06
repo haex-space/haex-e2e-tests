@@ -19,7 +19,16 @@ set -euo pipefail
 VAULT_BIN_DIR="$1"
 BACKEND_HOST="$2"
 
-app_dir="$VAULT_BIN_DIR/Haex Vault.app"
+# build.yml uploads both "bundle/macos/Haex Vault.app" and "database" in one
+# artifact, so actions/upload-artifact roots the zip at their common parent
+# ("release/") — the app ends up nested under "bundle/macos/", not directly
+# in VAULT_BIN_DIR. Search for it instead of assuming a fixed depth so this
+# doesn't silently break again if the upload paths change.
+app_dir=$(find "$VAULT_BIN_DIR" -maxdepth 4 -type d -name "Haex Vault.app" | head -1)
+if [ -z "$app_dir" ]; then
+  echo "::error::Haex Vault.app not found anywhere under $VAULT_BIN_DIR"
+  exit 1
+fi
 app_exe=""
 for candidate in "$app_dir/Contents/MacOS"/*; do
   # actions/download-artifact re-extracts its zip with default (non-executable)
