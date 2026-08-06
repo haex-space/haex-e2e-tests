@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, execSync, execFileSync } from "node:child_process";
@@ -140,38 +141,46 @@ function startScreenRecording(): void {
 }
 
 /**
- * Wait for tauri-driver to be ready
+ * Check whether something is listening on 127.0.0.1:4444.
+ */
+function checkTauriDriverPort(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port: 4444, timeout: 2000 });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Wait for tauri-driver to be ready.
+ *
+ * A plain TCP check, not an HTTP fetch to /status: on Windows, tauri-driver
+ * answers /status itself and either works fine. But on macOS,
+ * tauri-webdriver is a pure intermediary proxying 4444 <-> the app's
+ * embedded plugin on 4445 (github.com/Choochmeque/tauri-webdriver) — /status
+ * gets proxied straight through, and nothing listens on 4445 until a
+ * WebDriver session actually spawns the app, so it fails with "connection
+ * refused" for as long as we wait, regardless of timeout length. All we
+ * actually need here is confirmation the driver's own listener is up before
+ * createWebDriverSession() below sends it a real request.
  */
 async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
   const start = Date.now();
-  let lastError = "";
   while (Date.now() - start < timeout) {
-    try {
-      const response = await fetch(`${TAURI_DRIVER_URL}/status`);
-      if (response.ok) {
-        console.log("[Setup] tauri-driver is ready");
-        return true;
-      }
-      lastError = `HTTP ${response.status}`;
-    } catch (error) {
-      // Silently swallowing this was exactly why waitForTauriDriver's
-      // repeated 60s timeouts on Windows were a mystery for so long. Once
-      // logged, it turned out to be undici's generic "fetch failed" —
-      // that's just a wrapper, and manually pulling error.cause.message
-      // printed an empty string (undici's cause isn't always a plain Error
-      // with a populated .message — could be a Node system error with the
-      // real detail on .code/.errno/.syscall instead). Passing the error
-      // object straight to console.log lets Node's own formatter walk and
-      // print the full cause chain, whatever shape it turns out to be.
-      const message = error instanceof Error ? error.stack || error.message : String(error);
-      if (message !== lastError) {
-        console.log("[Setup] tauri-driver not ready yet:", error);
-        lastError = message;
-      }
+    if (await checkTauriDriverPort()) {
+      console.log("[Setup] tauri-driver is ready");
+      return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  console.log("[Setup] waitForTauriDriver giving up, last error:", lastError);
+  console.log("[Setup] waitForTauriDriver giving up after", timeout, "ms");
   return false;
 }
 

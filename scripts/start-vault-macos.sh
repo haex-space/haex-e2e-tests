@@ -73,9 +73,17 @@ echo "Starting tauri-webdriver..."
 nohup tauri-webdriver > "$RUNNER_TEMP/tauri-webdriver.log" 2>&1 &
 echo $! > "$RUNNER_TEMP/tauri-webdriver.pid"
 
+# Not an HTTP /status check: tauri-webdriver is a pure intermediary
+# proxying 4444 <-> the app's embedded plugin on 4445 (see
+# github.com/Choochmeque/tauri-webdriver). Nothing is listening on 4445
+# until a WebDriver session actually spawns the app, so /status — proxied
+# straight through — returns "connection refused" forever at this point
+# regardless of how long we wait (confirmed: tauri-webdriver's own log
+# showed nonstop "Connection refused (os error 61)" for the full 60s).
+# A plain TCP check only needs the intermediary's own listener to be up.
 echo "Waiting for WebDriver server to be ready..."
 for _ in $(seq 1 30); do
-  if curl -s http://localhost:4444/status > /dev/null 2>&1; then
+  if nc -z localhost 4444 2>/dev/null; then
     echo "WebDriver server is ready."
     exit 0
   fi
