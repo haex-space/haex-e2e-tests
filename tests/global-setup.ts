@@ -730,6 +730,23 @@ async function globalSetup() {
   // Wait for tauri-driver to be ready
   const driverReady = await waitForTauriDriver();
   if (!driverReady) {
+    // ECONNREFUSED on both ::1 and 127.0.0.1 minutes after the fixture
+    // script's own check confirmed tauri-driver was listening — something
+    // happens to its listener in between. start-vault-windows.ps1/
+    // start-vault-macos.sh redirect its stdout/stderr to RUNNER_TEMP; dump
+    // both here since this is the first time this process has any reason
+    // to look at them (the ps1/sh scripts only dump on their OWN timeout,
+    // which didn't fire — tauri-driver looked fine to them).
+    if (process.env.RUNNER_TEMP) {
+      for (const name of ["tauri-driver.log", "tauri-driver-err.log"]) {
+        const logPath = path.join(process.env.RUNNER_TEMP, name);
+        try {
+          console.log(`[Setup] --- ${name} ---\n${fs.readFileSync(logPath, "utf-8")}`);
+        } catch {
+          console.log(`[Setup] --- ${name} --- (not found at ${logPath})`);
+        }
+      }
+    }
     throw new Error("tauri-driver did not start within timeout");
   }
 
