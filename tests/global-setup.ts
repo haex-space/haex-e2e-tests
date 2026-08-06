@@ -157,12 +157,15 @@ async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
       // Silently swallowing this was exactly why waitForTauriDriver's
       // repeated 60s timeouts on Windows were a mystery for so long. Once
       // logged, it turned out to be undici's generic "fetch failed" —
-      // that's just a wrapper; the actual errno/reason is on .cause and
-      // was still being lost. Log both so the next run says why.
-      const cause = error instanceof Error && "cause" in error ? error.cause : undefined;
-      const message = `${error instanceof Error ? error.message : String(error)}${cause ? ` (cause: ${cause instanceof Error ? cause.message : String(cause)})` : ""}`;
+      // that's just a wrapper, and manually pulling error.cause.message
+      // printed an empty string (undici's cause isn't always a plain Error
+      // with a populated .message — could be a Node system error with the
+      // real detail on .code/.errno/.syscall instead). Passing the error
+      // object straight to console.log lets Node's own formatter walk and
+      // print the full cause chain, whatever shape it turns out to be.
+      const message = error instanceof Error ? error.stack || error.message : String(error);
       if (message !== lastError) {
-        console.log("[Setup] tauri-driver not ready yet:", message);
+        console.log("[Setup] tauri-driver not ready yet:", error);
         lastError = message;
       }
     }
