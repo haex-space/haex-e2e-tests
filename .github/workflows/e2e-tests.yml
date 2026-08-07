@@ -799,6 +799,13 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
           HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+          # Signed download URLs from Supabase Storage are minted against
+          # this host, so it must be the Tailscale-reachable one — not the
+          # Docker-internal "marketplace-kong" name — or native Windows/macOS
+          # clients can't resolve them (Kong is remapped to 8001 on this host
+          # in docker-compose.tailscale.yml; see the port-conflict comment
+          # near its definition).
+          MARKETPLACE_STORAGE_PUBLIC_URL: http://e2e-backend-win-${{ github.run_id }}:8001
         run: |
           docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
           for i in {1..30}; do
@@ -1057,6 +1064,13 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
           HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+          # Signed download URLs from Supabase Storage are minted against
+          # this host, so it must be the Tailscale-reachable one — not the
+          # Docker-internal "marketplace-kong" name — or native Windows/macOS
+          # clients can't resolve them (Kong is remapped to 8001 on this host
+          # in docker-compose.tailscale.yml; see the port-conflict comment
+          # near its definition).
+          MARKETPLACE_STORAGE_PUBLIC_URL: http://e2e-backend-mac-${{ github.run_id }}:8001
         run: |
           docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
           for i in {1..30}; do
