@@ -193,6 +193,15 @@ async function createWebDriverSession(): Promise<string> {
   // HAEX_VAULT_BINARY_PATH to the downloaded artifact's actual location.
   const applicationPath =
     process.env.HAEX_VAULT_BINARY_PATH || "/repos/haex-vault/src-tauri/target/release/haex-vault";
+  // Windows only: the e2e build's tauri.conf.json bakes in a fixed
+  // dataDirectory (see build.yml) so WebView2 actually writes the
+  // DevToolsActivePort file msedgedriver polls for — tell msedgedriver to
+  // poll that SAME directory instead of one it generates itself. (Setting
+  // additionalBrowserArguments here instead of in tauri.conf.json does NOT
+  // work — that path goes through the same WEBVIEW2_* mechanism WebView2
+  // now ignores under an elevated host process, see build.yml's comment.)
+  const webviewOptions =
+    process.platform === "win32" ? { userDataFolder: "C:\\haex-e2e-webview-data" } : undefined;
   const response = await fetch(`${TAURI_DRIVER_URL}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -201,6 +210,7 @@ async function createWebDriverSession(): Promise<string> {
         alwaysMatch: {
           "tauri:options": {
             application: applicationPath,
+            ...(webviewOptions ? { webviewOptions } : {}),
           },
         },
       },
