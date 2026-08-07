@@ -1107,6 +1107,28 @@ jobs:
           tags: tag:ci-e2e
           hostname: e2e-backend-mac-${{ github.run_id }}
 
+      # The macOS E2E client can't resolve MagicDNS hostnames at all (see
+      # the "Wait for backend to be ready" comment in the e2e-macos job
+      # below) — so a signed storage URL minted with our own hostname as
+      # the host is just as unreachable to it as "marketplace-kong" was.
+      # Recreate marketplace now that we have our own Tailscale IP, so it
+      # signs URLs against something the macOS client can actually reach.
+      - name: Point marketplace storage URL at own Tailscale IP
+        env:
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          OWN_IP=$(tailscale ip -4)
+          echo "Recreating marketplace with SUPABASE_URL pointed at $OWN_IP:8001"
+          MARKETPLACE_STORAGE_PUBLIC_URL="http://$OWN_IP:8001" \
+            docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null | grep -q healthy; then
+              echo "marketplace healthy again after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
+
       - name: Wait for macOS E2E job to finish
         env:
           GH_TOKEN: ${{ github.token }}
