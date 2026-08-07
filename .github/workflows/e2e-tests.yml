@@ -910,13 +910,21 @@ jobs:
       - name: Install tauri-driver
         run: cargo install tauri-driver
 
-      # Microsoft Edge WebDriver must match the Edge build already on the
-      # runner image (tauri-driver on Windows proxies WebView2 through it).
+      # Microsoft Edge WebDriver must match the WebView2 Runtime actually
+      # embedded in haex-vault.exe (tauri-driver proxies through it) — not
+      # the standalone Edge browser, which updates on its own schedule and
+      # can be a different version on the runner image.
       - name: Install matching Microsoft Edge WebDriver
         shell: pwsh
         run: |
-          $edgeVersion = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
-          Write-Host "Detected Edge version: $edgeVersion"
+          $edgeVersion = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}").pv
+          if (-not $edgeVersion) {
+            $edgeVersion = (Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Directory |
+              Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1).Name
+          }
+          Write-Host "Detected WebView2 Runtime version: $edgeVersion"
           $driverUrl = "https://msedgedriver.microsoft.com/$edgeVersion/edgedriver_win64.zip"
           Invoke-WebRequest -Uri $driverUrl -OutFile edgedriver.zip
           Expand-Archive -Path edgedriver.zip -DestinationPath "$env:USERPROFILE\edgedriver"
