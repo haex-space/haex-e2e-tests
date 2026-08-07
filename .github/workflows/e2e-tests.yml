@@ -974,33 +974,19 @@ jobs:
           }
           Write-Host "Backend is reachable."
 
-      - name: Start haex-vault + tauri-driver
+      - name: Start haex-vault + run E2E tests (windows)
+        id: test
         shell: pwsh
         env:
           # Same run-id-derived hostname the backend job registered under —
           # Tailscale MagicDNS resolves it without any extra discovery step.
           BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
-        run: ./scripts/start-vault-windows.ps1 -VaultBinDir "$PWD\vault-bin" -BackendHost $env:BACKEND_HOST
-
-      - name: Run E2E tests (windows)
-        id: test
-        env:
           CI: true
           HAEX_NOTES_BUNDLE_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes.haex
           HAEX_NOTES_PUBLIC_KEY_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes-public.key
-        # Not `pnpm test`: that script is `DISPLAY=:1 playwright test` for
-        # the Linux container's xvfb, and `DISPLAY=:1 cmd` isn't valid
-        # PowerShell/cmd syntax ("'DISPLAY' is not recognized...").
-        # Windows/macOS have a real GUI, so DISPLAY is irrelevant here.
-        #
-        # --project=chromium excludes the `flake-prone-first` project
-        # (playwright.config.ts), which is exclusively the two-vault QUIC
-        # invite-flow suite (spaces/invitations/quic-invite-flow.spec.ts).
-        # That suite needs a second app instance (Vault B); this job's
-        # start-vault-windows.ps1 only starts one, so it fails with
-        # `getaddrinfo ENOTFOUND vault-b` every time — a scoping mismatch,
-        # not a bug to chase here.
-        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge --project=chromium
+        # One step, not two: see start-vault-windows.ps1's header for why
+        # tauri-driver and the Playwright run must share a single step here.
+        run: ./scripts/start-vault-windows.ps1 -VaultBinDir "$PWD\vault-bin" -BackendHost $env:BACKEND_HOST
 
       - name: Upload test artifacts
         if: always()

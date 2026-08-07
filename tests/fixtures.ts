@@ -2703,6 +2703,27 @@ export class VaultAutomation {
     console.log(`[E2E] Installing ${extensionName} from marketplace via UI...`);
     const start = Date.now();
 
+    // onInstallFromMarketplace's catch block (marketplace.vue) only
+    // console.error()s failures into the app's OWN webview console — that
+    // never reaches this Node process's stdout on its own. Capture it so a
+    // failure below can show the real error instead of just "no dialog".
+    await this.executeScript(`
+      window.__e2eCapturedErrors = [];
+      if (!window.__e2eConsoleErrorPatched) {
+        window.__e2eConsoleErrorPatched = true;
+        const originalError = console.error.bind(console);
+        console.error = (...args) => {
+          try {
+            window.__e2eCapturedErrors.push(args.map(a => {
+              if (a instanceof Error) return a.message + (a.stack ? '\\n' + a.stack : '');
+              try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch { return String(a); }
+            }).join(' '));
+          } catch {}
+          originalError(...args);
+        };
+      }
+    `);
+
     // Step 1: Open the marketplace window. This mounts a fresh marketplace
     // component (singleton:false), so its onMounted → fetchExtensions re-reads
     // the marketplace base_url set by setDefaultMarketplaceUrl() and queries the
@@ -2791,6 +2812,10 @@ export class VaultAutomation {
     // against the same source the specs assert on instead of trusting the UI.
     const confirmed = await this.waitForExtensionInstalled(extensionName, 30000);
     if (!confirmed) {
+      const capturedErrors = await this.executeScript<string[]>(
+        `return window.__e2eCapturedErrors || [];`,
+      ).catch(() => [] as string[]);
+      console.log(`[E2E] Captured console.error output during install:`, capturedErrors);
       throw new Error(`Extension ${extensionName} did not appear in get_all_extensions after install`);
     }
 
