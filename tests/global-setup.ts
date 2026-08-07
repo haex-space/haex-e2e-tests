@@ -208,7 +208,18 @@ async function createWebDriverSession(): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to create WebDriver session: ${response.status}`);
+    const body = await response.text().catch(() => "<unreadable body>");
+    if (process.env.RUNNER_TEMP) {
+      for (const name of ["tauri-driver.log", "tauri-driver-err.log"]) {
+        const logPath = path.join(process.env.RUNNER_TEMP, name);
+        try {
+          console.log(`[Setup] --- ${name} ---\n${fs.readFileSync(logPath, "utf-8")}`);
+        } catch {
+          console.log(`[Setup] --- ${name} --- (not found at ${logPath})`);
+        }
+      }
+    }
+    throw new Error(`Failed to create WebDriver session: ${response.status} - ${body}`);
   }
 
   const data = await response.json();
