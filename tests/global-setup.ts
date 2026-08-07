@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, execSync, execFileSync } from "node:child_process";
@@ -140,22 +141,46 @@ function startScreenRecording(): void {
 }
 
 /**
- * Wait for tauri-driver to be ready
+ * Check whether something is listening on 127.0.0.1:4444.
+ */
+function checkTauriDriverPort(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: "127.0.0.1", port: 4444, timeout: 2000 });
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once("error", () => resolve(false));
+    socket.once("timeout", () => {
+      socket.destroy();
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Wait for tauri-driver to be ready.
+ *
+ * A plain TCP check, not an HTTP fetch to /status: on Windows, tauri-driver
+ * answers /status itself and either works fine. But on macOS,
+ * tauri-webdriver is a pure intermediary proxying 4444 <-> the app's
+ * embedded plugin on 4445 (github.com/Choochmeque/tauri-webdriver) — /status
+ * gets proxied straight through, and nothing listens on 4445 until a
+ * WebDriver session actually spawns the app, so it fails with "connection
+ * refused" for as long as we wait, regardless of timeout length. All we
+ * actually need here is confirmation the driver's own listener is up before
+ * createWebDriverSession() below sends it a real request.
  */
 async function waitForTauriDriver(timeout = 60000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeout) {
-    try {
-      const response = await fetch(`${TAURI_DRIVER_URL}/status`);
-      if (response.ok) {
-        console.log("[Setup] tauri-driver is ready");
-        return true;
-      }
-    } catch {
-      // Not ready yet
+    if (await checkTauriDriverPort()) {
+      console.log("[Setup] tauri-driver is ready");
+      return true;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
+  console.log("[Setup] waitForTauriDriver giving up after", timeout, "ms");
   return false;
 }
 
@@ -168,6 +193,15 @@ async function createWebDriverSession(): Promise<string> {
   // HAEX_VAULT_BINARY_PATH to the downloaded artifact's actual location.
   const applicationPath =
     process.env.HAEX_VAULT_BINARY_PATH || "/repos/haex-vault/src-tauri/target/release/haex-vault";
+  // Windows only: the e2e build's tauri.conf.json bakes in a fixed
+  // dataDirectory (see build.yml) so WebView2 actually writes the
+  // DevToolsActivePort file msedgedriver polls for — tell msedgedriver to
+  // poll that SAME directory instead of one it generates itself. (Setting
+  // additionalBrowserArguments here instead of in tauri.conf.json does NOT
+  // work — that path goes through the same WEBVIEW2_* mechanism WebView2
+  // now ignores under an elevated host process, see build.yml's comment.)
+  const webviewOptions =
+    process.platform === "win32" ? { userDataFolder: "C:\\haex-e2e-webview-data" } : undefined;
   const response = await fetch(`${TAURI_DRIVER_URL}/session`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -176,6 +210,7 @@ async function createWebDriverSession(): Promise<string> {
         alwaysMatch: {
           "tauri:options": {
             application: applicationPath,
+            ...(webviewOptions ? { webviewOptions } : {}),
           },
         },
       },
@@ -183,7 +218,18 @@ async function createWebDriverSession(): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to create WebDriver session: ${response.status}`);
+    const body = await response.text().catch(() => "<unreadable body>");
+    if (process.env.RUNNER_TEMP) {
+      for (const name of ["tauri-driver.log", "tauri-driver-err.log"]) {
+        const logPath = path.join(process.env.RUNNER_TEMP, name);
+        try {
+          console.log(`[Setup] --- ${name} ---\n${fs.readFileSync(logPath, "utf-8")}`);
+        } catch {
+          console.log(`[Setup] --- ${name} --- (not found at ${logPath})`);
+        }
+      }
+    }
+    throw new Error(`Failed to create WebDriver session: ${response.status} - ${body}`);
   }
 
   const data = await response.json();
@@ -696,11 +742,17 @@ async function globalSetup() {
     console.log("[Setup] Tier seeding skipped:", (error as Error).message?.substring(0, 100));
   }
 
-  // Wait for X11 display to be ready before starting screen recording
-  await waitForX11Display();
+  // X11 + ffmpeg screen recording only apply to the Linux container's
+  // virtual display. Native Windows/macOS runners (HAEX_VAULT_BINARY_PATH
+  // set — see the note on createWebDriverSession below) have a real GUI
+  // and no X11 server at all, so both would just burn their timeouts here.
+  if (!process.env.HAEX_VAULT_BINARY_PATH) {
+    // Wait for X11 display to be ready before starting screen recording
+    await waitForX11Display();
 
-  // Start screen recording early to capture the entire test session
-  startScreenRecording();
+    // Start screen recording early to capture the entire test session
+    startScreenRecording();
+  }
 
   // Clean up any old WebDriver session before creating a new one
   await cleanupOldSession();
@@ -708,6 +760,23 @@ async function globalSetup() {
   // Wait for tauri-driver to be ready
   const driverReady = await waitForTauriDriver();
   if (!driverReady) {
+    // ECONNREFUSED on both ::1 and 127.0.0.1 minutes after the fixture
+    // script's own check confirmed tauri-driver was listening — something
+    // happens to its listener in between. start-vault-windows.ps1/
+    // start-vault-macos.sh redirect its stdout/stderr to RUNNER_TEMP; dump
+    // both here since this is the first time this process has any reason
+    // to look at them (the ps1/sh scripts only dump on their OWN timeout,
+    // which didn't fire — tauri-driver looked fine to them).
+    if (process.env.RUNNER_TEMP) {
+      for (const name of ["tauri-driver.log", "tauri-driver-err.log"]) {
+        const logPath = path.join(process.env.RUNNER_TEMP, name);
+        try {
+          console.log(`[Setup] --- ${name} ---\n${fs.readFileSync(logPath, "utf-8")}`);
+        } catch {
+          console.log(`[Setup] --- ${name} --- (not found at ${logPath})`);
+        }
+      }
+    }
     throw new Error("tauri-driver did not start within timeout");
   }
 

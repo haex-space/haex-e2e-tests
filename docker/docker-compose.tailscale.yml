@@ -18,6 +18,14 @@ services:
     ports:
       - "8000:8000"
 
+  # Several test helpers (sync-server-helpers.ts, mls-rejoin.spec.ts,
+  # connection-flow.spec.ts) call the sync-server directly on 3002,
+  # bypassing Kong — Kong only proxies /auth/v1/* to GoTrue, not the
+  # sync-server's own endpoints.
+  sync-server:
+    ports:
+      - "3002:3002"
+
   marketplace-kong:
     ports:
       - "8001:8000"

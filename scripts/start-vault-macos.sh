@@ -19,7 +19,16 @@ set -euo pipefail
 VAULT_BIN_DIR="$1"
 BACKEND_HOST="$2"
 
-app_dir="$VAULT_BIN_DIR/Haex Vault.app"
+# build.yml uploads both "bundle/macos/Haex Vault.app" and "database" in one
+# artifact, so actions/upload-artifact roots the zip at their common parent
+# ("release/") — the app ends up nested under "bundle/macos/", not directly
+# in VAULT_BIN_DIR. Search for it instead of assuming a fixed depth so this
+# doesn't silently break again if the upload paths change.
+app_dir=$(find "$VAULT_BIN_DIR" -maxdepth 4 -type d -name "Haex Vault.app" | head -1)
+if [ -z "$app_dir" ]; then
+  echo "::error::Haex Vault.app not found anywhere under $VAULT_BIN_DIR"
+  exit 1
+fi
 app_exe=""
 for candidate in "$app_dir/Contents/MacOS"/*; do
   # actions/download-artifact re-extracts its zip with default (non-executable)
@@ -42,6 +51,7 @@ fi
 {
   echo "HAEX_VAULT_BINARY_PATH=$app_exe"
   echo "SYNC_SERVER_URL=http://$BACKEND_HOST:8000"
+  echo "SYNC_SERVER_DIRECT_URL=http://$BACKEND_HOST:3002"
   echo "SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0"
   echo "SUPABASE_SERVICE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU"
   echo "MARKETPLACE_URL=http://$BACKEND_HOST:3001"
@@ -64,9 +74,17 @@ echo "Starting tauri-webdriver..."
 nohup tauri-webdriver > "$RUNNER_TEMP/tauri-webdriver.log" 2>&1 &
 echo $! > "$RUNNER_TEMP/tauri-webdriver.pid"
 
+# Not an HTTP /status check: tauri-webdriver is a pure intermediary
+# proxying 4444 <-> the app's embedded plugin on 4445 (see
+# github.com/Choochmeque/tauri-webdriver). Nothing is listening on 4445
+# until a WebDriver session actually spawns the app, so /status — proxied
+# straight through — returns "connection refused" forever at this point
+# regardless of how long we wait (confirmed: tauri-webdriver's own log
+# showed nonstop "Connection refused (os error 61)" for the full 60s).
+# A plain TCP check only needs the intermediary's own listener to be up.
 echo "Waiting for WebDriver server to be ready..."
-for i in $(seq 1 30); do
-  if curl -s http://localhost:4444/status > /dev/null 2>&1; then
+for _ in $(seq 1 30); do
+  if nc -z localhost 4444 2>/dev/null; then
     echo "WebDriver server is ready."
     exit 0
   fi

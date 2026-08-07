@@ -254,6 +254,7 @@ jobs:
         with:
           name: ${{ inputs.haex_vault_artifact }}
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./docker/prebuilt/haex-vault
 
@@ -480,6 +481,28 @@ jobs:
           path: docker-images.tar.gz
           retention-days: 1
           compression-level: 0  # Already gzipped
+
+      # The Linux e2e job gets these for free — they're baked into the
+      # vault-a image it runs directly. The native Windows/macOS runners
+      # never build or load that image (their vault binary is a plain
+      # download), so marketplace-setup.ts's haex-notes bundle + signing key
+      # need to be extracted here and shipped separately.
+      - name: Extract marketplace bundle for native runners
+        run: |
+          VAULT_IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | grep -E "vault-a" | head -1)
+          cid=$(docker create "$VAULT_IMAGE")
+          mkdir -p marketplace-bundle
+          docker cp "$cid:/app/haex-notes.haex" marketplace-bundle/haex-notes.haex
+          docker cp "$cid:/app/haex-notes-public.key" marketplace-bundle/haex-notes-public.key
+          docker rm "$cid" > /dev/null
+          ls -lh marketplace-bundle/
+
+      - name: Upload marketplace bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: marketplace-bundle/
+          retention-days: 1
 
   # Parallel test execution using matrix strategy
   e2e:
@@ -781,6 +804,13 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
           HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+          # Signed download URLs from Supabase Storage are minted against
+          # this host, so it must be the Tailscale-reachable one — not the
+          # Docker-internal "marketplace-kong" name — or native Windows/macOS
+          # clients can't resolve them (Kong is remapped to 8001 on this host
+          # in docker-compose.tailscale.yml; see the port-conflict comment
+          # near its definition).
+          MARKETPLACE_STORAGE_PUBLIC_URL: http://e2e-backend-win-${{ github.run_id }}:8001
         run: |
           docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
           for i in {1..30}; do
@@ -825,8 +855,12 @@ jobs:
         run: |
           echo "Backend ready, waiting for 'E2E Windows' job to finish..."
           for _ in $(seq 1 280); do
+            # Exact names only: an `endswith` match here also catches the
+            # linux/macos legs' OWN "E2E Windows" placeholder job (skipped
+            # immediately by its `if:`), which made this resolve after 1s
+            # against the wrong leg and tear the backend down mid-test.
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name == "E2E Windows") | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name == "E2E Windows" or .name == "e2e-tests (windows, haex-vault-windows-e2e) / E2E Windows") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E Windows finished with: $CONCLUSION"
               exit 0
@@ -888,13 +922,21 @@ jobs:
       - name: Install tauri-driver
         run: cargo install tauri-driver
 
-      # Microsoft Edge WebDriver must match the Edge build already on the
-      # runner image (tauri-driver on Windows proxies WebView2 through it).
+      # Microsoft Edge WebDriver must match the WebView2 Runtime actually
+      # embedded in haex-vault.exe (tauri-driver proxies through it) — not
+      # the standalone Edge browser, which updates on its own schedule and
+      # can be a different version on the runner image.
       - name: Install matching Microsoft Edge WebDriver
         shell: pwsh
         run: |
-          $edgeVersion = (Get-Item "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe").VersionInfo.ProductVersion
-          Write-Host "Detected Edge version: $edgeVersion"
+          $edgeVersion = (Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}").pv
+          if (-not $edgeVersion) {
+            $edgeVersion = (Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application" -Directory |
+              Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1).Name
+          }
+          Write-Host "Detected WebView2 Runtime version: $edgeVersion"
           $driverUrl = "https://msedgedriver.microsoft.com/$edgeVersion/edgedriver_win64.zip"
           Invoke-WebRequest -Uri $driverUrl -OutFile edgedriver.zip
           Expand-Archive -Path edgedriver.zip -DestinationPath "$env:USERPROFILE\edgedriver"
@@ -911,8 +953,15 @@ jobs:
         with:
           name: haex-vault-windows-e2e
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
+
+      - name: Download marketplace bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: ./marketplace-bundle
 
       - name: Join Tailscale
         uses: tailscale/github-action@v3
@@ -930,31 +979,34 @@ jobs:
         run: |
           Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
           $ready = $false
-          for ($i = 0; $i -lt 60; $i++) {
+          # 12 minutes: observed backend startup (docker image load + compose
+          # health-wait + Tailscale join) takes up to ~8 minutes on a cold
+          # cache, and the client and backend jobs start at the same time.
+          for ($i = 0; $i -lt 90; $i++) {
               if (Test-NetConnection -ComputerName $env:BACKEND_HOST -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
                   $ready = $true
                   break
               }
-              Start-Sleep -Seconds 5
+              Start-Sleep -Seconds 8
           }
           if (!$ready) {
-              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 5 minutes"
+              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 12 minutes"
           }
           Write-Host "Backend is reachable."
 
-      - name: Start haex-vault + tauri-driver
+      - name: Start haex-vault + run E2E tests (windows)
+        id: test
         shell: pwsh
         env:
           # Same run-id-derived hostname the backend job registered under —
           # Tailscale MagicDNS resolves it without any extra discovery step.
           BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
-        run: ./scripts/start-vault-windows.ps1 -VaultBinDir "$PWD\vault-bin" -BackendHost $env:BACKEND_HOST
-
-      - name: Run E2E tests (windows)
-        id: test
-        env:
           CI: true
-        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+          HAEX_NOTES_BUNDLE_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes.haex
+          HAEX_NOTES_PUBLIC_KEY_PATH: ${{ github.workspace }}\marketplace-bundle\haex-notes-public.key
+        # One step, not two: see start-vault-windows.ps1's header for why
+        # tauri-driver and the Playwright run must share a single step here.
+        run: ./scripts/start-vault-windows.ps1 -VaultBinDir "$PWD\vault-bin" -BackendHost $env:BACKEND_HOST
 
       - name: Upload test artifacts
         if: always()
@@ -1017,6 +1069,13 @@ jobs:
           SYNC_SERVER_IMAGE: ${{ inputs.sync_server_image }}
           HAEX_SYNC_SERVER_PATH: ${{ github.workspace }}/repos/haex-sync-server
           HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+          # Signed download URLs from Supabase Storage are minted against
+          # this host, so it must be the Tailscale-reachable one — not the
+          # Docker-internal "marketplace-kong" name — or native Windows/macOS
+          # clients can't resolve them (Kong is remapped to 8001 on this host
+          # in docker-compose.tailscale.yml; see the port-conflict comment
+          # near its definition).
+          MARKETPLACE_STORAGE_PUBLIC_URL: http://e2e-backend-mac-${{ github.run_id }}:8001
         run: |
           docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d sync-db
           for i in {1..30}; do
@@ -1053,14 +1112,40 @@ jobs:
           tags: tag:ci-e2e
           hostname: e2e-backend-mac-${{ github.run_id }}
 
+      # The macOS E2E client can't resolve MagicDNS hostnames at all (see
+      # the "Wait for backend to be ready" comment in the e2e-macos job
+      # below) — so a signed storage URL minted with our own hostname as
+      # the host is just as unreachable to it as "marketplace-kong" was.
+      # Recreate marketplace now that we have our own Tailscale IP, so it
+      # signs URLs against something the macOS client can actually reach.
+      - name: Point marketplace storage URL at own Tailscale IP
+        env:
+          HAEX_MARKETPLACE_PATH: ${{ github.workspace }}/repos/haex-marketplace
+        run: |
+          OWN_IP=$(tailscale ip -4)
+          echo "Recreating marketplace with SUPABASE_URL pointed at $OWN_IP:8001"
+          MARKETPLACE_STORAGE_PUBLIC_URL="http://$OWN_IP:8001" \
+            docker compose -f docker/docker-compose.yml -f docker/docker-compose.tailscale.yml up -d marketplace
+          for i in {1..30}; do
+            if docker inspect --format='{{.State.Health.Status}}' haex_e2e_marketplace 2>/dev/null | grep -q healthy; then
+              echo "marketplace healthy again after ~$((i*2))s"
+              break
+            fi
+            sleep 2
+          done
+
       - name: Wait for macOS E2E job to finish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Backend ready, waiting for 'E2E macOS' job to finish..."
           for _ in $(seq 1 280); do
+            # Exact names only: an `endswith` match here also catches the
+            # linux/windows legs' OWN "E2E macOS" placeholder job (skipped
+            # immediately by its `if:`), which made this resolve after 1s
+            # against the wrong leg and tear the backend down mid-test.
             CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.name == "E2E macOS") | .conclusion' 2>/dev/null | head -1)
+              --jq '.jobs[] | select(.name == "E2E macOS" or .name == "e2e-tests (macos, haex-vault-macos-e2e) / E2E macOS") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E macOS finished with: $CONCLUSION"
               exit 0
@@ -1135,8 +1220,15 @@ jobs:
         with:
           name: haex-vault-macos-e2e
           run-id: ${{ inputs.haex_vault_artifact_run_id }}
+          repository: haex-space/haex-vault
           github-token: ${{ secrets.ARTIFACT_TOKEN || github.token }}
           path: ./vault-bin
+
+      - name: Download marketplace bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: e2e-marketplace-bundle-${{ github.run_id }}
+          path: ./marketplace-bundle
 
       - name: Join Tailscale
         uses: tailscale/github-action@v3
@@ -1153,26 +1245,81 @@ jobs:
           BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
         run: |
           echo "Waiting for backend ($BACKEND_HOST:8000) to become reachable..."
-          for _ in $(seq 1 60); do
-            if nc -z -w 2 "$BACKEND_HOST" 8000 2>/dev/null; then
-              echo "Backend is reachable."
+          # Root cause (found via the route/curl diagnostics below on a prior
+          # run): routing is fine (utun4 correctly owns 100.64.0.0/10) and
+          # `tailscale ping` succeeds, but that's resolved through tailscaled's
+          # own control socket, not the OS resolver — `curl`/`nc` against the
+          # MagicDNS hostname fail with "Could not resolve host", and
+          # dscacheutil has been empty in every diagnostic dump for the same
+          # reason. MagicDNS split-DNS isn't usable by ordinary processes on
+          # this runner. Resolve the peer's IP via `tailscale ip` (proven to
+          # work — it's answered the same way `tailscale ping` is) and use
+          # that IP for everything downstream instead of the hostname.
+          #
+          # 18 minutes, wall-clock (not iteration count): observed backend
+          # startup (docker image load + compose health-wait + Tailscale
+          # join) has ranged from ~8 to ~12 minutes across runs. A fixed
+          # iteration count silently changes total budget with any tweak to
+          # the per-attempt timeout or sleep — e.g. bumping nc's -w from 2
+          # to 6 while cutting sleep 8->4 (for DERP-relayed connections
+          # needing more than 2s to land) accidentally HALVED the total
+          # budget to 6 minutes whenever nc fails fast, which is exactly
+          # what happened on a run where the backend needed 11m50s to even
+          # join Tailscale.
+          DEADLINE=$((SECONDS + 18 * 60))
+          BACKEND_IP=""
+          while [ $SECONDS -lt $DEADLINE ]; do
+            if [ -z "$BACKEND_IP" ]; then
+              BACKEND_IP=$(tailscale ip -4 "$BACKEND_HOST" 2>/dev/null || true)
+            fi
+            if [ -n "$BACKEND_IP" ] && nc -z -w 6 "$BACKEND_IP" 8000 2>/dev/null; then
+              echo "Backend is reachable at $BACKEND_IP."
+              echo "BACKEND_IP=$BACKEND_IP" >> "$GITHUB_ENV"
               exit 0
             fi
             sleep 5
           done
-          echo "::error::Backend at $BACKEND_HOST:8000 did not become reachable within 5 minutes"
+          echo "::error::Backend at $BACKEND_HOST:8000 (resolved: ${BACKEND_IP:-<unresolved>}) did not become reachable within 18 minutes"
+          echo "--- tailscale status ---"
+          sudo tailscale status || true
+          echo "--- tailscale ping ($BACKEND_HOST) ---"
+          sudo tailscale ping -c 1 "$BACKEND_HOST" || true
+          echo "--- DNS resolution ---"
+          dscacheutil -q host -a name "$BACKEND_HOST" || true
+          echo "--- utun interfaces ---"
+          ifconfig | grep -A3 utun || true
+          echo "--- tailscale netcheck ---"
+          sudo tailscale netcheck || true
+          echo "--- route to $BACKEND_HOST ($BACKEND_IP) ---"
+          [ -n "$BACKEND_IP" ] && route -n get "$BACKEND_IP" || true
+          echo "--- curl -v attempt (by IP) ---"
+          [ -n "$BACKEND_IP" ] && curl -v --connect-timeout 6 "http://$BACKEND_IP:8000/" 2>&1 || true
           exit 1
 
       - name: Start haex-vault + tauri-webdriver
         env:
-          BACKEND_HOST: e2e-backend-mac-${{ github.run_id }}
+          # MagicDNS hostname resolution doesn't work for ordinary processes
+          # on this runner (see the note above) — BACKEND_IP was resolved via
+          # `tailscale ip` and exported by the previous step; falling back to
+          # the hostname would only matter if that step exited 0 without ever
+          # setting it, which doesn't happen.
+          BACKEND_HOST: ${{ env.BACKEND_IP }}
         run: ./scripts/start-vault-macos.sh "$PWD/vault-bin" "$BACKEND_HOST"
 
       - name: Run E2E tests (macos)
         id: test
         env:
           CI: true
-        run: pnpm test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge
+          HAEX_NOTES_BUNDLE_PATH: ${{ github.workspace }}/marketplace-bundle/haex-notes.haex
+          HAEX_NOTES_PUBLIC_KEY_PATH: ${{ github.workspace }}/marketplace-bundle/haex-notes-public.key
+        # Not `pnpm test`: see the matching note in the Windows job — same
+        # DISPLAY=:1 prefix, irrelevant (and unnecessary) outside the Linux
+        # container's xvfb setup.
+        #
+        # --project=chromium: see the matching note in the Windows job —
+        # this leg also only starts a single app instance (Vault A), so the
+        # two-vault `flake-prone-first` QUIC suite can't run here either.
+        run: pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge --project=chromium
 
       - name: Upload test artifacts
         if: always()

@@ -1,11 +1,28 @@
-# Starts tauri-driver for the native Windows E2E leg (see
+# Starts tauri-driver AND runs the Playwright E2E suite for the native
+# Windows leg, in that order, within this ONE process (see
 # .github/workflows/e2e-tests.yml's e2e-windows job).
+#
+# Both used to be separate steps ("Start haex-vault + tauri-driver" then
+# "Run E2E tests"). GitHub's Windows runner puts each step's process tree
+# in a Job Object that's torn down — killing all descendants — when the
+# step's own process exits. tauri-driver (a Start-Process child) inherited
+# that job, so it was reliably alive for the ENTIRE "Start" step (confirmed
+# via a same-process HTTP+TCP re-check that stayed green for 30 straight
+# seconds) yet completely unreachable in the very next step, every single
+# run. Not flaky timing — a step-boundary kill. Merging the two steps
+# removes the boundary: this script's own process now stays alive (running
+# playwright as a child, not returning) for as long as tauri-driver needs
+# to. A WMI-based launch was tried first to keep tauri-driver alive across
+# separate steps, but Win32_Process.Create() runs as SYSTEM by default —
+# tauri-driver crashed within ~5s in that context (empty error log,
+# consistent with it being unable to touch the runner user's paths). This
+# approach avoids that whole class of problem.
 #
 # tauri-driver itself launches haex-vault.exe when the Playwright test suite
 # creates a WebDriver session (see tests/global-setup.ts / tests/fixtures.ts,
-# "tauri:options.application") — this script does not start the app
-# directly, only the driver, plus the environment the app needs once
-# tauri-driver spawns it as a child process (env vars are inherited).
+# "tauri:options.application") — this script starts the driver, sets the
+# environment the app needs once tauri-driver spawns it as a child process
+# (env vars are inherited), then hands off to Playwright directly.
 #
 # BackendHost is the Tailscale MagicDNS name of the e2e-backend-windows job
 # (docker/docker-compose.tailscale.yml publishes the ports referenced below).
@@ -28,6 +45,7 @@ if (!(Test-Path $vaultExe)) {
 $envVars = @{
     HAEX_VAULT_BINARY_PATH   = $vaultExe
     SYNC_SERVER_URL          = "http://${BackendHost}:8000"
+    SYNC_SERVER_DIRECT_URL   = "http://${BackendHost}:3002"
     SUPABASE_ANON_KEY        = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0'
     SUPABASE_SERVICE_KEY     = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35lJzdJsyH-qQwv8Hdp7fsn3W0YpN81IU'
     MARKETPLACE_URL          = "http://${BackendHost}:3001"
@@ -47,29 +65,55 @@ foreach ($key in $envVars.Keys) {
 }
 
 Write-Host "Starting tauri-driver..."
+$logPath = "$env:RUNNER_TEMP\tauri-driver.log"
+$errPath = "$env:RUNNER_TEMP\tauri-driver-err.log"
 $driverProcess = Start-Process -FilePath 'tauri-driver' -PassThru `
-    -RedirectStandardOutput "$env:RUNNER_TEMP\tauri-driver.log" `
-    -RedirectStandardError "$env:RUNNER_TEMP\tauri-driver-err.log"
+    -RedirectStandardOutput $logPath `
+    -RedirectStandardError $errPath
 $driverProcess.Id | Out-File -FilePath "$env:RUNNER_TEMP\tauri-driver.pid" -Encoding utf8
 
 Write-Host "Waiting for tauri-driver to be ready..."
+# A cold runner's first launch needs longer than the original 60s budget —
+# observed run took ~2 minutes just to start answering /status at all.
 $ready = $false
-for ($i = 0; $i -lt 30; $i++) {
+for ($i = 0; $i -lt 60; $i++) {
     try {
-        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 2
+        $response = Invoke-WebRequest -Uri 'http://localhost:4444/status' -UseBasicParsing -TimeoutSec 5
         if ($response.StatusCode -eq 200) {
             $ready = $true
             break
         }
     } catch {
         if ($driverProcess.HasExited) {
-            Get-Content "$env:RUNNER_TEMP\tauri-driver-err.log" -ErrorAction SilentlyContinue
+            Get-Content $errPath -ErrorAction SilentlyContinue
             throw "tauri-driver exited early with code $($driverProcess.ExitCode)"
         }
     }
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 3
 }
 if (!$ready) {
-    throw 'tauri-driver did not become ready within 60 seconds'
+    Write-Host '--- tauri-driver stdout ---'
+    Get-Content $logPath -ErrorAction SilentlyContinue
+    Write-Host '--- tauri-driver stderr ---'
+    Get-Content $errPath -ErrorAction SilentlyContinue
+    throw 'tauri-driver did not become ready within 8 minutes'
 }
 Write-Host 'tauri-driver is ready.'
+
+# Not `pnpm test`: that script is `DISPLAY=:1 playwright test` for the
+# Linux container's xvfb, and `DISPLAY=:1 cmd` isn't valid PowerShell/cmd
+# syntax ("'DISPLAY' is not recognized..."). Windows has a real GUI, so
+# DISPLAY is irrelevant here.
+#
+# --project=chromium excludes the `flake-prone-first` project
+# (playwright.config.ts), which is exclusively the two-vault QUIC
+# invite-flow suite (spaces/invitations/quic-invite-flow.spec.ts). That
+# suite needs a second app instance (Vault B); this job only starts one,
+# so it fails with `getaddrinfo ENOTFOUND vault-b` every time — a scoping
+# mismatch, not a bug to chase here.
+#
+# Runs in THIS process (not a separate step) so tauri-driver's parent
+# stays alive for the test run — see the file header for why that matters.
+Write-Host "Running E2E tests..."
+& pnpm exec playwright test tests/vault-lifecycle tests/spaces tests/storage tests/sync tests/identity-auth tests/extensions tests/database tests/ui tests/external-bridge --project=chromium
+exit $LASTEXITCODE

@@ -7,10 +7,21 @@ import {
 } from "@playwright/test";
 import { WebSocket as WS } from "ws";
 import * as crypto from "crypto";
+import * as dns from "node:dns";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
+
+// tauri-driver binds "localhost:4444" to 127.0.0.1 only. On the native
+// Windows runner, Node's default DNS order resolves "localhost" to ::1
+// first, so every fetch() to it hit a refused/unreachable IPv6 loopback and
+// never fell back — global-setup.ts's waitForTauriDriver() failed for the
+// full 60s timeout even though tauri-driver was confirmed up (the fixture
+// PowerShell script's own check, a separate HTTP client, succeeded in ~2s).
+// Forcing IPv4-first here (not changing the URL) keeps the Host header
+// exactly "localhost:4444", which tauri-driver validates (see below).
+dns.setDefaultResultOrder("ipv4first");
 
 // Import command constants from vault-sdk
 // In container: vault-sdk is linked via pnpm link /repos/vault-sdk
@@ -2692,6 +2703,27 @@ export class VaultAutomation {
     console.log(`[E2E] Installing ${extensionName} from marketplace via UI...`);
     const start = Date.now();
 
+    // onInstallFromMarketplace's catch block (marketplace.vue) only
+    // console.error()s failures into the app's OWN webview console — that
+    // never reaches this Node process's stdout on its own. Capture it so a
+    // failure below can show the real error instead of just "no dialog".
+    await this.executeScript(`
+      window.__e2eCapturedErrors = [];
+      if (!window.__e2eConsoleErrorPatched) {
+        window.__e2eConsoleErrorPatched = true;
+        const originalError = console.error.bind(console);
+        console.error = (...args) => {
+          try {
+            window.__e2eCapturedErrors.push(args.map(a => {
+              if (a instanceof Error) return a.message + (a.stack ? '\\n' + a.stack : '');
+              try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch { return String(a); }
+            }).join(' '));
+          } catch {}
+          originalError(...args);
+        };
+      }
+    `);
+
     // Step 1: Open the marketplace window. This mounts a fresh marketplace
     // component (singleton:false), so its onMounted → fetchExtensions re-reads
     // the marketplace base_url set by setDefaultMarketplaceUrl() and queries the
@@ -2772,7 +2804,38 @@ export class VaultAutomation {
       throw new Error(`Install dialog for ${extensionName} did not appear or complete`);
     }
 
+    // The dialog closing is not proof the backend actually registered the
+    // extension — on native macOS runners this UI closes near-instantly
+    // (no confirmation modal renders at all) while the Rust-side install
+    // (bundle verification, migrations) is still in flight, so callers used
+    // to race ahead into get_all_extensions() before it landed. Confirm
+    // against the same source the specs assert on instead of trusting the UI.
+    const confirmed = await this.waitForExtensionInstalled(extensionName, 30000);
+    if (!confirmed) {
+      const capturedErrors = await this.executeScript<string[]>(
+        `return window.__e2eCapturedErrors || [];`,
+      ).catch(() => [] as string[]);
+      console.log(`[E2E] Captured console.error output during install:`, capturedErrors);
+      throw new Error(`Extension ${extensionName} did not appear in get_all_extensions after install`);
+    }
+
     console.log(`[E2E] Extension ${extensionName} installation completed via UI`);
+  }
+
+  private async waitForExtensionInstalled(extensionName: string, timeout: number): Promise<boolean> {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        const extensions = await this.invokeTauriCommand<{ name: string }[]>("get_all_extensions", {});
+        if (extensions.some((ext) => ext.name === extensionName)) {
+          return true;
+        }
+      } catch {
+        // Backend may still be mid-install; keep polling until timeout.
+      }
+      await this.wait(500);
+    }
+    return false;
   }
 
   /**
