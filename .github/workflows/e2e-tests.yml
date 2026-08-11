@@ -978,11 +978,16 @@ jobs:
           BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
         run: |
           Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
+          # 25 minutes, wall-clock (not iteration count): observed backend
+          # startup (docker image load + compose health-wait + Tailscale
+          # join) has ranged up to ~20 minutes on a cold cache, and the
+          # client and backend jobs start at the same time. A fixed
+          # iteration count silently changes total budget with any tweak
+          # to the per-attempt timeout — same rationale as the macOS wait
+          # (search "18 minutes, wall-clock" below for the full history).
+          $deadline = (Get-Date).AddMinutes(25)
           $ready = $false
-          # 12 minutes: observed backend startup (docker image load + compose
-          # health-wait + Tailscale join) takes up to ~8 minutes on a cold
-          # cache, and the client and backend jobs start at the same time.
-          for ($i = 0; $i -lt 90; $i++) {
+          while ((Get-Date) -lt $deadline) {
               if (Test-NetConnection -ComputerName $env:BACKEND_HOST -Port 8000 -InformationLevel Quiet -WarningAction SilentlyContinue) {
                   $ready = $true
                   break
@@ -990,7 +995,7 @@ jobs:
               Start-Sleep -Seconds 8
           }
           if (!$ready) {
-              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 12 minutes"
+              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 25 minutes"
           }
           Write-Host "Backend is reachable."
 
