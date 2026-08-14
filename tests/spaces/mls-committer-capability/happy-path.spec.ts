@@ -15,7 +15,7 @@
 import { expect, test, VaultAutomation } from "../../fixtures";
 import { pollUntil, sqlQuery } from "../../helpers/ui/utils";
 import { initializeVaultViaUI, startP2PEndpoint } from "../../helpers/ui/ui-vault";
-import { findMlsMemberIndex, runSuffix, setupTwoPartySpace } from "../../helpers/mls-attack-helpers";
+import { findMlsMemberIndex, findMlsMemberIndexOrNull, runSuffix, setupTwoPartySpace } from "../../helpers/mls-attack-helpers";
 
 const RUN_SUFFIX = runSuffix();
 const SPACE_NAME = `MLS Happy Path Space ${RUN_SUFFIX}`;
@@ -102,15 +102,14 @@ test.describe("mls committer-capability: happy path over real P2P", () => {
     });
     expect(spaceId).toBeTruthy();
 
-    const aLeaf = await findMlsMemberIndex(vaultA, spaceId, identityA.did);
-    const bLeafOnA = await findMlsMemberIndex(vaultA, spaceId, identityB.did);
-    expect(aLeaf).not.toBeNull();
-    expect(bLeafOnA).not.toBeNull();
+    // Both lookups throw if the leaf is missing — that IS the assertion here.
+    await findMlsMemberIndex(vaultA, spaceId, identityA.did);
+    await findMlsMemberIndex(vaultA, spaceId, identityB.did);
   });
 
   test("A removes B via the real production commit + wire delivery", async () => {
+    // Throws if B is missing — precondition assert.
     const bLeaf = await findMlsMemberIndex(vaultA, spaceId, identityB.did);
-    expect(bLeaf).not.toBeNull();
 
     const bundle = await vaultA.invokeTauriCommand<MlsCommitBundleJs>("mls_remove_member", {
       spaceId,
@@ -161,23 +160,18 @@ test.describe("mls committer-capability: happy path over real P2P", () => {
     // B merged the commit (not just fetched it) — it should recognize its
     // own removal in its OWN local MLS group view. Convergence, not just
     // wire-carry: proves the receive-gate accepted the proof, not that the
-    // message merely arrived unread. `mls_find_member_index` throws (rather
-    // than resolving null) once B tears down the group after processing a
-    // Remove targeting itself, so either outcome — a resolved `null` or a
-    // throw — signals "B no longer considers itself a member".
+    // message merely arrived unread. `findMlsMemberIndexOrNull` returns
+    // `null` for both outcomes that mean "B no longer considers itself a
+    // member" — the lookup resolving null OR B having torn down the group
+    // after processing a Remove targeting itself (which throws).
     await pollUntil(
-      async () => {
-        const idx = await vaultB
-          .invokeTauriCommand<number | null>("mls_find_member_index", { spaceId, memberDid: identityB.did })
-          .catch(() => null);
-        return idx === null;
-      },
+      async () => (await findMlsMemberIndexOrNull(vaultB, spaceId, identityB.did)) === null,
       { timeout: 30_000, interval: 2_000, label: "Vault B recognizes its own removal" },
     );
   });
 
   test("both peers converge: B is gone from A's group too", async () => {
-    const bLeafOnA = await findMlsMemberIndex(vaultA, spaceId, identityB.did);
+    const bLeafOnA = await findMlsMemberIndexOrNull(vaultA, spaceId, identityB.did);
     expect(bLeafOnA).toBeNull();
   });
 });

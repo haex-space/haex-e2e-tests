@@ -103,19 +103,30 @@ test.describe("mls committer-capability: local raw remove without capability is 
   });
 
   test("B's direct mls_remove_member call is rejected by the local capability gate", async () => {
+    // Throws if A is missing — precondition assert.
     const aLeafOnB = await findMlsMemberIndex(vaultB, spaceId, identityA.did);
-    expect(aLeafOnB).not.toBeNull();
+
+    // `mls_export_epoch_key` is the only production-exposed epoch reader —
+    // idempotent (in-place UPDATE on the sync-keys table) so calling it
+    // before/after doesn't perturb what we're measuring.
+    const { epoch: epochBefore } = await vaultB.invokeTauriCommand<{ epoch: number | bigint }>(
+      "mls_export_epoch_key", { spaceId },
+    );
 
     await expect(
       vaultB.invokeTauriCommand("mls_remove_member", { spaceId, memberIndex: aLeafOnB }),
     ).rejects.toThrow(/Invite-or-higher/);
 
-    // No commit was produced — B's own group still has A as a member.
-    const aLeafOnBAfter = await findMlsMemberIndex(vaultB, spaceId, identityA.did);
-    expect(aLeafOnBAfter).not.toBeNull();
+    // No commit was produced — B's own group still has A as a member, and
+    // its epoch didn't advance (belt-and-braces on top of the membership
+    // check: `authorize_local_removal` rejects BEFORE anything is staged).
+    await findMlsMemberIndex(vaultB, spaceId, identityA.did);
+    const { epoch: epochAfter } = await vaultB.invokeTauriCommand<{ epoch: number | bigint }>(
+      "mls_export_epoch_key", { spaceId },
+    );
+    expect(String(epochAfter)).toBe(String(epochBefore));
 
     // A's member set is untouched — nothing was ever sent.
-    const aLeafOnA = await findMlsMemberIndex(vaultA, spaceId, identityA.did);
-    expect(aLeafOnA).not.toBeNull();
+    await findMlsMemberIndex(vaultA, spaceId, identityA.did);
   });
 });

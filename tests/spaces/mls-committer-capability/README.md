@@ -51,6 +51,16 @@ leaf in A's group. From there:
 
 ## Running locally
 
+**Prerequisite:** requires a haex-vault build that includes the `mls::e2e_hooks`
+Tauri commands (`test_mls_remove_member_unchecked` +
+`test_mls_process_commit_report`) — introduced in haex-vault PR
+[#783](https://github.com/haex-space/haex-vault/pull/783) and gated behind its
+`e2e-hooks` Cargo feature. Docker's default `haex-vault:latest` image is built
+with `--features e2e-hooks`, so no extra setup is needed for the flow below;
+against an older image or a hand-built binary without the feature, every spec
+here fails at the first `invokeTauriCommand("test_mls_…")` with an
+"unknown command" error.
+
 ```bash
 pnpm docker:up
 pnpm docker:test -- tests/spaces/mls-committer-capability

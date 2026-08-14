@@ -146,11 +146,14 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
     expect(report.epochAfter).toBe(report.epochBefore);
   });
 
-  test("6b: broken chain — leaf issuer does not match the fake root's audience", async () => {
+  test("6b: broken chain — leaf issuer does not match the (real) root's audience", async () => {
     const spaceId = await setupSubcaseSpace(`MLS Forged-UCAN BrokenChain ${RUN_SUFFIX}`);
 
-    const fakeRootIdentity = await generateThrowawayIdentity();
-    const fakeRootToken = await mintFakeSelfSignedRoot(fakeRootIdentity, spaceId);
+    // Root here is the REAL admin token (not a fake self-signed root as in
+    // 6a) — space-id binding passes, so the chain fails on THIS sub-case's
+    // intended check (leaf issuer ≠ parent's audience) instead of on
+    // space-id binding as it would with a throwaway root.
+    const admin = await loadAdminIdentity(vaultA, spaceId);
     const impostor = await generateThrowawayIdentity();
     const forged = await mintUcan({
       issuerDid: impostor.did,
@@ -158,7 +161,7 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
       audienceDid: identityB.did,
       spaceId,
       capability: "space/invite",
-      proofs: [fakeRootToken],
+      proofs: [admin.rootToken],
     });
 
     const report = await driveAttack(spaceId, forged);
@@ -168,18 +171,20 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
     expect(report.epochAfter).toBe(report.epochBefore);
   });
 
-  test("6c: expired — valid fake-rooted chain, expiration in the past", async () => {
+  test("6c: expired — real admin-rooted chain, expiration in the past", async () => {
     const spaceId = await setupSubcaseSpace(`MLS Forged-UCAN Expired ${RUN_SUFFIX}`);
 
-    const fake = await generateThrowawayIdentity();
-    const fakeRoot = await mintFakeSelfSignedRoot(fake, spaceId);
+    // Same isolation-of-check reasoning as 6b: use the real admin root so
+    // space-id binding and chain-walk both succeed, and the ONLY reason the
+    // token is rejected is its expiration.
+    const admin = await loadAdminIdentity(vaultA, spaceId);
     const forged = await mintUcan({
-      issuerDid: fake.did,
-      issuerPrivateKeyBase64: fake.privateKeyBase64,
+      issuerDid: admin.did,
+      issuerPrivateKeyBase64: admin.privateKeyBase64,
       audienceDid: identityB.did,
       spaceId,
       capability: "space/invite",
-      proofs: [fakeRoot],
+      proofs: [admin.rootToken],
       expiresInSeconds: -3600,
     });
 

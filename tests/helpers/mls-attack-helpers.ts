@@ -93,7 +93,27 @@ export async function testMlsProcessCommitReport(
   );
 }
 
-/** Resolve `targetDid`'s own MLS leaf index in `spaceId`, as seen by `vault`. */
+/**
+ * Non-throwing form — resolves `targetDid`'s own MLS leaf index in `spaceId`,
+ * or `null` when the member is not present. Also swallows the "no group" throw
+ * that fires on a vault that has torn down its group after processing a Remove
+ * targeting itself; both outcomes are legitimate signals of "not a member".
+ */
+export async function findMlsMemberIndexOrNull(
+  vault: VaultAutomation,
+  spaceId: string,
+  targetDid: string,
+): Promise<number | null> {
+  const idx = await vault
+    .invokeTauriCommand<number | null>("mls_find_member_index", {
+      spaceId,
+      memberDid: targetDid,
+    })
+    .catch(() => null);
+  return idx ?? null;
+}
+
+/** Resolve `targetDid`'s own MLS leaf index in `spaceId`, as seen by `vault`. Throws when absent — use as a precondition assert. */
 export async function findMlsMemberIndex(
   vault: VaultAutomation,
   spaceId: string,
@@ -308,13 +328,24 @@ async function registerContactViaJsonImport(
 
 /** Starts (if needed) and waits until `local_delivery` is actively syncing `spaceId`. */
 async function ensureLocalDeliveryActive(vault: VaultAutomation, spaceId: string): Promise<void> {
-  await vault.invokeTauriCommand("local_delivery_start", { spaceId }).catch(() => { /* already active */ });
+  // `local_delivery_start` throws if the space is already active — that's the
+  // expected path when this helper runs after an earlier setup step. But any
+  // other failure was previously swallowed and surfaced only as an opaque
+  // 30s poll timeout; retain it for the label.
+  let startError: unknown = null;
+  await vault
+    .invokeTauriCommand("local_delivery_start", { spaceId })
+    .catch((e) => { startError = e; /* may already be active */ });
   await pollUntil(
     async () => {
       const status = await vault.invokeTauriCommand<{ activeSpaces?: string[] }>("local_delivery_status", {});
       return (status.activeSpaces ?? []).includes(spaceId);
     },
-    { timeout: 30_000, interval: 1_000, label: "local_delivery active for space" },
+    {
+      timeout: 30_000,
+      interval: 1_000,
+      label: `local_delivery active for space${startError ? ` (start reported: ${String(startError)})` : ""}`,
+    },
   );
 }
 
@@ -478,14 +509,6 @@ export async function ensureSpaceMemberRow(
   spaceId: string,
   did: string,
 ): Promise<void> {
-  const existing = await sqlQuery<{ id: string }>(
-    vault,
-    `SELECT m.id FROM haex_space_members m JOIN haex_identities i ON m.identity_id = i.id
-     WHERE m.space_id = ?1 AND i.did = ?2 LIMIT 1`,
-    [spaceId, did],
-  );
-  if (existing.length > 0) return;
-
   const identity = await sqlQuery<{ id: string }>(
     vault,
     `SELECT id FROM haex_identities WHERE did = ?1 LIMIT 1`,
@@ -494,8 +517,11 @@ export async function ensureSpaceMemberRow(
   if (identity.length === 0) {
     throw new Error(`[MLS-ATTACK] no haex_identities row for ${did} on this vault`);
   }
+  // `haex_space_members_space_identity_unique` (`(space_id, identity_id)`) makes
+  // this a no-op if the row already exists — safer than a check-then-insert
+  // sequence when two setup steps race (each attack spec's setup calls this).
   await vault.invokeTauriCommand("sql_execute_with_crdt", {
-    sql: `INSERT INTO haex_space_members (id, space_id, identity_id, role) VALUES (?1, ?2, ?3, 'member')`,
+    sql: `INSERT OR IGNORE INTO haex_space_members (id, space_id, identity_id, role) VALUES (?1, ?2, ?3, 'member')`,
     params: [crypto.randomUUID(), spaceId, identity[0].id],
   });
 }
