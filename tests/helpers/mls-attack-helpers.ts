@@ -101,7 +101,7 @@ export async function findMlsMemberIndex(
 ): Promise<number> {
   const idx = await vault.invokeTauriCommand<number | null>("mls_find_member_index", {
     spaceId,
-    targetDid,
+    memberDid: targetDid,
   });
   if (idx === null || idx === undefined) {
     throw new Error(`No MLS member index found for ${targetDid} in space ${spaceId}`);
@@ -425,13 +425,13 @@ export async function setupTwoPartySpace(params: {
 }): Promise<string> {
   const { vaultA, vaultB, nodeIdA, nodeIdB, identityADid, identityBDid, contactLabel, spaceName } = params;
 
-  await registerContactViaJsonImport(vaultA, identityBDid, nodeIdB, contactLabel);
+  const effectiveContactLabel = await registerContactViaJsonImport(vaultA, identityBDid, nodeIdB, contactLabel);
 
   const spaceId = await createLocalSpaceViaUI(vaultA, spaceName);
   await ensureDeviceRegistered(vaultA, spaceId, nodeIdA, identityADid);
   await ensureLocalDeliveryActive(vaultA, spaceId);
 
-  await sendInviteViaUI(vaultA, spaceName, contactLabel, false);
+  await sendInviteViaUI(vaultA, spaceName, effectiveContactLabel, false);
   await pollUntil(
     async () => {
       const invites = await sqlQuery<{ id: string }>(
@@ -459,4 +459,43 @@ export async function setupTwoPartySpace(params: {
 /** Random per-run suffix, matching this repo's `RUN_SUFFIX` idiom (avoids colliding with a prior run's rows under the same space name). */
 export function runSuffix(): string {
   return crypto.randomBytes(4).toString("hex");
+}
+
+/**
+ * Ensure `did` has a `haex_space_members` row on `vault`'s OWN db for
+ * `spaceId` — idempotent (no-op if already present).
+ *
+ * The convergence precondition every attack spec needs (design doc C1):
+ * `authorize_committer_capability`'s `all_targets_already_gone` exemption
+ * can't tell "the removal target already left" from "this receiver never
+ * applied the Add in the first place" — row absence means both. Without
+ * explicitly ensuring the target's row here, an attack spec can pass for
+ * the wrong reason (the exemption silently accepting a proof-less commit)
+ * rather than because the committer-capability gate actually fired.
+ */
+export async function ensureSpaceMemberRow(
+  vault: VaultAutomation,
+  spaceId: string,
+  did: string,
+): Promise<void> {
+  const existing = await sqlQuery<{ id: string }>(
+    vault,
+    `SELECT m.id FROM haex_space_members m JOIN haex_identities i ON m.identity_id = i.id
+     WHERE m.space_id = ?1 AND i.did = ?2 LIMIT 1`,
+    [spaceId, did],
+  );
+  if (existing.length > 0) return;
+
+  const identity = await sqlQuery<{ id: string }>(
+    vault,
+    `SELECT id FROM haex_identities WHERE did = ?1 LIMIT 1`,
+    [did],
+  );
+  if (identity.length === 0) {
+    throw new Error(`[MLS-ATTACK] no haex_identities row for ${did} on this vault`);
+  }
+  await vault.invokeTauriCommand("sql_execute_with_crdt", {
+    sql: `INSERT INTO haex_space_members (id, space_id, identity_id, role) VALUES (?1, ?2, ?3, 'member')`,
+    params: [crypto.randomUUID(), spaceId, identity[0].id],
+  });
 }

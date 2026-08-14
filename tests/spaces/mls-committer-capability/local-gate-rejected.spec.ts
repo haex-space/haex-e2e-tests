@@ -14,7 +14,7 @@
 import { expect, test, VaultAutomation } from "../../fixtures";
 import { pollUntil, sqlQuery } from "../../helpers/ui/utils";
 import { initializeVaultViaUI, startP2PEndpoint } from "../../helpers/ui/ui-vault";
-import { findMlsMemberIndex, runSuffix, setupTwoPartySpace } from "../../helpers/mls-attack-helpers";
+import { ensureSpaceMemberRow, findMlsMemberIndex, runSuffix, setupTwoPartySpace } from "../../helpers/mls-attack-helpers";
 
 const RUN_SUFFIX = runSuffix();
 const SPACE_NAME = `MLS Local-Gate Space ${RUN_SUFFIX}`;
@@ -81,6 +81,15 @@ test.describe("mls committer-capability: local raw remove without capability is 
       contactLabel: CONTACT_LABEL,
       spaceName: SPACE_NAME,
     });
+
+    // `authorize_local_removal` only demands a capability proof if the
+    // removal target is a recognized member in the committer's OWN
+    // `haex_space_members` table (`is_space_member` — otherwise it treats
+    // the target as "already left" and skips the gate). The invite/accept
+    // flow doesn't itself populate B's row for A, so without this B's
+    // `mls_remove_member` call below would silently succeed instead of
+    // rejecting — same precondition forged-ucan-rejected.spec.ts needs.
+    await ensureSpaceMemberRow(vaultB, spaceId, identityA.did);
 
     // B holds only space/read from the invite dialog (no Invite toggle
     // exists in the UI at all).

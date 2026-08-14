@@ -7,13 +7,20 @@
  * error as no UCAN at all — the only place they're distinguishable at all
  * is `resolvedAudienceDid`/`resolvedLevel` on the report, which is exactly
  * what each assertion checks instead of the rejection message. "Wrong
- * audience" is the one sub-case whose UCAN verifies successfully and then
- * fails the LATER audience comparison — the one case that reaches a
- * different, distinguishable rejection.
+ * audience" is the one sub-case whose UCAN chain-walks fine (rooted at the
+ * real admin) and resolves a real `resolvedAudienceDid` — but is rejected
+ * even earlier than Phase 3: `verify_commit_bind_bytes` (`mls/commit_bind.rs`)
+ * derives its verification key from the UCAN's *audience* DID, and the
+ * commit here was actually bind-signed by B's real key, not the wrong
+ * audience's — so the signature itself fails to verify. The commit-bind
+ * check is transitively audience-bound even though it has no group/epoch
+ * binding of its own.
  *
  * Every sub-case pairs its forged UCAN with the REAL bind signature from
  * the SAME commit (`test_mls_remove_member_unchecked` always signs one),
- * so the commit-bind check passes and does not mask the check under test.
+ * so the commit-bind check passes for 6a-6c and does not mask the check
+ * under test there. 6d is the one case where that same real bind sig is
+ * exactly what trips the EARLIER commit-bind rejection (see above).
  * Each sub-case gets its own space — a shared one would let one sub-case's
  * local divergence on B poison the next (see README.md).
  *
@@ -50,6 +57,7 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
   let nodeIdB: string;
   let identityA: { did: string };
   let identityB: { did: string };
+  const createdSpaceIds: string[] = [];
 
   test.beforeAll(async () => {
     vaultA = new VaultAutomation("A");
@@ -84,6 +92,13 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
   test.afterAll(async () => {
     for (const v of [vaultA, vaultB]) {
       if (!v) continue;
+      // Each sub-case's space stays "active" (still syncing) until stopped
+      // explicitly — `peer_storage_stop` below pauses the endpoint but does
+      // not deregister spaces, so without this every later spec file in the
+      // same worker inherits all 4 of this file's spaces as extra load.
+      for (const spaceId of createdSpaceIds) {
+        await v.invokeTauriCommand("local_delivery_stop", { spaceId }).catch(() => { /* ignore */ });
+      }
       await v.invokeTauriCommand("peer_storage_stop", {}).catch(() => { /* ignore */ });
     }
   });
@@ -97,6 +112,7 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
       contactLabel: CONTACT_LABEL,
       spaceName,
     });
+    createdSpaceIds.push(spaceId);
     await ensureSpaceMemberRow(vaultA, spaceId, identityA.did);
     return spaceId;
   }
@@ -191,12 +207,15 @@ test.describe("mls committer-capability: forged UCAN rejected", () => {
     const report = await driveAttack(spaceId, forged);
 
     // The one sub-case whose UCAN verifies successfully — chain-walks fine,
-    // rooted at the real admin — and is only rejected by the LATER
-    // audience-match in `authorize_committer_capability`.
+    // rooted at the real admin — so `resolvedAudienceDid` resolves for real.
+    // But the commit's bind signature was produced by B's real key, not the
+    // wrong audience's, and `verify_commit_bind_bytes` verifies against a
+    // key derived from the UCAN's audience DID — so the signature check
+    // itself fails before Phase 3's committer-capability logic ever runs.
     expect(report.resolvedAudienceDid).toBe(wrongAudience.did);
-    expect(report.outcome.kind).toBe("rejectedCommitterCapability");
-    if (report.outcome.kind === "rejectedCommitterCapability") {
-      expect(report.outcome.reason).toContain("does not match the commit's committer");
+    expect(report.outcome.kind).toBe("rejectedCommitBind");
+    if (report.outcome.kind === "rejectedCommitBind") {
+      expect(report.outcome.reason).toContain("commit-bind signature invalid");
     }
     expect(report.epochAfter).toBe(report.epochBefore);
   });

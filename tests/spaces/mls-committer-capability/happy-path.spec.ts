@@ -131,13 +131,20 @@ test.describe("mls committer-capability: happy path over real P2P", () => {
   });
 
   test("the wire carried committerUcan + committerCommitBindSig to B, and B merged the commit", async () => {
+    // `haex_local_delivery_messages_no_sync` is the LEADER's own outbox
+    // (`buffer::store_message` / `buffer::fetch_messages` live only in
+    // `space_delivery::local::leader`) — A, the space creator, is the local
+    // leader here, so the persisted row (and its committer_ucan +
+    // committer_commit_bind_sig columns) lives on A, not B. B fetches it
+    // over the wire via RPC and processes it inline without a durable local
+    // copy, so querying B's own DB for this row was never observable.
     const row = await pollUntil(
       async () => {
         const rows = await sqlQuery<{
           committer_ucan: string | null;
           committer_commit_bind_sig: string | null;
         }>(
-          vaultB,
+          vaultA,
           `SELECT committer_ucan, committer_commit_bind_sig
            FROM haex_local_delivery_messages_no_sync
            WHERE space_id = ?1 AND message_type = 'commit'
@@ -146,17 +153,25 @@ test.describe("mls committer-capability: happy path over real P2P", () => {
         );
         return rows.length > 0 ? rows[0] : null;
       },
-      { timeout: 60_000, interval: 2_000, label: "removal commit row on Vault B" },
+      { timeout: 30_000, interval: 2_000, label: "removal commit row persisted on Vault A's leader buffer" },
     );
     expect(row!.committer_ucan).not.toBeNull();
     expect(row!.committer_commit_bind_sig).not.toBeNull();
 
-    // B merged the commit (not just stored it) — it should recognize its own
-    // removal in its OWN local MLS group view. Convergence, not just wire-
-    // carry: proves the receive-gate accepted the proof, not that the row
-    // merely landed unread.
+    // B merged the commit (not just fetched it) — it should recognize its
+    // own removal in its OWN local MLS group view. Convergence, not just
+    // wire-carry: proves the receive-gate accepted the proof, not that the
+    // message merely arrived unread. `mls_find_member_index` throws (rather
+    // than resolving null) once B tears down the group after processing a
+    // Remove targeting itself, so either outcome — a resolved `null` or a
+    // throw — signals "B no longer considers itself a member".
     await pollUntil(
-      async () => (await findMlsMemberIndex(vaultB, spaceId, identityB.did)) === null,
+      async () => {
+        const idx = await vaultB
+          .invokeTauriCommand<number | null>("mls_find_member_index", { spaceId, memberDid: identityB.did })
+          .catch(() => null);
+        return idx === null;
+      },
       { timeout: 30_000, interval: 2_000, label: "Vault B recognizes its own removal" },
     );
   });
