@@ -508,7 +508,10 @@ jobs:
   e2e:
     name: E2E Tests - ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The workflows shard reached its former 45-minute job ceiling while
+    # still executing test 595 (haex-vault PR #784, 2026-08-15). Keep the
+    # full required suite and give its final sync scenarios a bounded margin.
+    timeout-minutes: 60
     needs: build-env
     # inputs.haex_vault_platform is only populated for workflow_call/
     # workflow_dispatch; direct push/PR triggers on this repo leave it empty,
@@ -1387,4 +1390,3 @@ jobs:
             echo "result=failure" >> $GITHUB_OUTPUT
             echo "❌ Some E2E tests failed" >> $GITHUB_STEP_SUMMARY
           fi
-
