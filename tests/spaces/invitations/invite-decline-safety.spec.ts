@@ -34,7 +34,7 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { SpaceCapabilities } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
 
 test.describe("invitations: decline safety", () => {
   test.describe.configure({ mode: "serial" });

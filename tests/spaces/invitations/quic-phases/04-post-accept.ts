@@ -65,9 +65,9 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
     // Regression: the old local-claim path stored issuer_did = claimant DID
     // ("self-issued for local claims"), which misrepresented the delegation
     // chain signed by the inviter and confused CRDT fan-out on the admin side.
-    const rows = await sqlQuery<{ issuer_did: string; audience_did: string; capability: string }>(
+    const rows = await sqlQuery<{ issuer_did: string; audience_did: string; capabilities: string }>(
       state.vaultB!,
-      `SELECT issuer_did, audience_did, capability
+      `SELECT issuer_did, audience_did, capabilities
        FROM haex_ucan_tokens
        WHERE space_id = ?1 AND audience_did = ?2`,
       [spaceId, identityB.did],
@@ -260,8 +260,8 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
         const membersB = await sqlQuery<{ identity_id: string; role: string }>(
           vaultB, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
         );
-        const ucansB = await sqlQuery<{ audience_did: string; capability: string; expires_at: number }>(
-          vaultB, `SELECT audience_did, capability, expires_at FROM haex_ucan_tokens WHERE space_id = ?1`, [spaceId],
+        const ucansB = await sqlQuery<{ audience_did: string; capabilities: string; expires_at: number }>(
+          vaultB, `SELECT audience_did, capabilities, expires_at FROM haex_ucan_tokens WHERE space_id = ?1`, [spaceId],
         );
         const membersA = await sqlQuery<{ identity_id: string; role: string }>(
           vaultA, `SELECT identity_id, role FROM haex_space_members WHERE space_id = ?1`, [spaceId],
@@ -269,7 +269,7 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
         console.log(`[QUIC-DEBUG 1523] sharesA=${JSON.stringify(sharesA.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.endpoint_id.slice(0, 12) })))}`);
         console.log(`[QUIC-DEBUG 1523] sharesB=${JSON.stringify(sharesB.map(s => ({ id: s.id.slice(0, 8), name: s.name, dev: s.endpoint_id.slice(0, 12) })))}`);
         console.log(`[QUIC-DEBUG 1523] devicesB=${JSON.stringify(devicesB.map(d => d.endpoint_id.slice(0, 12)))}`);
-        console.log(`[QUIC-DEBUG 1523] membersB=${membersB.length} membersA=${membersA.length} ucansB=${JSON.stringify(ucansB.map(u => ({ aud: u.audience_did.slice(0, 24), cap: u.capability, exp: u.expires_at })))}`);
+        console.log(`[QUIC-DEBUG 1523] membersB=${membersB.length} membersA=${membersA.length} ucansB=${JSON.stringify(ucansB.map(u => ({ aud: u.audience_did.slice(0, 24), caps: u.capabilities, exp: u.expires_at })))}`);
       } catch (diagErr) {
         console.log(`[QUIC-DEBUG 1523] state dump failed: ${(diagErr as Error)?.message ?? String(diagErr)}`);
       }

@@ -29,7 +29,7 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { SpaceCapabilities } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 

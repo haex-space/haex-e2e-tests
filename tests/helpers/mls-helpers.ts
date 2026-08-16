@@ -11,8 +11,9 @@ import {
 import {
   createUcan,
   createWebCryptoSigner,
+  spaceCapabilitySetFromEntries,
   spaceResource,
-  type Capability,
+  type SpaceCap,
 } from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -24,7 +25,13 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 /**
  * Build a cryptographically signed UCAN token for space-scoped MLS operations.
  */
-export async function buildSignedUcan(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
+type LegacySpaceCap = `space/${SpaceCap}`;
+
+function normalizeSpaceCap(capability: SpaceCap | LegacySpaceCap): SpaceCap {
+  return capability.replace("space/", "") as SpaceCap;
+}
+
+export async function buildSignedUcan(auth: AuthContext, spaceId: string, capability: SpaceCap | LegacySpaceCap): Promise<string> {
   const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
   const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
   const sign = createWebCryptoSigner(privateKey);
@@ -33,14 +40,18 @@ export async function buildSignedUcan(auth: AuthContext, spaceId: string, capabi
     {
       issuer: auth.did,
       audience: auth.did,
-      capabilities: { [spaceResource(spaceId)]: capability },
+      capabilities: {
+        [spaceResource(spaceId)]: spaceCapabilitySetFromEntries([
+          { cap: normalizeSpaceCap(capability), delegatable: true },
+        ]),
+      },
       expiration: Math.floor(Date.now() / 1000) + 3600,
     },
     sign,
   );
 }
 
-async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: Capability): Promise<string> {
+async function buildUcanAuthHeader(auth: AuthContext, spaceId: string, capability: SpaceCap | LegacySpaceCap): Promise<string> {
   const token = await buildSignedUcan(auth, spaceId, capability);
   return `UCAN ${token}`;
 }

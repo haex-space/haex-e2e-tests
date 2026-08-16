@@ -4,9 +4,10 @@ import {
   createUcan,
   createWebCryptoSigner,
   publicKeyToDid,
+  spaceCapabilitySet,
   spaceResource,
-  SpaceCapabilities,
 } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
 import { initializeVaultViaUI } from "../helpers/ui/ui-vault";
 
 const { subtle } = crypto.webcrypto as unknown as Crypto;
@@ -282,7 +283,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: issuerDid,
-        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().admin(true).build() },
         expiration: expirationUnix,
       },
       signer,
@@ -291,7 +292,7 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: ownDidB,
-        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().admin(true).build() },
         proofs: [rootUcan],
         expiration: expirationUnix,
       },

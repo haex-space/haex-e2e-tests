@@ -658,9 +658,9 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
   });
 
   test("Vault B's UCAN for the space is stored and valid", async () => {
-    const ucans = await sqlQuery<{ token: string; capability: string }>(
+    const ucans = await sqlQuery<{ token: string; capabilities: string }>(
       vaultB,
-      `SELECT token, capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      `SELECT token, capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
       [spaceId, identityB.did],
     );
     expect(ucans.length).toBeGreaterThan(0);
@@ -668,7 +668,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
     const token = ucans[0].token;
     expect(token).toBeTruthy();
     expect(token.split(".").length).toBe(3);
-    console.log(`[FileSharing] Vault B has ${ucans.length} UCAN(s) for space, cap=${ucans[0].capability}`);
+    console.log(`[FileSharing] Vault B has ${ucans.length} UCAN(s) for space, capabilities=${ucans[0].capabilities}`);
   });
 
   test("Vault B can LIST files from Vault A via P2P", async () => {

@@ -62,13 +62,13 @@ export function registerUcanRegressionPhase(state: QuicTestState): void {
     //    and EVERY remoteListAsync would fail — including root listing.
     //    Failing here means the bug is on the Rust persist_claimed_ucan path,
     //    not the TS resolver.
-    const ucanRows = await sqlQuery<{ token: string; capability: string }>(
+    const ucanRows = await sqlQuery<{ token: string; capabilities: string }>(
       vaultB,
-      `SELECT token, capability FROM haex_ucan_tokens WHERE space_id = ?1`,
+      `SELECT token, capabilities FROM haex_ucan_tokens WHERE space_id = ?1`,
       [spaceId],
     );
     expect(ucanRows.length).toBeGreaterThanOrEqual(1);
-    console.log(`[QUIC] Vault B has UCAN for space (capability=${ucanRows[0].capability}) ✓`);
+    console.log(`[QUIC] Vault B has UCAN for space (capabilities=${ucanRows[0].capabilities}) ✓`);
 
     // 3b. CRITICAL PRECONDITION — Vault B's device row must reach Vault A.
     //

@@ -258,7 +258,7 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     console.log(`[QUIC] Vault B UCAN cleared on leave (was: ${tokenBefore.slice(0, 24)}…) ✓`);
   });
 
-  test("re-invite to same space leaves no duplicate UCAN row per capability", async () => {
+  test("re-invite to same space leaves one UCAN capability set", async () => {
     const vaultA = state.vaultA!;
     const vaultB = state.vaultB!;
     const identityB = state.identityB!;
@@ -356,8 +356,8 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     `);
     expect(acceptResult.ok, `acceptLocalInviteAsync failed: ${acceptResult.error}`).toBe(true);
 
-    // The actual assertion: no duplicate UCAN for (space, B, capability).
-    // Before the fix a capability appeared twice — the stale row plus the
+    // The actual assertion: no duplicate UCAN set for (space, B).
+    // Before the fix a set appeared twice — the stale row plus the
     // freshly-claimed one. The poll waits for the freshly-claimed row to
     // arrive, then a settle window absorbs the case where the stale
     // duplicate lands a moment AFTER the new one — without
@@ -381,33 +381,25 @@ export function registerDataConsistencyPhase(state: QuicTestState): void {
     // before we assert "no duplicates". 2s matches the upper bound of
     // ClaimInvite's UCAN-write tail observed on CI.
     await wait(2_000);
-    const rows = await sqlQuery<{ token: string; issued_at: number; capability: string }>(
+    const rows = await sqlQuery<{ token: string; issued_at: number; capabilities: string }>(
       vaultB,
-      `SELECT token, issued_at, capability FROM haex_ucan_tokens
+      `SELECT token, issued_at, capabilities FROM haex_ucan_tokens
        WHERE space_id = ?1 AND audience_did = ?2
        ORDER BY issued_at DESC`,
       [spaceId, identityB.did],
     );
 
     // The bug we are guarding against: two coexisting rows for the same
-    // (space_id, audience_did, capability) — the stale leftover from before
+    // (space_id, audience_did) — the stale leftover from before
     // the leave and the freshly-claimed one. `persist_claimed_ucan` now
     // writes the new row first and then DELETEs older rows for the same
     // audience.
     //
-    // Not a plain `rows.length === 1`: this re-invite grants
-    // ["space/read", "space/write"], and a claim issues one delegated UCAN
-    // *per* granted capability — capabilities are orthogonal grants, not a
-    // rank (haex-vault#756). Counting rows would therefore conflate "stale
-    // duplicate survived" with "second capability was granted". One row per
-    // *distinct* capability is the invariant that actually pins the bug, and
-    // it holds both before and after that change: the stale leftover always
-    // duplicates a capability the re-claim grants again.
-    expect(rows.length, "no UCAN rows survived the settle window").toBeGreaterThan(0);
-    const caps = rows.map((r) => r.capability);
-    expect(new Set(caps).size, `duplicate UCAN rows per capability: ${JSON.stringify(caps)}`)
-      .toBe(rows.length);
-    console.log(`[QUIC] Vault B UCAN rows after re-invite = ${rows.length} (capabilities=${JSON.stringify(caps)}) ✓`);
+    // A claim now persists one UCAN carrying the whole CapabilitySet. Any
+    // additional row is stale cache state, not a separate orthogonal grant.
+    expect(rows.length, "no UCAN rows survived the settle window").toBe(1);
+    const caps = JSON.parse(rows[0].capabilities).map((entry: { cap: string }) => entry.cap);
+    console.log(`[QUIC] Vault B UCAN row after re-invite (capabilities=${JSON.stringify(caps)}) ✓`);
 
     // Wait briefly for the spaces store to reflect the re-accept (status
     // back to 'active' and member row reinstated) so any later phase that

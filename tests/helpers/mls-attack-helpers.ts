@@ -15,8 +15,9 @@ import * as crypto from "crypto";
 import {
   createUcan,
   createWebCryptoSigner,
+  spaceCapabilitySetFromEntries,
   spaceResource,
-  type Capability,
+  type SpaceCap,
 } from "@haex-space/ucan";
 import {
   generateIdentityAsync,
@@ -57,6 +58,12 @@ export interface TestUncheckedRemovalReport {
   commitBindSigB64: string;
   committerDid: string;
   targetDid: string;
+}
+
+type LegacySpaceCap = `space/${SpaceCap}`;
+
+function normalizeSpaceCap(capability: SpaceCap | LegacySpaceCap): SpaceCap {
+  return capability.replace("space/", "") as SpaceCap;
 }
 
 /**
@@ -147,15 +154,22 @@ export async function loadAdminIdentity(
   vault: VaultAutomation,
   spaceId: string,
 ): Promise<{ did: string; rootToken: string; privateKeyBase64: string }> {
-  const rootRows = await sqlQuery<{ issuer_did: string; token: string }>(
+  const rootRows = await sqlQuery<{ issuer_did: string; token: string; capabilities: string }>(
     vault,
-    `SELECT issuer_did, token FROM haex_ucan_tokens WHERE space_id = ?1 AND capability = 'space/admin' LIMIT 1`,
+    `SELECT issuer_did, token, capabilities FROM haex_ucan_tokens WHERE space_id = ?1`,
     [spaceId],
   );
-  if (rootRows.length === 0) {
+  const root = rootRows.find((row) => {
+    try {
+      return JSON.parse(row.capabilities).some((entry: { cap?: string }) => entry.cap === "admin");
+    } catch {
+      return false;
+    }
+  });
+  if (!root) {
     throw new Error(`No space/admin root UCAN found for space ${spaceId}`);
   }
-  const { issuer_did: did, token: rootToken } = rootRows[0];
+  const { issuer_did: did, token: rootToken } = root;
 
   const keyRows = await sqlQuery<{ private_key: string }>(
     vault,
@@ -195,7 +209,7 @@ export async function mintUcan(params: {
   issuerPrivateKeyBase64: string;
   audienceDid: string;
   spaceId: string;
-  capability: Capability;
+  capability: SpaceCap | LegacySpaceCap;
   expiresInSeconds?: number;
   proofs?: string[];
 }): Promise<string> {
@@ -206,7 +220,11 @@ export async function mintUcan(params: {
     {
       issuer: params.issuerDid,
       audience: params.audienceDid,
-      capabilities: { [spaceResource(params.spaceId)]: params.capability },
+      capabilities: {
+        [spaceResource(params.spaceId)]: spaceCapabilitySetFromEntries([
+          { cap: normalizeSpaceCap(params.capability), delegatable: true },
+        ]),
+      },
       expiration: Math.floor(Date.now() / 1000) + expiresInSeconds,
       proofs: params.proofs,
     },

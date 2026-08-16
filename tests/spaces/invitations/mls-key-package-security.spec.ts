@@ -28,7 +28,7 @@ import {
   fetchKeyPackage,
   fetchMlsMessages,
 } from "../../helpers/mls-helpers";
-import { SpaceCapabilities } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
 
 test.describe("invitations: MLS security (API-level)", () => {
   test.describe.configure({ mode: "serial" });
