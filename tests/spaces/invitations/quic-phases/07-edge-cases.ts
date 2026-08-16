@@ -179,12 +179,13 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
 
   test("Vault B has read-only UCAN for the first invite (space/read only)", async () => {
     const spaceId = state.spaceId!;
+    const identityB = state.identityB!;
     // The first invite was sent with ["space/read"] capabilities.
     // Vault B should NOT have space/write or space/admin.
     const ucans = await sqlQuery<{ capabilities: string; audience_did: string }>(
       state.vaultB!,
-      `SELECT capabilities, audience_did FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities, audience_did FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityB.did],
     );
     console.log(`[QUIC] UCANs on Vault B for space: ${JSON.stringify(ucans)}`);
 
@@ -199,14 +200,16 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
 
   test("Vault B's UCAN does not grant write/admin capability", async () => {
     const spaceId = state.spaceId!;
+    const identityA = state.identityA!;
+    const identityB = state.identityB!;
 
     // After accepting the second invite (with space/read + space/write),
     // Vault B should have those capabilities but NOT space/admin.
     // Only the space creator (Vault A) should have space/admin.
     const ucansOnB = await sqlQuery<{ capabilities: string }>(
       state.vaultB!,
-      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityB.did],
     );
     const caps = ucansOnB.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap));
     expect(caps).not.toContain("admin");
@@ -215,8 +218,8 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
     // Vault A should have space/admin
     const ucansOnA = await sqlQuery<{ capabilities: string }>(
       state.vaultA!,
-      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityA.did],
     );
     const capsA = ucansOnA.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap));
     expect(capsA).toContain("admin");
