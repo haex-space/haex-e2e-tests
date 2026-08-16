@@ -283,7 +283,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: issuerDid,
-        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().admin(true).build() },
+        // Orthogonal caps: Admin does not imply Read (peer_storage's list
+        // gate checks a raw `.can(Cap::Read)`, not `.can_or_admin`) — bundle
+        // Read explicitly, matching how production admin-invite grants are
+        // built (`space_delivery::local::commands::invites`: `.read(false).admin(true)`).
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(false).admin(true).build() },
         expiration: expirationUnix,
       },
       signer,
@@ -292,7 +296,11 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: ownDidB,
-        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().admin(true).build() },
+        // Orthogonal caps: Admin does not imply Read (peer_storage's list
+        // gate checks a raw `.can(Cap::Read)`, not `.can_or_admin`) — bundle
+        // Read explicitly, matching how production admin-invite grants are
+        // built (`space_delivery::local::commands::invites`: `.read(false).admin(true)`).
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(false).admin(true).build() },
         proofs: [rootUcan],
         expiration: expirationUnix,
       },

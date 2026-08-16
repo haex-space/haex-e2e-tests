@@ -116,7 +116,7 @@ test.describe("mls committer-capability: local raw remove without capability is 
 
     await expect(
       vaultB.invokeTauriCommand("mls_remove_member", { spaceId, memberIndex: aLeafOnB }),
-    ).rejects.toThrow(/Invite-or-higher/);
+    ).rejects.toThrow(/membership changes require Invite or Admin/);
 
     // No commit was produced — B's own group still has A as a member, and
     // its epoch didn't advance (belt-and-braces on top of the membership
