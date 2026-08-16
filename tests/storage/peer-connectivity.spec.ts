@@ -285,9 +285,12 @@ test.describe("storage: P2P connectivity between vaults", () => {
         audience: issuerDid,
         // Orthogonal caps: Admin does not imply Read (peer_storage's list
         // gate checks a raw `.can(Cap::Read)`, not `.can_or_admin`) — bundle
-        // Read explicitly, matching how production admin-invite grants are
-        // built (`space_delivery::local::commands::invites`: `.read(false).admin(true)`).
-        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(false).admin(true).build() },
+        // Read explicitly. The root must mark Read *delegatable* (unlike the
+        // terminal `.read(false)` production admin-invite grants use) since
+        // this root itself delegates to `ucanToken` below —
+        // `enforce_delegatable` rejects a child claiming a cap the parent
+        // didn't mark delegatable.
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(true).admin(true).build() },
         expiration: expirationUnix,
       },
       signer,
@@ -296,10 +299,9 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: ownDidB,
-        // Orthogonal caps: Admin does not imply Read (peer_storage's list
-        // gate checks a raw `.can(Cap::Read)`, not `.can_or_admin`) — bundle
-        // Read explicitly, matching how production admin-invite grants are
-        // built (`space_delivery::local::commands::invites`: `.read(false).admin(true)`).
+        // Leaf token — Read stays terminal (non-delegatable), matching
+        // production admin-invite grants; it's used directly, not
+        // delegated further.
         capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(false).admin(true).build() },
         proofs: [rootUcan],
         expiration: expirationUnix,
