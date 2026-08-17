@@ -179,47 +179,50 @@ export function registerEdgeCasesPhase(state: QuicTestState): void {
 
   test("Vault B has read-only UCAN for the first invite (space/read only)", async () => {
     const spaceId = state.spaceId!;
+    const identityB = state.identityB!;
     // The first invite was sent with ["space/read"] capabilities.
     // Vault B should NOT have space/write or space/admin.
-    const ucans = await sqlQuery<{ capability: string; audience_did: string }>(
+    const ucans = await sqlQuery<{ capabilities: string; audience_did: string }>(
       state.vaultB!,
-      `SELECT capability, audience_did FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities, audience_did FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityB.did],
     );
     console.log(`[QUIC] UCANs on Vault B for space: ${JSON.stringify(ucans)}`);
 
     // The second invite had space/read + space/write, so check which one Vault B ended up with
-    const capabilities = ucans.map(u => u.capability);
+    const capabilities = ucans.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap));
     // At minimum, Vault B should have some UCAN for this space
     expect(ucans.length).toBeGreaterThan(0);
 
     // Vault B should NOT have space/admin (only the creator has that)
-    expect(capabilities).not.toContain("space/admin");
+    expect(capabilities).not.toContain("admin");
   });
 
   test("Vault B's UCAN does not grant write/admin capability", async () => {
     const spaceId = state.spaceId!;
+    const identityA = state.identityA!;
+    const identityB = state.identityB!;
 
     // After accepting the second invite (with space/read + space/write),
     // Vault B should have those capabilities but NOT space/admin.
     // Only the space creator (Vault A) should have space/admin.
-    const ucansOnB = await sqlQuery<{ capability: string }>(
+    const ucansOnB = await sqlQuery<{ capabilities: string }>(
       state.vaultB!,
-      `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityB.did],
     );
-    const caps = ucansOnB.map(u => u.capability);
-    expect(caps).not.toContain("space/admin");
+    const caps = ucansOnB.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap));
+    expect(caps).not.toContain("admin");
     console.log(`[QUIC] Vault B capabilities: ${JSON.stringify(caps)}`);
 
     // Vault A should have space/admin
-    const ucansOnA = await sqlQuery<{ capability: string }>(
+    const ucansOnA = await sqlQuery<{ capabilities: string }>(
       state.vaultA!,
-      `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1`,
-      [spaceId],
+      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      [spaceId, identityA.did],
     );
-    const capsA = ucansOnA.map(u => u.capability);
-    expect(capsA).toContain("space/admin");
+    const capsA = ucansOnA.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap));
+    expect(capsA).toContain("admin");
     console.log(`[QUIC] Vault A capabilities: ${JSON.stringify(capsA)}`);
   });
 

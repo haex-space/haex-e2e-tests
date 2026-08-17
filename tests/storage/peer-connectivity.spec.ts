@@ -4,9 +4,10 @@ import {
   createUcan,
   createWebCryptoSigner,
   publicKeyToDid,
+  spaceCapabilitySet,
   spaceResource,
-  SpaceCapabilities,
 } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
 import { initializeVaultViaUI } from "../helpers/ui/ui-vault";
 
 const { subtle } = crypto.webcrypto as unknown as Crypto;
@@ -282,7 +283,14 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: issuerDid,
-        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        // Orthogonal caps: Admin does not imply Read (peer_storage's list
+        // gate checks a raw `.can(Cap::Read)`, not `.can_or_admin`) — bundle
+        // Read explicitly. The root must mark Read *delegatable* (unlike the
+        // terminal `.read(false)` production admin-invite grants use) since
+        // this root itself delegates to `ucanToken` below —
+        // `enforce_delegatable` rejects a child claiming a cap the parent
+        // didn't mark delegatable.
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(true).admin(true).build() },
         expiration: expirationUnix,
       },
       signer,
@@ -291,7 +299,10 @@ test.describe("storage: P2P connectivity between vaults", () => {
       {
         issuer: issuerDid,
         audience: ownDidB,
-        capabilities: { [spaceResource(spaceId)]: SpaceCapabilities.ADMIN },
+        // Leaf token — Read stays terminal (non-delegatable), matching
+        // production admin-invite grants; it's used directly, not
+        // delegated further.
+        capabilities: { [spaceResource(spaceId)]: spaceCapabilitySet().read(false).admin(true).build() },
         proofs: [rootUcan],
         expiration: expirationUnix,
       },

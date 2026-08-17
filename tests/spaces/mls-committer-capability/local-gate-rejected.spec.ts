@@ -93,13 +93,14 @@ test.describe("mls committer-capability: local raw remove without capability is 
 
     // B holds only space/read from the invite dialog (no Invite toggle
     // exists in the UI at all).
-    const ucans = await sqlQuery<{ capability: string }>(
+    const ucans = await sqlQuery<{ capabilities: string }>(
       vaultB,
-      `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+      `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
       [spaceId, identityB.did],
     );
-    expect(ucans.some((u) => u.capability === "space/read")).toBe(true);
-    expect(ucans.some((u) => u.capability === "space/invite" || u.capability === "space/admin")).toBe(false);
+    const caps = new Set(ucans.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap)));
+    expect(caps.has("read")).toBe(true);
+    expect(caps.has("invite") || caps.has("admin")).toBe(false);
   });
 
   test("B's direct mls_remove_member call is rejected by the local capability gate", async () => {
@@ -115,7 +116,7 @@ test.describe("mls committer-capability: local raw remove without capability is 
 
     await expect(
       vaultB.invokeTauriCommand("mls_remove_member", { spaceId, memberIndex: aLeafOnB }),
-    ).rejects.toThrow(/Invite-or-higher/);
+    ).rejects.toThrow(/membership changes require Invite or Admin/);
 
     // No commit was produced — B's own group still has A as a member, and
     // its epoch didn't advance (belt-and-braces on top of the membership

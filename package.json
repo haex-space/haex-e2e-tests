@@ -28,7 +28,7 @@
     "docker:logs:vault-b": "docker compose --env-file .env -f docker/docker-compose.yml logs -f vault-b"
   },
   "devDependencies": {
-    "@haex-space/ucan": "0.1.9",
+    "@haex-space/ucan": "0.2.0",
     "@haex-space/vault-sdk": "^2.8.0",
     "@playwright/test": "^1.49.0",
     "@types/bun": "^1.3.11",

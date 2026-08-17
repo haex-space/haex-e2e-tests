@@ -36,3 +36,4 @@ prebuilt/
 
 # Git worktrees
 .worktrees/
+graphify-out/

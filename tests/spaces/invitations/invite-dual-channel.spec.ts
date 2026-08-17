@@ -31,7 +31,7 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { SpaceCapabilities } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
 
 test.describe("invitations: dual-channel delivery", () => {
   test.describe.configure({ mode: "serial" });

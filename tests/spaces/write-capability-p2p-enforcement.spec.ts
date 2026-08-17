@@ -31,7 +31,7 @@
  * .spec.ts` only drives the sync-server HTTP layer, and its one related test
  * (`member can push signed changes to space`) has been `test.skip`ped since
  * before Phase 2 existed. `invitations/quic-invite-flow.spec.ts` only asserts
- * that a `haex_ucan_tokens` row with the right `capability` landed — never
+ * that a `haex_ucan_tokens` row with the right capability set landed — never
  * that a write is actually accepted or rejected because of it.
  */
 import * as crypto from "crypto";
@@ -406,12 +406,13 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
     );
     await acceptInviteViaStore(vaultB, readOnlySpaceId);
 
-    const ucans = await sqlQuery<{ capability: string }>(
-      vaultB, `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+    const ucans = await sqlQuery<{ capabilities: string }>(
+      vaultB, `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
       [readOnlySpaceId, identityB.did],
     );
-    expect(ucans.some((u) => u.capability === "space/read")).toBe(true);
-    expect(ucans.some((u) => u.capability === "space/write")).toBe(false);
+    const caps = new Set(ucans.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap)));
+    expect(caps.has("read")).toBe(true);
+    expect(caps.has("write")).toBe(false);
   });
 
   test("read-only member's write attempt is rejected by the leader", async () => {
@@ -462,16 +463,17 @@ test.describe("shared spaces: write-capability enforcement on the real P2P apply
 
     await acceptInviteViaStore(vaultB, writeSpaceId);
 
-    const ucans = await sqlQuery<{ capability: string }>(
-      vaultB, `SELECT capability FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
+    const ucans = await sqlQuery<{ capabilities: string }>(
+      vaultB, `SELECT capabilities FROM haex_ucan_tokens WHERE space_id = ?1 AND audience_did = ?2`,
       [writeSpaceId, identityB.did],
     );
     // The invite grants both space/read and space/write (write is always
     // additive to the base read grant — see SpaceInviteDialog.vue). Both
-    // must land as independent rows: capabilities are orthogonal grants,
-    // not a rank, so claiming must not collapse the set down to one.
-    expect(ucans.some((u) => u.capability === "space/read")).toBe(true);
-    expect(ucans.some((u) => u.capability === "space/write")).toBe(true);
+    // must land in the same capability set: capabilities are orthogonal
+    // grants, not a rank, so claiming must not collapse one into the other.
+    const caps = new Set(ucans.flatMap((u) => JSON.parse(u.capabilities).map((entry: { cap: string }) => entry.cap)));
+    expect(caps.has("read")).toBe(true);
+    expect(caps.has("write")).toBe(true);
   });
 
   test("write-capability member's write is accepted by the leader", async () => {

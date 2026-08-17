@@ -18,8 +18,9 @@ import {
 import {
   createUcan,
   createWebCryptoSigner,
+  spaceCapabilitySetFromEntries,
   spaceResource,
-  type Capability,
+  type SpaceCap,
 } from "@haex-space/ucan";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -39,7 +40,7 @@ export async function createServerInvite(
   capability: string,
   includeHistory = false,
 ): Promise<Response> {
-  const ucan = await buildSignedUcanForInvite(auth, inviteeDid, spaceId, capability as Capability);
+  const ucan = await buildSignedUcanForInvite(auth, inviteeDid, spaceId, capability);
 
   const bodyObj = {
     inviteeDid,
@@ -326,7 +327,7 @@ async function buildSignedUcanForInvite(
   auth: AuthContext,
   audienceDid: string,
   spaceId: string,
-  capability: Capability,
+  capability: string,
 ): Promise<string> {
   const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
   const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
@@ -336,7 +337,11 @@ async function buildSignedUcanForInvite(
     {
       issuer: auth.did,
       audience: audienceDid,
-      capabilities: { [spaceResource(spaceId)]: capability },
+      capabilities: {
+        [spaceResource(spaceId)]: spaceCapabilitySetFromEntries([
+          { cap: capability.replace("space/", "") as SpaceCap, delegatable: true },
+        ]),
+      },
       expiration: Math.floor(Date.now() / 1000) + 86400 * 365,
     },
     sign,

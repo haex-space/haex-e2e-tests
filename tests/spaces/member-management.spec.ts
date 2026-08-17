@@ -13,7 +13,7 @@ import {
   DidAuthAction,
   type AuthContext,
 } from "../helpers";
-import { SpaceCapabilities } from "@haex-space/ucan";
+import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
