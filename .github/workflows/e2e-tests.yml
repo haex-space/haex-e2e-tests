@@ -980,7 +980,7 @@ jobs:
         env:
           BACKEND_HOST: e2e-backend-win-${{ github.run_id }}
         run: |
-          Write-Host "Waiting for backend ($env:BACKEND_HOST:8000) to become reachable..."
+          Write-Host "Waiting for backend (${env:BACKEND_HOST}:8000) to become reachable..."
           # 25 minutes, wall-clock (not iteration count): observed backend
           # startup (docker image load + compose health-wait + Tailscale
           # join) has ranged up to ~20 minutes on a cold cache, and the
@@ -998,7 +998,7 @@ jobs:
               Start-Sleep -Seconds 8
           }
           if (!$ready) {
-              throw "Backend at $env:BACKEND_HOST:8000 did not become reachable within 25 minutes"
+              throw "Backend at ${env:BACKEND_HOST}:8000 did not become reachable within 25 minutes"
           }
           Write-Host "Backend is reachable."
 
