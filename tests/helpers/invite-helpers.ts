@@ -6,7 +6,8 @@
 // Key differences from a naive implementation:
 // - createServerInvite requires a UCAN token (not just capability string)
 // - acceptServerInvite requires MLS KeyPackages
-// - Both use DID-Auth headers
+// - The owner authenticates with DID-Auth; a delegated member must use a UCAN,
+//   because the server accepts DID-Auth only from the space owner
 
 import * as crypto from "crypto";
 import {
@@ -15,6 +16,12 @@ import {
   DidAuthAction,
   type AuthContext,
 } from "./sync-server-helpers";
+import {
+  buildSignedUcan,
+  buildUcanAuthHeader,
+  type DelegatedSpaceAuth,
+  type SpaceAuth,
+} from "./mls-helpers";
 import {
   createUcan,
   createWebCryptoSigner,
@@ -25,6 +32,15 @@ import {
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
+function isDelegated(auth: SpaceAuth): auth is DelegatedSpaceAuth {
+  return "owner" in auth;
+}
+
+/** The DID that will present the request, whichever auth scheme is used. */
+function callerOf(auth: SpaceAuth): AuthContext {
+  return isDelegated(auth) ? auth.member : auth;
+}
+
 // =============================================================================
 // Server Invite API Helpers
 // =============================================================================
@@ -32,9 +48,15 @@ const SYNC_SERVER_URL = getSyncServerUrl();
 /**
  * Create a server-side invite for a specific DID.
  * The server requires a UCAN delegation token signed by the inviter.
+ *
+ * A plain {@link AuthContext} authenticates with DID-Auth, which the server
+ * honours only for the space owner. A {@link DelegatedSpaceAuth} member
+ * authenticates with its owner-rooted UCAN instead — the same scheme the real
+ * client uses for this route (`fetchWithUcanAuth` in
+ * haex-vault/src/stores/spaces/invites.ts).
  */
 export async function createServerInvite(
-  auth: AuthContext,
+  auth: SpaceAuth,
   spaceId: string,
   inviteeDid: string,
   capability: string,
@@ -49,16 +71,21 @@ export async function createServerInvite(
   };
   const bodyStr = JSON.stringify(bodyObj);
 
+  const caller = callerOf(auth);
+  const authorization = isDelegated(auth)
+    ? await buildUcanAuthHeader(auth, spaceId, "invite")
+    : await createDidAuthHeader(
+        caller.privateKeyBase64,
+        caller.did,
+        DidAuthAction.CreateSpace,
+        bodyStr,
+      );
+
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/invites`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: await createDidAuthHeader(
-        auth.privateKeyBase64,
-        auth.did,
-        DidAuthAction.CreateSpace,
-        bodyStr,
-      ),
+      Authorization: authorization,
     },
     body: bodyStr,
   });
@@ -321,27 +348,45 @@ export function generateEndpointId(): string {
 }
 
 /**
- * Build a cryptographically signed UCAN delegation token for invites.
+ * Build the UCAN delegation token an invite carries for its invitee.
+ *
+ * This is the token the invitee will later present to the server, so it must
+ * root in the space owner just like the inviter's own token does. For the
+ * owner that is automatic — they sign the root themselves. For a delegated
+ * member-inviter the delegation has to be chained under the member's own
+ * owner-rooted token (`proofs: [parent]`), matching `delegateUcanAsync` in
+ * haex-vault/src/utils/auth/ucanStore.ts. A self-signed member delegation
+ * would hand the invitee a token whose forest root is the member, which the
+ * server refuses with 403 — the invite would look created but be unusable.
  */
 async function buildSignedUcanForInvite(
-  auth: AuthContext,
+  auth: SpaceAuth,
   audienceDid: string,
   spaceId: string,
   capability: string,
 ): Promise<string> {
   const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
-  const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
+  const inviter = callerOf(auth);
+  const privateKey = await importUserPrivateKeyAsync(inviter.privateKeyBase64);
   const sign = createWebCryptoSigner(privateKey);
+
+  // A delegated inviter chains under the token it holds. `buildSignedUcan`
+  // mints that parent (owner root → owner-signed leaf for this member); the
+  // capability argument is ignored on the delegated path.
+  const parent = isDelegated(auth)
+    ? await buildSignedUcan(auth, spaceId, "invite")
+    : undefined;
 
   return createUcan(
     {
-      issuer: auth.did,
+      issuer: inviter.did,
       audience: audienceDid,
       capabilities: {
         [spaceResource(spaceId)]: spaceCapabilitySetFromEntries([
           { cap: capability.replace("space/", "") as SpaceCap, delegatable: true },
         ]),
       },
+      proofs: parent ? [parent] : undefined,
       expiration: Math.floor(Date.now() / 1000) + 86400 * 365,
     },
     sign,

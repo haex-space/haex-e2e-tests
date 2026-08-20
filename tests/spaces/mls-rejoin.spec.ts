@@ -16,7 +16,13 @@ import {
   requestRejoin,
   submitExternalCommit,
   buildSignedUcan,
+  delegatedSpaceAuth,
+  type DelegatedSpaceAuth,
 } from "../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../helpers/legacy-space-capabilities";
 
 /**
  * MLS Rejoin E2E Tests — Server Path
@@ -38,7 +44,7 @@ test.describe("MLS: External Commit rejoin via server", () => {
   let admin: Awaited<ReturnType<typeof createAdminUserWithIdentity>>;
   let adminAuth: AuthContext;
   let member: Awaited<ReturnType<typeof createAdminUser>>;
-  let memberAuth: AuthContext;
+  let memberAuth: DelegatedSpaceAuth;
   let spaceId: string;
 
   test.beforeAll(async () => {
@@ -47,17 +53,30 @@ test.describe("MLS: External Commit rejoin via server", () => {
     adminAuth = toAuthContext(admin);
 
     member = await createAdminUser();
-    memberAuth = toAuthContext(member);
 
     // Create a shared space and add member
     spaceId = generateSpaceId();
     const createRes = await createSpace(adminAuth, spaceId, "MLS Rejoin Test");
     expect(createRes.status).toBe(201);
 
-    const addRes = await addSpaceMember(adminAuth, spaceId, member.did, "Test Member", "space/write");
+    const addRes = await addSpaceMember(adminAuth, spaceId, member.did, "Test Member", SpaceCapabilities.WRITE);
     expect(addRes.status).toBe(201);
+
+    // The member's authority must be owner-rooted: the server requires every
+    // root of the proof forest to equal `spaces.ownerId`, so a self-signed
+    // member token is refused with 403 no matter what `space_members` says.
+    // The delegated set is exactly what the server grants at the write tier,
+    // so a request needing a cap outside it is still refused.
+    memberAuth = delegatedSpaceAuth(
+      adminAuth,
+      toAuthContext(member),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
   });
 
+  // Covers the `read` capability gate on the upload route, not attribution:
+  // the server credits the upload to the token's issuer, which on a delegated
+  // leaf is the owner.
   test("upload key packages for member", async () => {
     const res = await uploadKeyPackages(memberAuth, spaceId, 10);
     expect(res.status).toBe(201);
@@ -217,7 +236,7 @@ test.describe("MLS: External Commit cursor invariant (epoch-loop regression)", (
   let admin: Awaited<ReturnType<typeof createAdminUserWithIdentity>>;
   let adminAuth: AuthContext;
   let member: Awaited<ReturnType<typeof createAdminUser>>;
-  let memberAuth: AuthContext;
+  let memberAuth: DelegatedSpaceAuth;
   let spaceId: string;
   let ecMessageId!: number;
 
@@ -225,14 +244,20 @@ test.describe("MLS: External Commit cursor invariant (epoch-loop regression)", (
     admin = await createAdminUserWithIdentity();
     adminAuth = toAuthContext(admin);
     member = await createAdminUser();
-    memberAuth = toAuthContext(member);
 
     spaceId = generateSpaceId();
     const createRes = await createSpace(adminAuth, spaceId, "Cursor Regression Test");
     expect(createRes.status).toBe(201);
 
-    const addRes = await addSpaceMember(adminAuth, spaceId, member.did, "Member", "space/write");
+    const addRes = await addSpaceMember(adminAuth, spaceId, member.did, "Member", SpaceCapabilities.WRITE);
     expect(addRes.status).toBe(201);
+
+    // Owner-rooted delegation — see the note in the rejoin describe above.
+    memberAuth = delegatedSpaceAuth(
+      adminAuth,
+      toAuthContext(member),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
 
     // Seed a commit so the space has a GroupInfo for rejoin
     const commitPayload = Buffer.from("fake-commit").toString("base64");

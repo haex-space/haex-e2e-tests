@@ -15,12 +15,54 @@ import {
   signAndPushSpaceChanges,
   type AuthContext,
 } from "../helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
+import {
+  buildUcanAuthHeader,
+  delegatedSpaceAuth,
+  type DelegatedSpaceAuth,
+} from "../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
+/**
+ * Why every non-owner request here carries a UCAN and not a DID-Auth header.
+ *
+ * The sync-server resolves a caller's space authority two ways: a UCAN caller
+ * is trusted for the caps its token declares (once every root of the proof
+ * forest is `spaces.ownerId`), while a DID-Auth caller is accepted ONLY as the
+ * space owner. So a DID-Auth request from any non-owner — member, reader,
+ * outsider alike — is refused with `Forbidden - Non-owners must provide a
+ * UCAN` before its capability is ever looked at.
+ *
+ * A capability test built on DID-Auth therefore passes no matter which tier
+ * the principal holds, and no matter whether it is a member at all. Every
+ * assertion below pins the server's reason string so the test fails if it ever
+ * starts being refused for a different reason than the one it is named after.
+ */
+
 function randomBase64(bytes: number): string {
   return crypto.randomBytes(bytes).toString("base64");
+}
+
+/**
+ * Assert a refusal that is specifically about the capability the route
+ * demanded, not merely "some 4xx happened".
+ *
+ * `requires <cap>` is the tail of the server's message from
+ * `requireCapabilityWithAuthority`. Pinning it is what stops these tests from
+ * degrading into a status-code smoke test the moment the principal or the
+ * auth scheme changes underneath them.
+ */
+async function expectCapabilityRefusal(
+  res: Response,
+  requiredCap: "read" | "write" | "invite" | "admin",
+): Promise<void> {
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.error).toMatch(new RegExp(`requires ${requiredCap}$`));
 }
 
 test.describe("spaces: capability-based permissions", () => {
@@ -28,10 +70,12 @@ test.describe("spaces: capability-based permissions", () => {
 
   let ownerAuth: AuthContext;
   let memberAuth: AuthContext;
+  let memberUcan: DelegatedSpaceAuth;
   let memberDid: string;
   let memberPublicKey: string;
   let memberPrivateKey: string;
   let readerAuth: AuthContext;
+  let readerUcan: DelegatedSpaceAuth;
   let readerDid: string;
   let readerPublicKey: string;
   const spaceId = crypto.randomUUID();
@@ -66,6 +110,20 @@ test.describe("spaces: capability-based permissions", () => {
 
     const addReaderRes = await addSpaceMember(ownerAuth, spaceId, readerDid, "Reader User", SpaceCapabilities.READ);
     expect(addReaderRes.status).toBe(201);
+
+    // Owner-rooted delegations carrying exactly the set the server grants at
+    // each tier, so a refusal below is a refusal about the capability and not
+    // about the shape of the chain.
+    memberUcan = delegatedSpaceAuth(
+      ownerAuth,
+      memberAuth,
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    readerUcan = delegatedSpaceAuth(
+      ownerAuth,
+      readerAuth,
+      presetForLegacyCapability(SpaceCapabilities.READ),
+    );
   });
 
   test.afterAll(async () => {
@@ -112,6 +170,43 @@ test.describe("spaces: capability-based permissions", () => {
       label: "Unauthorized Invite",
       capability: SpaceCapabilities.WRITE,
     });
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: await buildUcanAuthHeader(memberUcan, spaceId, "invite"),
+      },
+      body,
+    });
+    await expectCapabilityRefusal(res, "invite");
+  });
+
+  test("reader cannot invite new members", async () => {
+    const body = JSON.stringify({
+      did: "did:key:z6MkUnauthorizedReader",
+      label: "Unauthorized Reader Invite",
+      capability: SpaceCapabilities.READ,
+    });
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "invite"),
+      },
+      body,
+    });
+    await expectCapabilityRefusal(res, "invite");
+  });
+
+  // The capability tests above and below all present UCANs. This one keeps the
+  // complementary property covered: DID-Auth carries no delegation, so the
+  // server accepts it from the owner only — a full member is refused too.
+  test("DID-Auth from a member is refused — non-owners must present a UCAN", async () => {
+    const body = JSON.stringify({
+      did: "did:key:z6MkUnauthorizedDidAuth",
+      label: "DID-Auth Invite",
+      capability: SpaceCapabilities.WRITE,
+    });
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
       method: "POST",
@@ -121,63 +216,57 @@ test.describe("spaces: capability-based permissions", () => {
       },
       body,
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
-  });
-
-  test("reader cannot invite new members", async () => {
-    const body = JSON.stringify({
-      did: "did:key:z6MkUnauthorizedReader",
-      label: "Unauthorized Reader Invite",
-      capability: SpaceCapabilities.READ,
-    });
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body,
-    });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/must provide a ucan/i);
   });
 
   test("member cannot delete space", async () => {
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "DELETE",
-      headers: { Authorization: authHeader },
+      headers: { Authorization: await buildUcanAuthHeader(memberUcan, spaceId, "admin") },
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   test("reader cannot delete space", async () => {
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "DELETE",
-      headers: { Authorization: authHeader },
+      headers: { Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "admin") },
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   // =====================================================================
   // Data Access Permissions
   // =====================================================================
 
+  // Positive control for the pair below: the `read` gate lets a reader through,
+  // so a refusal in the next test is about the outsider's chain and not about
+  // the route being closed to everyone but the owner.
+  test("reader can access space details", async () => {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+      headers: { Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "read") },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).id).toBe(spaceId);
+  });
+
   test("non-member cannot access space details", async () => {
     const outsider = await createAdminUserWithIdentity();
     const outsiderAuth = toAuthContext(outsider);
 
-    const authHeader = await createDidAuthHeader(outsiderAuth.privateKeyBase64, outsiderAuth.did, DidAuthAction.ListSpaces);
+    // An outsider's only option is a self-signed token: nobody delegated to
+    // them, so the forest root is their own DID rather than the space owner.
+    // That is what closes the route to them — the server has no separate
+    // membership lookup for UCAN callers.
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
-      headers: { Authorization: authHeader },
+      headers: { Authorization: await buildUcanAuthHeader(outsiderAuth, spaceId, "read") },
     });
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error).toMatch(/^forbidden/i);
+    expect(body.members).toBeUndefined();
   });
 
   test("owner can list their spaces", async () => {
@@ -205,29 +294,25 @@ test.describe("spaces: capability-based permissions", () => {
   });
 
   test("member cannot remove other members", async () => {
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(
       `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(readerDid)}`,
       {
         method: "DELETE",
-        headers: { Authorization: authHeader },
+        headers: { Authorization: await buildUcanAuthHeader(memberUcan, spaceId, "admin") },
       },
     );
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   test("reader cannot remove other members", async () => {
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace);
     const res = await fetch(
       `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberDid)}`,
       {
         method: "DELETE",
-        headers: { Authorization: authHeader },
+        headers: { Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "admin") },
       },
     );
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   // =====================================================================
@@ -239,17 +324,15 @@ test.describe("spaces: capability-based permissions", () => {
       encryptedName: randomBase64(32),
       nameNonce: randomBase64(12),
     });
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: authHeader,
+        Authorization: await buildUcanAuthHeader(memberUcan, spaceId, "admin"),
       },
       body,
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   test("reader cannot update space name", async () => {
@@ -257,27 +340,37 @@ test.describe("spaces: capability-based permissions", () => {
       encryptedName: randomBase64(32),
       nameNonce: randomBase64(12),
     });
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: authHeader,
+        Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "admin"),
       },
       body,
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    await expectCapabilityRefusal(res, "admin");
   });
 
   // =====================================================================
-  // Admin Transfer Permissions
+  // Ownership Transfer Permissions
+  //
+  // The route is POST /:spaceId/transfer-ownership. These two tests used to
+  // post to /transfer-ownership's non-existent sibling `/transfer-admin` and
+  // passed on the resulting 404 — which the space owner gets as well, so they
+  // asserted nothing about authorization.
+  //
+  // The route is deliberately DID-Auth-only (a delegated admin holds
+  // `admin: {delegatable: false}` precisely so it cannot mint further admins,
+  // and could otherwise replay the owner's own delegation past the admin
+  // gate), so DID-Auth is the correct scheme here — unlike everywhere else in
+  // this file. That reduces the route to the owner, which is the property
+  // under test.
   // =====================================================================
 
-  test("member cannot transfer admin role", async () => {
+  test("member cannot transfer ownership", async () => {
     const body = JSON.stringify({ targetDid: readerDid });
     const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -285,14 +378,21 @@ test.describe("spaces: capability-based permissions", () => {
       },
       body,
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/^forbidden/i);
+
+    // The refusal has to be the reason nothing changed, not a coincidence.
+    const detail = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+      headers: { Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "read") },
+    });
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).ownerId).toBe(ownerAuth.did);
   });
 
-  test("reader cannot transfer admin role", async () => {
+  test("reader cannot transfer ownership", async () => {
     const body = JSON.stringify({ targetDid: memberDid });
     const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-admin`, {
+    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -300,8 +400,14 @@ test.describe("spaces: capability-based permissions", () => {
       },
       body,
     });
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/^forbidden/i);
+
+    const detail = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
+      headers: { Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "read") },
+    });
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).ownerId).toBe(ownerAuth.did);
   });
 
   // =====================================================================
@@ -323,18 +429,17 @@ test.describe("spaces: capability-based permissions", () => {
         signedBy: readerPublicKey,
       }],
     });
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.SyncPush, body);
     const res = await fetch(`${SYNC_SERVER_URL}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: authHeader,
+        Authorization: await buildUcanAuthHeader(readerUcan, spaceId, "write"),
       },
       body,
     });
-    // Should be rejected — reader has no write access
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    // Rejected for the reason the test is named after: the reader's delegation
+    // carries `read` only, and the shared-space push gate demands `write`.
+    await expectCapabilityRefusal(res, "write");
   });
 
   test.skip("member can push signed changes to space (requires UCAN delegation)", async () => {

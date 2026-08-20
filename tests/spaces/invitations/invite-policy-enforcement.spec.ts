@@ -29,7 +29,14 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
+import {
+  buildUcanAuthHeader,
+  delegatedSpaceAuth,
+} from "../../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -104,65 +111,110 @@ test.describe("invitations: policy enforcement", () => {
     );
     expect(addRes.status).toBe(201);
 
-    // Reader tries to invite someone — should fail
+    // The reader authenticates with the owner-rooted UCAN a real member holds.
+    // With DID-Auth this test could not fail for its named reason: the server
+    // honours DID-Auth only from the owner, so every member — reader, writer,
+    // admin alike — is refused before its capability is consulted.
+    const readerUcan = delegatedSpaceAuth(
+      authOwner,
+      readerAuth,
+      presetForLegacyCapability(SpaceCapabilities.READ),
+    );
+
     const target = await createAdminUserWithIdentity();
     const readerInvite = await createServerInvite(
-      readerAuth,
+      readerUcan,
       spaceId,
       target.did,
       SpaceCapabilities.READ,
     );
-    expect(readerInvite.status).toBeGreaterThanOrEqual(400);
+    expect(readerInvite.status).toBe(403);
+    expect((await readerInvite.json()).error).toMatch(/requires invite$/);
   });
 
   // =========================================================================
   // Capability escalation prevention
+  //
+  // Two distinct gates, both reachable only with a UCAN:
+  //   1. `invite` is required to create a grant at all.
+  //   2. The requested grant is attenuated against what the caller may
+  //      actually delegate (`grantExceedingCallerAuthority`), so holding
+  //      `invite` says nothing about *what* may be handed out.
+  //
+  // This test used to POST `{did, capability}` to /invites — a body that route
+  // does not accept (it wants `{inviteeDid, ucan}`), so it passed on a 400
+  // from schema validation and never reached either gate. The token route is
+  // used instead because it is the one whose schema admits `space/admin`, and
+  // therefore the only place the attenuation gate can be exercised.
   // =========================================================================
 
-  test("write member cannot grant admin capability", async () => {
-    // Create a separate space for this test
+  test("member cannot grant a capability above their own authority", async () => {
     const escalationSpaceId = generateSpaceId();
     const createRes = await createSpace(authOwner, escalationSpaceId, "Escalation Test");
     expect(createRes.status).toBe(201);
 
     try {
-      // Add member with write capability directly
       const writer = await createAdminUserWithIdentity();
-      const writerAuth = toAuthContext(writer);
-      const addRes = await addSpaceMember(
-        authOwner,
-        escalationSpaceId,
-        writer.did,
-        "Write Member",
-        SpaceCapabilities.WRITE,
-      );
-      expect(addRes.status).toBe(201);
+      const inviter = await createAdminUserWithIdentity();
+      for (const [user, tier] of [
+        [writer, SpaceCapabilities.WRITE] as const,
+        [inviter, SpaceCapabilities.INVITE] as const,
+      ]) {
+        const addRes = await addSpaceMember(
+          authOwner,
+          escalationSpaceId,
+          user.did,
+          `Member ${tier}`,
+          // space_members only stores read/write via this route; the tier that
+          // matters for authorization is the one the UCAN carries.
+          SpaceCapabilities.WRITE,
+        );
+        expect(addRes.status).toBe(201);
+      }
 
-      // Writer tries to invite someone with admin capability
-      const target = await createAdminUserWithIdentity();
-      const bodyStr = JSON.stringify({
-        did: target.did,
+      const adminGrant = JSON.stringify({
         capability: SpaceCapabilities.ADMIN,
+        maxUses: 1,
+        expiresInSeconds: 3600,
       });
-      const escalateRes = await fetch(
-        `${SYNC_SERVER_URL}/spaces/${escalationSpaceId}/invites`,
-        {
+      const mintToken = async (auth: Parameters<typeof buildUcanAuthHeader>[0], body: string) =>
+        fetch(`${SYNC_SERVER_URL}/spaces/${escalationSpaceId}/invite-tokens`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: await createDidAuthHeader(
-              writerAuth.privateKeyBase64,
-              writerAuth.did,
-              DidAuthAction.CreateSpace,
-              bodyStr,
-            ),
+            Authorization: await buildUcanAuthHeader(auth, escalationSpaceId, "invite"),
           },
-          body: bodyStr,
-        },
-      );
+          body,
+        });
 
-      // Should be rejected — cannot escalate privileges
-      expect(escalateRes.status).toBeGreaterThanOrEqual(400);
+      // Gate 1 — a writer holds no `invite`, so it cannot create any grant.
+      const writerRes = await mintToken(
+        delegatedSpaceAuth(authOwner, toAuthContext(writer), presetForLegacyCapability(SpaceCapabilities.WRITE)),
+        adminGrant,
+      );
+      expect(writerRes.status).toBe(403);
+      expect((await writerRes.json()).error).toMatch(/requires invite$/);
+
+      // Gate 2 — an inviter passes gate 1, and is still refused because the
+      // admin preset covers caps its own set does not carry.
+      const inviterUcan = delegatedSpaceAuth(
+        authOwner,
+        toAuthContext(inviter),
+        presetForLegacyCapability(SpaceCapabilities.INVITE),
+      );
+      const inviterRes = await mintToken(inviterUcan, adminGrant);
+      expect(inviterRes.status).toBe(403);
+      expect((await inviterRes.json()).error).toMatch(/exceeds caller authority/i);
+
+      // Positive control: the same inviter may hand out what it does carry, so
+      // gate 2 above is about the requested grant and not about the inviter.
+      const readGrant = JSON.stringify({
+        capability: SpaceCapabilities.READ,
+        maxUses: 1,
+        expiresInSeconds: 3600,
+      });
+      const allowedRes = await mintToken(inviterUcan, readGrant);
+      expect(allowedRes.status).toBe(201);
     } finally {
       try {
         await deleteSpace(authOwner, escalationSpaceId);

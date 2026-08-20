@@ -7,8 +7,8 @@
 // Covered gates:
 //   1. GET /:spaceId/mls/key-packages/:did requires an `accepted` invite
 //      for the target DID (regardless of caller's UCAN capability).
-//   2. GET /:spaceId/mls/messages requires the caller to be a member of
-//      the space (UCAN root-issuer check).
+//   2. GET /:spaceId/mls/messages requires the caller's UCAN chain to root
+//      in the space owner, which an outsider cannot produce.
 
 import { test, expect } from "@playwright/test";
 import {
@@ -109,20 +109,31 @@ test.describe("invitations: MLS security (API-level)", () => {
   });
 
   // ==========================================================================
-  // Message read gate — UCAN root-issuer must be a space member
+  // Message read gate — the UCAN chain must root in the space owner
   // ==========================================================================
 
   test("Outsider cannot read MLS messages of a space they are not in", async () => {
     const outsider = await createAdminUserWithIdentity();
     const outsiderAuth = toAuthContext(outsider);
 
-    // fetchMlsMessages builds a self-signed UCAN claiming `space/read`.
-    // The server verifies the UCAN signature (valid) but then checks whether
-    // the root issuer is a member of the space — the outsider is not, so the
-    // request is rejected with 403.
+    // fetchMlsMessages builds a self-signed UCAN claiming `space/read`. Its
+    // signature verifies — that only proves who issued it, never that they had
+    // standing to. The server anchors authority on `spaces.ownerId`: every root
+    // of the proof forest must be the owner. The outsider's own DID is the root
+    // of their self-signed token, and they cannot obtain an owner-signed
+    // delegation, so there is no token shape that gets them in. That is the
+    // property under test, and it is why the refusal is not incidental.
+    //
+    // Asserted on the 403 plus the `Forbidden` prefix that every authorization
+    // refusal in the server's capability middleware carries — enough to
+    // distinguish an authorization refusal from a 400 validation error or a
+    // "not found", without pinning the reason clause, which has already
+    // drifted once. The empty-body check is the real intent: nothing leaked.
     const res = await fetchMlsMessages(outsiderAuth, spaceId);
 
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toMatch(/not a member/i);
+    const body = await res.json();
+    expect(body.error).toMatch(/^forbidden/i);
+    expect(body.messages).toBeUndefined();
   });
 });
