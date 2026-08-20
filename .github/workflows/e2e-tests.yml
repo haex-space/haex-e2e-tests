@@ -862,15 +862,36 @@ jobs:
             # linux/macos legs' OWN "E2E Windows" placeholder job (skipped
             # immediately by its `if:`), which made this resolve after 1s
             # against the wrong leg and tear the backend down mid-test.
-            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+            #
+            # Pinned to the attempt this job belongs to. The unpinned /jobs
+            # endpoint serves whatever GitHub currently considers the latest
+            # attempt, which is not necessarily ours; reading another
+            # attempt's conclusion here would tear the backend down against
+            # a client that is still running. Pinning makes that impossible
+            # rather than merely unlikely.
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs" --paginate \
               --jq '.jobs[] | select(.name == "E2E Windows" or .name == "e2e-tests (windows, haex-vault-windows-e2e) / E2E Windows") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E Windows finished with: $CONCLUSION"
+              # Mirror the client's conclusion instead of always exiting 0.
+              # "Re-run failed jobs" restarts failed jobs and their dependents
+              # — never their dependencies. While this job stayed green on a
+              # failing client, a partial re-run brought the client back up
+              # with no backend behind it, so it died on its readiness poll
+              # with "Backend ... did not become reachable" and masked the
+              # real failure from attempt 1. Failing alongside the client puts
+              # this job into the re-run set, so the backend comes back too.
+              [ "$CONCLUSION" == "success" ] || exit 1
               exit 0
             fi
             sleep 10
           done
-          echo "::warning::Timed out waiting for E2E Windows job — tearing down anyway"
+          # The client's own timeout-minutes is below this loop's ~47min
+          # budget, so it must have concluded by now. Not seeing a conclusion
+          # means the polling itself is broken — fail rather than report a
+          # green backend for a run we cannot vouch for.
+          echo "::error::Timed out waiting for E2E Windows job to report a conclusion"
+          exit 1
 
       - name: Stop services
         if: always()
@@ -998,6 +1019,13 @@ jobs:
               Start-Sleep -Seconds 8
           }
           if (!$ready) {
+              # A re-run that did not also restart 'E2E Backend (for Windows)'
+              # leaves this job with no backend at all, and this failure then
+              # hides whatever actually broke in the earlier attempt. Say so
+              # up front: this message cost an afternoon of misdiagnosis once.
+              if ("${{ github.run_attempt }}" -ne "1") {
+                  Write-Host "::warning::This is attempt ${{ github.run_attempt }}. If 'E2E Backend (for Windows)' is not in this attempt's job list, no backend was ever started — check the attempt-1 failure instead of debugging Tailscale, and re-run the whole workflow rather than the failed jobs."
+              }
               throw "Backend at ${env:BACKEND_HOST}:8000 did not become reachable within 25 minutes"
           }
           Write-Host "Backend is reachable."
@@ -1152,15 +1180,24 @@ jobs:
             # linux/windows legs' OWN "E2E macOS" placeholder job (skipped
             # immediately by its `if:`), which made this resolve after 1s
             # against the wrong leg and tear the backend down mid-test.
-            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+            #
+            # Pinned to the CURRENT attempt — see the matching comment in
+            # e2e-backend-windows for why the unpinned endpoint is unsafe on
+            # a re-run.
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}/jobs" --paginate \
               --jq '.jobs[] | select(.name == "E2E macOS" or .name == "e2e-tests (macos, haex-vault-macos-e2e) / E2E macOS") | .conclusion' 2>/dev/null | head -1)
             if [ -n "$CONCLUSION" ] && [ "$CONCLUSION" != "null" ]; then
               echo "E2E macOS finished with: $CONCLUSION"
+              # Mirror the client's conclusion so a partial re-run restarts
+              # this backend too — see e2e-backend-windows for the full
+              # rationale.
+              [ "$CONCLUSION" == "success" ] || exit 1
               exit 0
             fi
             sleep 10
           done
-          echo "::warning::Timed out waiting for E2E macOS job — tearing down anyway"
+          echo "::error::Timed out waiting for E2E macOS job to report a conclusion"
+          exit 1
 
       - name: Stop services
         if: always()
@@ -1288,6 +1325,13 @@ jobs:
             sleep 5
           done
           echo "::error::Backend at $BACKEND_HOST:8000 (resolved: ${BACKEND_IP:-<unresolved>}) did not become reachable within 18 minutes"
+          # A re-run that did not also restart 'E2E Backend (for macOS)' leaves
+          # this job with no backend at all, and the failure above then hides
+          # whatever actually broke in the earlier attempt. Say so up front:
+          # this message cost an afternoon of misdiagnosis once.
+          if [ "${{ github.run_attempt }}" != "1" ]; then
+            echo "::warning::This is attempt ${{ github.run_attempt }}. If 'E2E Backend (for macOS)' is not in this attempt's job list, no backend was ever started — check the attempt-1 failure instead of debugging Tailscale, and re-run the whole workflow rather than the failed jobs."
+          fi
           echo "--- tailscale status ---"
           sudo tailscale status || true
           echo "--- tailscale ping ($BACKEND_HOST) ---"
