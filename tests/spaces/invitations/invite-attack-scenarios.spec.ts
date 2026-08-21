@@ -27,7 +27,14 @@ import {
   revokeInviteToken,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
+import {
+  buildUcanAuthHeader,
+  delegatedSpaceAuth,
+} from "../../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -194,17 +201,53 @@ test.describe("invitations: attack scenarios & multi-user", () => {
     expect(claimRes.status).toBeGreaterThanOrEqual(400);
   });
 
-  test("non-admin cannot revoke tokens they did not create", async () => {
+  // Repaired from a vacuous shape (plan §B.1 + §B.3.5). The previous body
+  // asserted 4xx from an outsider using DID-Auth, which refuses every
+  // non-owner with "Non-owners must provide a UCAN" before any capability
+  // check — so the "did not create" half was untested. The DELETE route on
+  // /invite-tokens/:id has NO per-creator check today (`src/routes/mls.ts`
+  // gates only on the `invite` capability). Renaming honestly: this is the
+  // capability-gate test, not a creator-scoping test. The creator-scoping
+  // gap is filed in the plan (`caller-identity-and-vacuous-e2e-plan`) and is
+  // in-scope for a follow-up sync-server PR — do NOT paper over it here.
+  test("member without invite cap cannot revoke tokens (creator scope not enforced)", async () => {
     const tokenRes = await createInviteToken(authOwner, spaceId, {
       capability: SpaceCapabilities.READ,
     });
     expect(tokenRes.status).toBe(201);
     const tokenId = (await tokenRes.json()).token.id;
 
-    const attacker = await createAdminUserWithIdentity();
-    const attackerAuth = toAuthContext(attacker);
-    const revokeRes = await revokeInviteToken(attackerAuth, spaceId, tokenId);
-    expect(revokeRes.status).toBeGreaterThanOrEqual(400);
+    const writer = await createAdminUserWithIdentity();
+    const writerUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(writer),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
+    const writerRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`,
+      { method: "DELETE", headers: { Authorization: writerHdr } },
+    );
+    expect(writerRes.status).toBe(403);
+    expect((await writerRes.json()).error).toMatch(/requires invite$/);
+
+    // Positive control: an inviter (not the creator of the token) still
+    // succeeds — this is the gap. Any `invite`-capable member can revoke any
+    // token in the space, not only ones they minted themselves. Kept explicit
+    // so the property is documented and a future per-creator gate would flip
+    // this expected 200 to a 403 — the natural regression test for that fix.
+    const inviter = await createAdminUserWithIdentity();
+    const inviterUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(inviter),
+      presetForLegacyCapability(SpaceCapabilities.INVITE),
+    );
+    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
+    const inviterRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`,
+      { method: "DELETE", headers: { Authorization: inviterHdr } },
+    );
+    expect(inviterRes.status).toBe(200);
   });
 
   // =========================================================================
@@ -447,13 +490,23 @@ test.describe("invitations: attack scenarios & multi-user", () => {
   // Invite listing isolation
   // =========================================================================
 
-  test("non-member cannot list invites for a space", async () => {
+  // Repaired from a vacuous shape (plan §B.1). The previous body asserted
+  // 4xx from an outsider via DID-Auth, and probing confirmed the server has
+  // NO UCAN-based membership gate on the invite listing: an outsider handed
+  // an owner-rooted `read` delegation gets 200 on this route. The name
+  // "non-member cannot list invites" therefore described a gate that does
+  // not exist. Renaming honestly: the actual refusal is the DID-Auth
+  // non-owner branch. The UCAN-membership gap is tracked in the
+  // caller-identity plan and is not closed here.
+  test("outsider using DID-Auth cannot list invites", async () => {
     const outsider = await createAdminUserWithIdentity();
     const outsiderAuth = toAuthContext(outsider);
 
-    // Outsider has no membership — listing should fail
     const listRes = await listPendingInvites(outsiderAuth, spaceId);
-    expect(listRes.status).toBeGreaterThanOrEqual(400);
+    expect(listRes.status).toBe(403);
+    expect((await listRes.json()).error).toMatch(/Non-owners must provide a UCAN/i);
+    // Positive control lives in `admin can see all invites for their space`
+    // below (line ~460) — DID-Auth from the owner succeeds on this route.
   });
 
   test("admin can see all invites for their space", async () => {

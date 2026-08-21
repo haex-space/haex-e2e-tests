@@ -32,6 +32,7 @@ import {
   createServerInvite,
   declineServerInvite,
   getSpaceDetails,
+  listPendingInvites,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
@@ -267,7 +268,17 @@ test.describe("invitations: decline safety", () => {
   // Decline does not leak information
   // =========================================================================
 
-  test("declined user cannot access space details", async () => {
+  // Repaired from a vacuous shape (plan §B.1). The previous body asserted
+  // that a declined invitee got 4xx on getSpaceDetails via DID-Auth — but so
+  // does an ACCEPTED invitee via the same DID-Auth path, because the server
+  // refuses DID-Auth from every non-owner with "Non-owners must provide a
+  // UCAN". The name implied a decline-specific gate that does not exist.
+  //
+  // Renaming honestly: the discriminating safety property is that decline
+  // persists the declined status so no UCAN is available to lift. Assert
+  // that the DID-Auth refusal message is the non-owner one (not something
+  // decline-specific) and pin the declined status via the owner's listing.
+  test("decline persists status; declined invitee is refused at DID-Auth", async () => {
     const invitee = await createAdminUserWithIdentity();
     const inviteeAuth = toAuthContext(invitee);
 
@@ -281,10 +292,25 @@ test.describe("invitations: decline safety", () => {
     const inviteId = (await invRes.json()).invite.id;
     await declineServerInvite(inviteeAuth, spaceId, inviteId);
 
-    // Declined user should not have access to space details
+    // The specific refusal is the DID-Auth non-owner branch — nothing
+    // decline-specific. The general "non-owner without UCAN" property is
+    // what actually stops the request.
     const detailRes = await getSpaceDetails(inviteeAuth, spaceId);
-    // Should be 403 or 404 — not a member
-    expect(detailRes.status).toBeGreaterThanOrEqual(400);
+    expect(detailRes.status).toBe(403);
+    expect((await detailRes.json()).error).toMatch(/Non-owners must provide a UCAN/i);
+
+    // Discriminating property this test can actually verify: the invite is
+    // marked declined server-side (no lingering pending row that would
+    // eventually yield a UCAN to the invitee). If decline silently accepted
+    // instead, the listing would show `accepted` and mutation would trip.
+    const listRes = await listPendingInvites(authOwner, spaceId);
+    expect(listRes.status).toBe(200);
+    const invites = (await listRes.json()).invites ?? [];
+    const row = invites.find(
+      (i: { id: string; status?: string }) => i.id === inviteId,
+    );
+    expect(row).toBeDefined();
+    expect(row.status).toBe("declined");
   });
 
   // =========================================================================

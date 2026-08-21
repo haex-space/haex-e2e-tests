@@ -11,6 +11,7 @@ import {
   toAuthContext,
   createSpace,
   deleteSpace,
+  getSyncServerUrl,
   type AuthContext,
 } from "../../helpers";
 import {
@@ -21,7 +22,16 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
+import {
+  buildUcanAuthHeader,
+  delegatedSpaceAuth,
+} from "../../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../../helpers/legacy-space-capabilities";
+
+const SYNC_SERVER_URL = getSyncServerUrl();
 
 test.describe("invitations: invite token lifecycle", () => {
   test.describe.configure({ mode: "serial" });
@@ -103,12 +113,42 @@ test.describe("invitations: invite token lifecycle", () => {
     expect(tokens.length).toBeGreaterThanOrEqual(3);
   });
 
-  test("non-admin cannot list tokens", async () => {
-    const nonAdmin = await createAdminUserWithIdentity();
-    const nonAdminAuth = toAuthContext(nonAdmin);
+  // Repaired from a vacuous shape (plan §B.1). The previous body called
+  // listInviteTokens with an outsider AuthContext, which uses DID-Auth. The
+  // server refuses DID-Auth from any non-owner with "Non-owners must provide a
+  // UCAN" before its capability is consulted, so the assertion passed for
+  // every non-owner regardless of tier and did not discriminate a member from
+  // a non-member. The honest gate is the UCAN `invite` capability on this
+  // route; test it with an owner-rooted delegation at a lower tier, and pair
+  // with a positive control at INVITE to prove the guard isn't rejecting all.
+  test("member without invite capability cannot list tokens", async () => {
+    const writer = await createAdminUserWithIdentity();
+    const writerUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(writer),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
+    const writerRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`,
+      { headers: { Authorization: writerHdr } },
+    );
+    expect(writerRes.status).toBe(403);
+    expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
-    const res = await listInviteTokens(nonAdminAuth, spaceId);
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    // Positive control: same request as an inviter succeeds.
+    const inviter = await createAdminUserWithIdentity();
+    const inviterUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(inviter),
+      presetForLegacyCapability(SpaceCapabilities.INVITE),
+    );
+    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
+    const inviterRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`,
+      { headers: { Authorization: inviterHdr } },
+    );
+    expect(inviterRes.status).toBe(200);
   });
 
   // =========================================================================
@@ -244,18 +284,46 @@ test.describe("invitations: invite token lifecycle", () => {
     expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
-  test("non-admin cannot revoke tokens", async () => {
+  // Repaired from a vacuous shape (plan §B.1). Same class as the list-tokens
+  // test above: revokeInviteToken used DID-Auth and refused for every
+  // non-owner identically. Assert the specific UCAN `invite` capability gate
+  // with a member holding a WRITE-tier owner-rooted delegation, plus a
+  // positive control at INVITE tier proving the same call succeeds.
+  test("member without invite capability cannot revoke tokens", async () => {
     const createRes = await createInviteToken(authOwner, spaceId, {
       capability: SpaceCapabilities.READ,
     });
     expect(createRes.status).toBe(201);
-    const nonAdminTokenId = (await createRes.json()).token.id;
+    const targetTokenId = (await createRes.json()).token.id;
 
-    const nonAdmin = await createAdminUserWithIdentity();
-    const nonAdminAuth = toAuthContext(nonAdmin);
+    const writer = await createAdminUserWithIdentity();
+    const writerUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(writer),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
+    const writerRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`,
+      { method: "DELETE", headers: { Authorization: writerHdr } },
+    );
+    expect(writerRes.status).toBe(403);
+    expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
-    const res = await revokeInviteToken(nonAdminAuth, spaceId, nonAdminTokenId);
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    // Positive control: an inviter can revoke — proves the refusal above is
+    // about the missing invite cap, not a blanket rejection.
+    const inviter = await createAdminUserWithIdentity();
+    const inviterUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(inviter),
+      presetForLegacyCapability(SpaceCapabilities.INVITE),
+    );
+    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
+    const inviterRes = await fetch(
+      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`,
+      { method: "DELETE", headers: { Authorization: inviterHdr } },
+    );
+    expect(inviterRes.status).toBe(200);
   });
 
   // =========================================================================

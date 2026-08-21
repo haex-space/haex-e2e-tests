@@ -82,19 +82,32 @@ test.describe("invitations: policy enforcement", () => {
     expect(adminRes.status).toBe(201);
   });
 
-  test("non-member cannot create invites", async () => {
+  // Repaired from a vacuous shape (plan §B.1). Renamed honestly: the server has
+  // NO membership gate for UCAN callers — `resolveCallerAuthority` never reads
+  // `space_members`, and probing confirmed an outsider handed an owner-rooted
+  // read delegation gets 200 on GET /spaces/:id. What actually stops an outsider
+  // here is that they cannot obtain a UCAN whose chain root equals
+  // `spaces.ownerId`, so they fall back to DID-Auth, which the server refuses
+  // for any non-owner with "Non-owners must provide a UCAN" (that message is
+  // the discriminator we assert on). The gap the original name implied
+  // ("non-member cannot invite" via UCAN) is tracked in the caller-identity /
+  // vacuous-e2e plan and not closed here.
+  test("outsider without an owner delegation is refused at DID-Auth", async () => {
     const outsider = await createAdminUserWithIdentity();
     const outsiderAuth = toAuthContext(outsider);
 
     const target = await createAdminUserWithIdentity();
 
+    // createServerInvite with an AuthContext (not a DelegatedSpaceAuth) uses
+    // DID-Auth. Non-owner DID-Auth is rejected in ucanAuth.ts's DID-Auth branch.
     const res = await createServerInvite(
       outsiderAuth,
       spaceId,
       target.did,
       SpaceCapabilities.READ,
     );
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/Non-owners must provide a UCAN/i);
   });
 
   test("read-only member cannot create invites", async () => {
@@ -228,11 +241,17 @@ test.describe("invitations: policy enforcement", () => {
   // Blocked DIDs
   // =========================================================================
 
-  test("server rejects invite from user not in space", async () => {
+  // Repaired from a vacuous shape (plan §B.1). Same class of failure as the
+  // outsider test above: the previous body asserted only 4xx and passed for the
+  // same reason regardless of the outsider's tier. Here the request tier is
+  // WRITE rather than READ — semantically the same DID-Auth refusal, kept as
+  // an at-different-tier sanity check that the DID-Auth branch does not treat
+  // WRITE specially. Positive control lives in "only space admin can create
+  // invites" (line 72) — this is a paired negative case.
+  test("outsider with WRITE-tier request is refused at DID-Auth", async () => {
     const outsider = await createAdminUserWithIdentity();
     const outsiderAuth = toAuthContext(outsider);
 
-    // Outsider tries to invite someone to a space they're not in
     const target = await createAdminUserWithIdentity();
     const res = await createServerInvite(
       outsiderAuth,
@@ -241,7 +260,8 @@ test.describe("invitations: policy enforcement", () => {
       SpaceCapabilities.WRITE,
     );
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/Non-owners must provide a UCAN/i);
   });
 
   // =========================================================================
