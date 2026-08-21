@@ -11,6 +11,7 @@ import {
 } from "../helpers";
 import {
   uploadKeyPackages,
+  fetchKeyPackage,
   sendMlsMessage,
   fetchMlsMessages,
   requestRejoin,
@@ -19,6 +20,10 @@ import {
   delegatedSpaceAuth,
   type DelegatedSpaceAuth,
 } from "../helpers/mls-helpers";
+import {
+  createServerInvite,
+  acceptServerInvite,
+} from "../helpers/invite-helpers";
 import {
   LegacySpaceCapabilities as SpaceCapabilities,
   presetForLegacyCapability,
@@ -74,9 +79,10 @@ test.describe("MLS: External Commit rejoin via server", () => {
     );
   });
 
-  // Covers the `read` capability gate on the upload route, not attribution:
-  // the server credits the upload to the token's issuer, which on a delegated
-  // leaf is the owner.
+  // Covers the `read` capability gate on the upload route. Attribution is
+  // exercised by "upload attributes KeyPackages to the audience DID" in the
+  // KeyPackage-management describe below, which uses an invite/accept scaffold
+  // and reads the packages back through GET /:spaceId/mls/key-packages/:did.
   test("upload key packages for member", async () => {
     const res = await uploadKeyPackages(memberAuth, spaceId, 10);
     expect(res.status).toBe(201);
@@ -214,6 +220,87 @@ test.describe("MLS: KeyPackage management via server", () => {
     );
     // Zod validation should reject empty array
     expect(res.status).toBe(400);
+  });
+
+  // Attribution regression for the caller-identity fix (sync-server PR #6):
+  //
+  // A UCAN says "iss grants capabilities to aud" — the bearer is aud. Before
+  // the fix, the middleware exposed only `issuerDid`, so a delegated-leaf
+  // upload (iss = owner, aud = member) landed under the owner's public key.
+  // The member's pool never replenished; the owner's filled with someone
+  // else's packages. Structurally worst on reader/writer tiers, which hold
+  // read/write(delegatable:false) and must present the owner-issued token
+  // verbatim — `iss` is always the owner for them.
+  //
+  // Discriminating property: an accepted-invite scaffolds an accepted row for
+  // the member (also uploads 1 KP under member's identity via DID-Auth). The
+  // member then uploads N more via *delegated* UCAN. GET .../key-packages/:did
+  // reads packages by identityPublicKey resolved from the target DID, so it
+  // returns 1 + N successful fetches only when the delegated uploads were
+  // attributed to the audience (member). Under the pre-fix behaviour those
+  // uploads land under the owner's public key and this fetches exactly 1.
+  test("upload attributes KeyPackages to the audience DID, not the issuer", async () => {
+    const owner = await createAdminUserWithIdentity();
+    const ownerAuth = toAuthContext(owner);
+    const member = await createAdminUserWithIdentity();
+    const memberAuth = toAuthContext(member);
+
+    const attributionSpaceId = generateSpaceId();
+    const createRes = await createSpace(
+      ownerAuth,
+      attributionSpaceId,
+      "KeyPackage Attribution",
+    );
+    expect(createRes.status).toBe(201);
+
+    // Server-mediated invite → member accepts (uploads 1 KP under member.did
+    // via DID-Auth, marks invite as accepted so the fetch gate opens).
+    const inviteRes = await createServerInvite(
+      ownerAuth,
+      attributionSpaceId,
+      member.did,
+      "space/write",
+    );
+    expect(inviteRes.status).toBe(201);
+    const inviteId = (await inviteRes.json()).invite.id;
+
+    const acceptRes = await acceptServerInvite(
+      memberAuth,
+      attributionSpaceId,
+      inviteId,
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // Member holds an owner-rooted `write` delegation — the shape that
+    // structurally forced the pre-fix `iss` attribution to be the owner.
+    const delegated = delegatedSpaceAuth(
+      ownerAuth,
+      memberAuth,
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+
+    // Upload N more KPs via the DELEGATED UCAN — this is the path the fix
+    // affects. With the fix in place these land under member's identity;
+    // without it they land under owner's.
+    const N = 3;
+    const uploadRes = await uploadKeyPackages(delegated, attributionSpaceId, N);
+    expect(uploadRes.status).toBe(201);
+
+    // Owner has `invite` capability and the member has an accepted invite,
+    // so the fetch gate is satisfied. Each successful fetch consumes one KP.
+    // Total available under member.did = 1 (from accept) + N (from delegated
+    // upload, ONLY if attributed to member). Pre-fix this loop would count 1.
+    let fetched = 0;
+    for (let attempt = 0; attempt < N + 3; attempt++) {
+      const res = await fetchKeyPackage(
+        ownerAuth,
+        attributionSpaceId,
+        member.did,
+      );
+      if (res.status === 200) fetched++;
+      else break;
+    }
+    expect(fetched).toBe(1 + N);
   });
 });
 
