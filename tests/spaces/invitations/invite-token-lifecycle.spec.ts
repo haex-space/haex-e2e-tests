@@ -286,9 +286,13 @@ test.describe("invitations: invite token lifecycle", () => {
 
   // Repaired from a vacuous shape (plan §B.1). Same class as the list-tokens
   // test above: revokeInviteToken used DID-Auth and refused for every
-  // non-owner identically. Assert the specific UCAN `invite` capability gate
-  // with a member holding a WRITE-tier owner-rooted delegation, plus a
-  // positive control at INVITE tier proving the same call succeeds.
+  // non-owner identically. Two orthogonal gates apply to DELETE:
+  //   (a) capability: the caller's UCAN must grant `invite`
+  //   (b) creator scope: the caller must be the token creator
+  // CI probing established that (b) IS enforced today (an INVITE-tier
+  // non-creator gets 403). Pin both refusals; the owner (creator) is the
+  // positive control. See invite-attack-scenarios.spec.ts for the mirrored
+  // shape in the attack-scenarios suite.
   test("member without invite capability cannot revoke tokens", async () => {
     const createRes = await createInviteToken(authOwner, spaceId, {
       capability: SpaceCapabilities.READ,
@@ -296,6 +300,8 @@ test.describe("invitations: invite token lifecycle", () => {
     expect(createRes.status).toBe(201);
     const targetTokenId = (await createRes.json()).token.id;
 
+    // (a) capability gate: writer has no `invite` — stable `requires invite`
+    // fragment from `enforceDelegatable`.
     const writer = await createAdminUserWithIdentity();
     const writerUcan = delegatedSpaceAuth(
       authOwner,
@@ -310,8 +316,8 @@ test.describe("invitations: invite token lifecycle", () => {
     expect(writerRes.status).toBe(403);
     expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
-    // Positive control: an inviter can revoke — proves the refusal above is
-    // about the missing invite cap, not a blanket rejection.
+    // (b) creator-scope gate: inviter has `invite` but is not the token
+    // creator. Still 403 — proves (a) is not the only gate.
     const inviter = await createAdminUserWithIdentity();
     const inviterUcan = delegatedSpaceAuth(
       authOwner,
@@ -323,7 +329,12 @@ test.describe("invitations: invite token lifecycle", () => {
       `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`,
       { method: "DELETE", headers: { Authorization: inviterHdr } },
     );
-    expect(inviterRes.status).toBe(200);
+    expect(inviterRes.status).toBe(403);
+
+    // Positive control: the creator (owner) can revoke — proves both
+    // refusals above are specific gates, not a blanket rejection.
+    const ownerRes = await revokeInviteToken(authOwner, spaceId, targetTokenId);
+    expect(ownerRes.status).toBe(200);
   });
 
   // =========================================================================
