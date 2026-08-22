@@ -23,7 +23,7 @@ import {
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import {
-  buildUcanAuthHeader,
+  buildUcanRequestHeaders,
   delegatedSpaceAuth,
 } from "../../helpers/mls-helpers";
 import {
@@ -128,11 +128,13 @@ test.describe("invitations: invite token lifecycle", () => {
       toAuthContext(writer),
       presetForLegacyCapability(SpaceCapabilities.WRITE),
     );
-    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
-    const writerRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`,
-      { headers: { Authorization: writerHdr } },
-    );
+    const listUrl = `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`;
+    const writerRes = await fetch(listUrl, {
+      headers: await buildUcanRequestHeaders(writerUcan, spaceId, "read", {
+        method: "GET",
+        url: listUrl,
+      }),
+    });
     expect(writerRes.status).toBe(403);
     expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
@@ -143,11 +145,12 @@ test.describe("invitations: invite token lifecycle", () => {
       toAuthContext(inviter),
       presetForLegacyCapability(SpaceCapabilities.INVITE),
     );
-    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
-    const inviterRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`,
-      { headers: { Authorization: inviterHdr } },
-    );
+    const inviterRes = await fetch(listUrl, {
+      headers: await buildUcanRequestHeaders(inviterUcan, spaceId, "invite", {
+        method: "GET",
+        url: listUrl,
+      }),
+    });
     expect(inviterRes.status).toBe(200);
   });
 
@@ -308,11 +311,14 @@ test.describe("invitations: invite token lifecycle", () => {
       toAuthContext(writer),
       presetForLegacyCapability(SpaceCapabilities.WRITE),
     );
-    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
-    const writerRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`,
-      { method: "DELETE", headers: { Authorization: writerHdr } },
-    );
+    const delUrl = `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`;
+    const writerRes = await fetch(delUrl, {
+      method: "DELETE",
+      headers: await buildUcanRequestHeaders(writerUcan, spaceId, "read", {
+        method: "DELETE",
+        url: delUrl,
+      }),
+    });
     expect(writerRes.status).toBe(403);
     expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
@@ -324,11 +330,13 @@ test.describe("invitations: invite token lifecycle", () => {
       toAuthContext(inviter),
       presetForLegacyCapability(SpaceCapabilities.INVITE),
     );
-    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
-    const inviterRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${targetTokenId}`,
-      { method: "DELETE", headers: { Authorization: inviterHdr } },
-    );
+    const inviterRes = await fetch(delUrl, {
+      method: "DELETE",
+      headers: await buildUcanRequestHeaders(inviterUcan, spaceId, "invite", {
+        method: "DELETE",
+        url: delUrl,
+      }),
+    });
     expect(inviterRes.status).toBe(403);
 
     // Positive control: the creator (owner) can revoke — proves both
