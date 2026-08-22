@@ -24,7 +24,13 @@ import {
   getSpaceDetails,
   generateSpaceId,
 } from "../../helpers/invite-helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../../helpers/legacy-space-capabilities";
+import {
+  delegatedSpaceAuth,
+} from "../../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -113,19 +119,46 @@ test.describe("invitations: server invite API", () => {
   // Authorization checks
   // =========================================================================
 
-  test("non-admin cannot create invites", async () => {
-    const nonAdmin = await createAdminUserWithIdentity();
-    const nonAdminAuth = toAuthContext(nonAdmin);
-
-    const res = await createServerInvite(
-      nonAdminAuth,
+  // Repaired from a vacuous shape (plan §B.1). The previous body used
+  // createServerInvite with a plain AuthContext, which uses DID-Auth. Every
+  // non-owner DID-Auth request is refused with "Non-owners must provide a
+  // UCAN" before its capability is consulted, so the test passed for every
+  // non-owner and did not discriminate the intended "wrong capability" case.
+  // The honest gate is the UCAN `invite` capability; assert its specific
+  // error, plus a positive control at INVITE tier.
+  test("member without invite capability cannot create invites", async () => {
+    const writer = await createAdminUserWithIdentity();
+    const writerUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(writer),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    const target = await createAdminUserWithIdentity();
+    const writerRes = await createServerInvite(
+      writerUcan,
       spaceId,
-      "did:key:z6MkRandomTarget",
+      target.did,
       SpaceCapabilities.READ,
     );
+    expect(writerRes.status).toBe(403);
+    expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    // Positive control: same request as an inviter succeeds — proves the
+    // refusal above is about the missing invite cap, not blanket rejection.
+    const inviter = await createAdminUserWithIdentity();
+    const inviterUcan = delegatedSpaceAuth(
+      authOwner,
+      toAuthContext(inviter),
+      presetForLegacyCapability(SpaceCapabilities.INVITE),
+    );
+    const inviterTarget = await createAdminUserWithIdentity();
+    const inviterRes = await createServerInvite(
+      inviterUcan,
+      spaceId,
+      inviterTarget.did,
+      SpaceCapabilities.READ,
+    );
+    expect(inviterRes.status).toBe(201);
   });
 
   test("unauthenticated request is rejected", async () => {

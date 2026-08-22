@@ -13,7 +13,16 @@ import {
   DidAuthAction,
   type AuthContext,
 } from "../helpers";
-import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
+import {
+  createServerInvite,
+} from "../helpers/invite-helpers";
+import {
+  delegatedSpaceAuth,
+} from "../helpers/mls-helpers";
+import {
+  LegacySpaceCapabilities as SpaceCapabilities,
+  presetForLegacyCapability,
+} from "../helpers/legacy-space-capabilities";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
 
@@ -86,24 +95,53 @@ test.describe("spaces: member-management", () => {
     expect(typeof member.joinedAt).toBe("string");
   });
 
-  test("non-admin cannot invite members", async () => {
-    const body = JSON.stringify({
-      did: "did:key:z6MkUnauthorized",
-      label: "Unauthorized Invite",
-      capability: SpaceCapabilities.WRITE,
-    });
-    const authHeader = await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.CreateSpace, body);
-    const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body,
-    });
+  // Repaired from a vacuous shape (plan §B.1): the previous body sent DID-Auth
+  // from a non-owner, so the server refused with "Non-owners must provide a
+  // UCAN" before its capability was consulted — every non-owner regardless of
+  // tier failed the same way. The honest gate is `requireCapability(…,'invite')`
+  // on the UCAN path, verified via a member with a WRITE-tier owner-rooted
+  // delegation. A positive control at INVITE tier proves the guard is not
+  // rejecting everything.
+  test("non-invite member cannot create an invite", async () => {
+    const writer = await createAdminUserWithIdentity();
+    const writerUcan = delegatedSpaceAuth(
+      authA,
+      toAuthContext(writer),
+      presetForLegacyCapability(SpaceCapabilities.WRITE),
+    );
+    const target = await createAdminUserWithIdentity();
 
-    expect(res.status).toBeGreaterThanOrEqual(400);
-    expect(res.status).toBeLessThan(500);
+    // Discriminating property: the specific "requires invite" capability gate,
+    // not the DID-Auth non-owner refusal. The message fragment is stable
+    // (matches `error` from `enforceDelegatable`); avoid pinning the full
+    // sentence — it already drifted once during PR #4.
+    const writerRes = await createServerInvite(
+      writerUcan,
+      spaceId,
+      target.did,
+      SpaceCapabilities.READ,
+    );
+    expect(writerRes.status).toBe(403);
+    expect((await writerRes.json()).error).toMatch(/requires invite$/);
+
+    // Positive control: same request with INVITE-tier delegation succeeds.
+    // Widening the writer's granted set to INVITE would flip this test — the
+    // refusal above is genuinely about the missing invite cap, not blanket
+    // rejection.
+    const inviter = await createAdminUserWithIdentity();
+    const inviterUcan = delegatedSpaceAuth(
+      authA,
+      toAuthContext(inviter),
+      presetForLegacyCapability(SpaceCapabilities.INVITE),
+    );
+    const inviterTarget = await createAdminUserWithIdentity();
+    const inviterRes = await createServerInvite(
+      inviterUcan,
+      spaceId,
+      inviterTarget.did,
+      SpaceCapabilities.READ,
+    );
+    expect(inviterRes.status).toBe(201);
   });
 
   test("remove member returns 200 and member no longer in list", async () => {
