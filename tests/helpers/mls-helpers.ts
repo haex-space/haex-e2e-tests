@@ -10,7 +10,9 @@ import {
 } from "./sync-server-helpers";
 import {
   createUcan,
+  createUcanPopHeader,
   createWebCryptoSigner,
+  POP_HEADER_NAME,
   spaceCapabilitySet,
   spaceCapabilitySetFromEntries,
   spaceResource,
@@ -186,6 +188,103 @@ export async function buildUcanAuthHeader(
   return `UCAN ${token}`;
 }
 
+/**
+ * The DID that PRESENTS the UCAN — the leaf's audience — and whose private key
+ * signs the companion `X-UCAN-PoP`.
+ *
+ * A self-signed root is presented by its issuer (= audience). A delegated leaf
+ * is presented by the member, whose DID is the leaf's audience.
+ */
+function presenterOf(auth: SpaceAuth): AuthContext {
+  return isDelegated(auth) ? auth.member : auth;
+}
+
+/**
+ * Split an URL into the (path, rawQuery) pair the PoP payload signs. `rawQuery`
+ * is EVERYTHING after `?` verbatim — no re-encoding, no key sorting, no `?`.
+ * Matches the sync-server middleware's canonicalisation.
+ */
+function splitPathAndQuery(url: string): { path: string; rawQuery: string } {
+  const qIdx = url.indexOf("?");
+  const noQuery = qIdx === -1 ? url : url.slice(0, qIdx);
+  const rawQuery = qIdx === -1 ? "" : url.slice(qIdx + 1);
+  // Strip the scheme+host prefix if present, keep only the pathname verbatim.
+  const schemeIdx = noQuery.indexOf("://");
+  if (schemeIdx === -1) return { path: noQuery, rawQuery };
+  const afterScheme = noQuery.slice(schemeIdx + 3);
+  const slashIdx = afterScheme.indexOf("/");
+  const path = slashIdx === -1 ? "/" : afterScheme.slice(slashIdx);
+  return { path, rawQuery };
+}
+
+const BODY_BEARING_METHODS = new Set(["POST", "PUT", "PATCH"]);
+
+/**
+ * Build request headers for a UCAN-authed API call carrying BOTH
+ * `Authorization: UCAN <token>` and the companion `X-UCAN-PoP` header signed
+ * by the UCAN audience's private key over the request line + body.
+ *
+ * `sync-server` main enforces `X-UCAN-PoP` on every UCAN-authed route; a
+ * request that omits it is refused with 401 before its capability is looked at.
+ * Body-bearing methods (POST/PUT/PATCH) additionally need `Content-Length`,
+ * which the middleware demands ahead of the PoP check (411 otherwise) — this
+ * helper attaches it based on the byte length of `request.body`.
+ *
+ * Pass the URL through `url` (this helper splits path + rawQuery) OR pass
+ * `path`/`rawQuery` directly for a hand-rolled fetch.
+ */
+export async function buildUcanRequestHeaders(
+  auth: SpaceAuth,
+  spaceId: string,
+  capability: SpaceCap | LegacySpaceCap,
+  request:
+    | { method?: string; url: string; body?: string; extra?: Record<string, string> }
+    | {
+        method?: string;
+        path: string;
+        rawQuery?: string;
+        body?: string;
+        extra?: Record<string, string>;
+      },
+): Promise<Record<string, string>> {
+  const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
+
+  const method = (request.method ?? "GET").toUpperCase();
+  const body = request.body ?? "";
+  const { path, rawQuery } =
+    "url" in request
+      ? splitPathAndQuery(request.url)
+      : { path: request.path, rawQuery: request.rawQuery ?? "" };
+
+  const token = await buildSignedUcan(auth, spaceId, capability);
+  const presenter = presenterOf(auth);
+  const presenterKey = await importUserPrivateKeyAsync(presenter.privateKeyBase64);
+
+  const pop = await createUcanPopHeader({
+    privateKey: presenterKey,
+    ucanAud: presenter.did,
+    method,
+    path,
+    rawQuery,
+    body,
+  });
+
+  const headers: Record<string, string> = {
+    Authorization: `UCAN ${token}`,
+    [POP_HEADER_NAME]: pop,
+    ...(request.extra ?? {}),
+  };
+
+  if (BODY_BEARING_METHODS.has(method)) {
+    // Byte length, not string length — the middleware compares to the
+    // actual body octet count. UTF-8 encoding matches how fetch serialises
+    // a string body.
+    headers["Content-Length"] = String(Buffer.byteLength(body, "utf8"));
+  }
+
+  return headers;
+}
+
 // =============================================================================
 // MLS Key Packages
 // =============================================================================
@@ -199,16 +298,12 @@ export async function fetchKeyPackage(
   spaceId: string,
   targetDid: string,
 ): Promise<Response> {
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/invite");
-
-  return fetch(
-    `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages/${encodeURIComponent(targetDid)}`,
-    {
-      headers: {
-        Authorization: authorization,
-      },
-    },
-  );
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages/${encodeURIComponent(targetDid)}`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/invite", {
+    method: "GET",
+    url,
+  });
+  return fetch(url, { headers });
 }
 
 /**
@@ -227,14 +322,17 @@ export async function uploadKeyPackages(
   );
 
   const bodyStr = JSON.stringify({ keyPackages, pops });
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
-
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages`, {
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/key-packages`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/read", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authorization,
-    },
+    url,
+    body: bodyStr,
+    extra: { "Content-Type": "application/json" },
+  });
+
+  return fetch(url, {
+    method: "POST",
+    headers,
     body: bodyStr,
   });
 }
@@ -261,14 +359,17 @@ export async function sendMlsMessage(
   if (options?.groupInfo) bodyObj.groupInfo = options.groupInfo;
 
   const bodyStr = JSON.stringify(bodyObj);
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/write");
-
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages`, {
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/write", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authorization,
-    },
+    url,
+    body: bodyStr,
+    extra: { "Content-Type": "application/json" },
+  });
+
+  return fetch(url, {
+    method: "POST",
+    headers,
     body: bodyStr,
   });
 }
@@ -281,16 +382,12 @@ export async function fetchMlsMessages(
   spaceId: string,
   afterId: number = 0,
 ): Promise<Response> {
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
-
-  return fetch(
-    `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages?after=${afterId}`,
-    {
-      headers: {
-        Authorization: authorization,
-      },
-    },
-  );
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/messages?after=${afterId}`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/read", {
+    method: "GET",
+    url,
+  });
+  return fetch(url, { headers });
 }
 
 // =============================================================================
@@ -304,13 +401,16 @@ export async function requestRejoin(
   auth: SpaceAuth,
   spaceId: string,
 ): Promise<Response> {
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
-
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/rejoin`, {
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/rejoin`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/read", {
     method: "POST",
-    headers: {
-      Authorization: authorization,
-    },
+    url,
+    body: "",
+  });
+
+  return fetch(url, {
+    method: "POST",
+    headers,
   });
 }
 
@@ -323,14 +423,17 @@ export async function submitExternalCommit(
   commitBase64: string,
 ): Promise<Response> {
   const bodyStr = JSON.stringify({ commit: commitBase64 });
-  const authorization = await buildUcanAuthHeader(auth, spaceId, "space/read");
-
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/mls/external-commit`, {
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/mls/external-commit`;
+  const headers = await buildUcanRequestHeaders(auth, spaceId, "space/read", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authorization,
-    },
+    url,
+    body: bodyStr,
+    extra: { "Content-Type": "application/json" },
+  });
+
+  return fetch(url, {
+    method: "POST",
+    headers,
     body: bodyStr,
   });
 }

@@ -28,7 +28,7 @@ import {
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import {
-  buildUcanAuthHeader,
+  buildUcanRequestHeaders,
   delegatedSpaceAuth,
 } from "../../helpers/mls-helpers";
 import {
@@ -229,11 +229,14 @@ test.describe("invitations: attack scenarios & multi-user", () => {
       toAuthContext(writer),
       presetForLegacyCapability(SpaceCapabilities.WRITE),
     );
-    const writerHdr = await buildUcanAuthHeader(writerUcan, spaceId, "read");
-    const writerRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`,
-      { method: "DELETE", headers: { Authorization: writerHdr } },
-    );
+    const writerUrl = `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`;
+    const writerRes = await fetch(writerUrl, {
+      method: "DELETE",
+      headers: await buildUcanRequestHeaders(writerUcan, spaceId, "read", {
+        method: "DELETE",
+        url: writerUrl,
+      }),
+    });
     expect(writerRes.status).toBe(403);
     expect((await writerRes.json()).error).toMatch(/requires invite$/);
 
@@ -248,11 +251,14 @@ test.describe("invitations: attack scenarios & multi-user", () => {
       toAuthContext(inviter),
       presetForLegacyCapability(SpaceCapabilities.INVITE),
     );
-    const inviterHdr = await buildUcanAuthHeader(inviterUcan, spaceId, "invite");
-    const inviterRes = await fetch(
-      `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`,
-      { method: "DELETE", headers: { Authorization: inviterHdr } },
-    );
+    const inviterUrl = `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}`;
+    const inviterRes = await fetch(inviterUrl, {
+      method: "DELETE",
+      headers: await buildUcanRequestHeaders(inviterUcan, spaceId, "invite", {
+        method: "DELETE",
+        url: inviterUrl,
+      }),
+    });
     expect(inviterRes.status).toBe(403);
     expect((await inviterRes.json()).error).toMatch(
       /only the token creator or the space owner/,

@@ -9,8 +9,8 @@ importers:
   .:
     devDependencies:
       '@haex-space/ucan':
-        specifier: 0.2.0
-        version: 0.2.0
+        specifier: 0.4.0
+        version: 0.4.0
       '@haex-space/vault-sdk':
         specifier: ^2.8.0
         version: 2.8.0(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)
@@ -47,8 +47,8 @@ importers:
 
 packages:
 
-  '@haex-space/ucan@0.2.0':
-    resolution: {integrity: sha512-xCY/4jDy9XVm4ndrhFtZfMg4Q9NdgpCPZv9IHPG3LDTwWQMqU7tuN4EjVoutsOpeHrAYk0PszvqiPW79jr2U1w==}
+  '@haex-space/ucan@0.4.0':
+    resolution: {integrity: sha512-RO2NWMzYKmL20ATmMzFzZD36t0yPso88V5mKmtO/6TLmEStk0Rr2Irdv8YqDdA1zWMfvofuapaKSn2gxGwr3+w==}
 
   '@haex-space/vault-sdk@2.8.0':
     resolution: {integrity: sha512-kDcnqTA79TnJ/WxPRnDy5XcMtkmxYnCk3mNZt1S/9hPSeiO4gSx1rzXYDCg1ivr8M6oCJpYl9VsNrPR0b5hO4A==}
@@ -580,7 +580,7 @@ packages:
 
 snapshots:
 
-  '@haex-space/ucan@0.2.0': {}
+  '@haex-space/ucan@0.4.0': {}
 
   '@haex-space/vault-sdk@2.8.0(@types/pg@8.20.0)(bun-types@1.3.11)(pg@8.20.0)(postgres@3.4.8)':
     dependencies:

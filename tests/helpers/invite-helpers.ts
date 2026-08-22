@@ -18,7 +18,7 @@ import {
 } from "./sync-server-helpers";
 import {
   buildSignedUcan,
-  buildUcanAuthHeader,
+  buildUcanRequestHeaders,
   type DelegatedSpaceAuth,
   type SpaceAuth,
 } from "./mls-helpers";
@@ -70,23 +70,29 @@ export async function createServerInvite(
     includeHistory,
   };
   const bodyStr = JSON.stringify(bodyObj);
+  const url = `${SYNC_SERVER_URL}/spaces/${spaceId}/invites`;
 
   const caller = callerOf(auth);
-  const authorization = isDelegated(auth)
-    ? await buildUcanAuthHeader(auth, spaceId, "invite")
-    : await createDidAuthHeader(
-        caller.privateKeyBase64,
-        caller.did,
-        DidAuthAction.CreateSpace,
-        bodyStr,
-      );
+  const headers: Record<string, string> = isDelegated(auth)
+    ? await buildUcanRequestHeaders(auth, spaceId, "invite", {
+        method: "POST",
+        url,
+        body: bodyStr,
+        extra: { "Content-Type": "application/json" },
+      })
+    : {
+        "Content-Type": "application/json",
+        Authorization: await createDidAuthHeader(
+          caller.privateKeyBase64,
+          caller.did,
+          DidAuthAction.CreateSpace,
+          bodyStr,
+        ),
+      };
 
-  return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/invites`, {
+  return fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authorization,
-    },
+    headers,
     body: bodyStr,
   });
 }

@@ -16,7 +16,7 @@ import {
   fetchMlsMessages,
   requestRejoin,
   submitExternalCommit,
-  buildSignedUcan,
+  buildUcanRequestHeaders,
   delegatedSpaceAuth,
   type DelegatedSpaceAuth,
 } from "../helpers/mls-helpers";
@@ -206,18 +206,17 @@ test.describe("MLS: KeyPackage management via server", () => {
 
   test("empty key package array is rejected", async () => {
     const bodyStr = JSON.stringify({ keyPackages: [] });
-    const token = await buildSignedUcan(userAuth, spaceId, "space/read");
-    const res = await fetch(
-      `${process.env.SYNC_SERVER_DIRECT_URL || "http://sync-server:3002"}/spaces/${spaceId}/mls/key-packages`,
-      {
+    const url = `${process.env.SYNC_SERVER_DIRECT_URL || "http://sync-server:3002"}/spaces/${spaceId}/mls/key-packages`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: await buildUcanRequestHeaders(userAuth, spaceId, "space/read", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `UCAN ${token}`,
-        },
+        url,
         body: bodyStr,
-      },
-    );
+        extra: { "Content-Type": "application/json" },
+      }),
+      body: bodyStr,
+    });
     // Zod validation should reject empty array
     expect(res.status).toBe(400);
   });

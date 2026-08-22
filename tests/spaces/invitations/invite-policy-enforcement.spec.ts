@@ -30,7 +30,7 @@ import {
   generateSpaceId,
 } from "../../helpers/invite-helpers";
 import {
-  buildUcanAuthHeader,
+  buildUcanRequestHeaders,
   delegatedSpaceAuth,
 } from "../../helpers/mls-helpers";
 import {
@@ -190,15 +190,22 @@ test.describe("invitations: policy enforcement", () => {
         maxUses: 1,
         expiresInSeconds: 3600,
       });
-      const mintToken = async (auth: Parameters<typeof buildUcanAuthHeader>[0], body: string) =>
-        fetch(`${SYNC_SERVER_URL}/spaces/${escalationSpaceId}/invite-tokens`, {
+      const mintToken = async (
+        auth: Parameters<typeof buildUcanRequestHeaders>[0],
+        body: string,
+      ) => {
+        const url = `${SYNC_SERVER_URL}/spaces/${escalationSpaceId}/invite-tokens`;
+        return fetch(url, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: await buildUcanAuthHeader(auth, escalationSpaceId, "invite"),
-          },
+          headers: await buildUcanRequestHeaders(auth, escalationSpaceId, "invite", {
+            method: "POST",
+            url,
+            body,
+            extra: { "Content-Type": "application/json" },
+          }),
           body,
         });
+      };
 
       // Gate 1 — a writer holds no `invite`, so it cannot create any grant.
       const writerRes = await mintToken(
