@@ -220,24 +220,6 @@ function splitPathAndQuery(url: string): { path: string; rawQuery: string } {
 const BODY_BEARING_METHODS = new Set(["POST", "PUT", "PATCH"]);
 
 /**
- * TEMPORARY debug — clone the response, if 4xx log status + body so the CI
- * log shows exactly WHICH PoP / middleware error the server surfaces on the
- * failing UCAN-authed calls. Delete after the migration is diagnosed.
- */
-async function logIfFailed(res: Response, ctx: string): Promise<Response> {
-  if (res.status >= 400 && res.status < 500) {
-    const clone = res.clone();
-    try {
-      const body = await clone.text();
-      console.log(`[UCAN-DEBUG] ${ctx}: status=${res.status} body=${body.slice(0, 300)}`);
-    } catch {
-      /* ignore */
-    }
-  }
-  return res;
-}
-
-/**
  * Build request headers for a UCAN-authed API call carrying BOTH
  * `Authorization: UCAN <token>` and the companion `X-UCAN-PoP` header signed
  * by the UCAN audience's private key over the request line + body.
@@ -321,7 +303,7 @@ export async function fetchKeyPackage(
     method: "GET",
     url,
   });
-  return logIfFailed(await fetch(url, { headers }), `fetchKeyPackage ${url}`);
+  return fetch(url, { headers });
 }
 
 /**
@@ -348,11 +330,11 @@ export async function uploadKeyPackages(
     extra: { "Content-Type": "application/json" },
   });
 
-  return logIfFailed(await fetch(url, {
+  return fetch(url, {
     method: "POST",
     headers,
     body: bodyStr,
-  }), "UCAN fetch");
+  });
 }
 
 // =============================================================================
@@ -385,11 +367,11 @@ export async function sendMlsMessage(
     extra: { "Content-Type": "application/json" },
   });
 
-  return logIfFailed(await fetch(url, {
+  return fetch(url, {
     method: "POST",
     headers,
     body: bodyStr,
-  }), "UCAN fetch");
+  });
 }
 
 /**
@@ -405,7 +387,7 @@ export async function fetchMlsMessages(
     method: "GET",
     url,
   });
-  return logIfFailed(await fetch(url, { headers }), "UCAN fetch");
+  return fetch(url, { headers });
 }
 
 // =============================================================================
@@ -426,10 +408,10 @@ export async function requestRejoin(
     body: "",
   });
 
-  return logIfFailed(await fetch(url, {
+  return fetch(url, {
     method: "POST",
     headers,
-  }), "UCAN fetch");
+  });
 }
 
 /**
@@ -449,9 +431,9 @@ export async function submitExternalCommit(
     extra: { "Content-Type": "application/json" },
   });
 
-  return logIfFailed(await fetch(url, {
+  return fetch(url, {
     method: "POST",
     headers,
     body: bodyStr,
-  }), "UCAN fetch");
+  });
 }
