@@ -239,9 +239,9 @@ test.describe("invitations: attack scenarios & multi-user", () => {
 
     // (b) creator-scope gate: inviter holds an owner-rooted delegation
     // WITH `invite`, but is not the token creator. Still 403 — proving that
-    // the capability gate is not the only barrier. The exact error message
-    // is intentionally not pinned (only 403) because the fragment is not
-    // covered by an `enforceDelegatable`-style stable label.
+    // the capability gate is not the only barrier. The error fragment names
+    // the two allowed principals so this 403 is distinguishable from the
+    // `requires invite` 403 above and any future capability refusal.
     const inviter = await createAdminUserWithIdentity();
     const inviterUcan = delegatedSpaceAuth(
       authOwner,
@@ -254,6 +254,9 @@ test.describe("invitations: attack scenarios & multi-user", () => {
       { method: "DELETE", headers: { Authorization: inviterHdr } },
     );
     expect(inviterRes.status).toBe(403);
+    expect((await inviterRes.json()).error).toMatch(
+      /only the token creator or the space owner/,
+    );
 
     // Positive control: the creator (owner) can revoke — proves both
     // refusals above are specific gates, not a blanket rejection.
