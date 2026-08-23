@@ -11,7 +11,6 @@ import {
   createDidAuthHeader,
   toAuthContext,
 } from "../helpers";
-import { DidAuthAction } from "@haex-space/ucan";
 
 test.describe("identity-auth: DID-Auth lifecycle", () => {
   test.describe.configure({ mode: "serial" });
@@ -30,7 +29,7 @@ test.describe("identity-auth: DID-Auth lifecycle", () => {
     const authHeader = await createDidAuthHeader(
       auth.privateKeyBase64,
       auth.did,
-      DidAuthAction.VaultList,
+      { url: `${baseUrl}/sync/vaults` },
     );
     const res = await fetch(`${baseUrl}/sync/vaults`, {
       headers: { Authorization: authHeader },
@@ -58,7 +57,7 @@ test.describe("identity-auth: DID-Auth lifecycle", () => {
     const authHeader = await createDidAuthHeader(
       identity.privateKeyBase64,
       identity.did,
-      DidAuthAction.VaultList,
+      { url: `${baseUrl}/sync/vaults` },
     );
     const res = await fetch(`${baseUrl}/sync/vaults`, {
       headers: { Authorization: authHeader },
@@ -78,7 +77,7 @@ test.describe("identity-auth: DID-Auth lifecycle", () => {
       const authHeader = await createDidAuthHeader(
         auth.privateKeyBase64,
         auth.did,
-        DidAuthAction.VaultList,
+        { url: `${baseUrl}/sync/vaults` },
       );
       const res = await fetch(`${baseUrl}/sync/vaults`, {
         headers: { Authorization: authHeader },

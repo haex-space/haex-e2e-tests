@@ -12,7 +12,6 @@ import {
   createSpace,
   deleteSpace,
   createDidAuthHeader,
-  DidAuthAction,
   getSyncServerUrl,
   type AuthContext,
 } from "../../helpers";
@@ -338,8 +337,7 @@ test.describe("invitations: server invite API", () => {
         Authorization: await createDidAuthHeader(
           authOwner.privateKeyBase64,
           authOwner.did,
-          DidAuthAction.CreateSpace,
-          bodyStr,
+          { method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites`, body: bodyStr },
         ),
       },
       body: bodyStr,

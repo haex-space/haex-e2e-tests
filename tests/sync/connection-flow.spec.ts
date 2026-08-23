@@ -9,7 +9,6 @@ import {
   deleteVault,
   toAuthContext,
   createDidAuthHeader,
-  DidAuthAction,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -77,7 +76,9 @@ test.describe("sync: full connection flow", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "POST", url: `${baseUrl}/sync/vault-key`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });
@@ -90,7 +91,7 @@ test.describe("sync: full connection flow", () => {
   test("vault key can be retrieved for the new space", async () => {
     const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyGet),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${baseUrl}/sync/vault-key/${spaceId}` }),
       },
     });
 
@@ -209,7 +210,9 @@ test.describe("sync: full connection flow", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "POST", url: `${baseUrl}/sync/vault-key`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });

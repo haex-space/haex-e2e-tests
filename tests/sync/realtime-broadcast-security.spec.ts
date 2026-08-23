@@ -56,11 +56,7 @@ test.describe("security: token manipulation attacks", () => {
     const otherIdentity = await createTestIdentity();
     const fakePayload = Buffer.from(JSON.stringify({
       did: auth.did, // Claim to be the real user
-      action: "ws-connect",
       timestamp: Date.now(),
-      bodyHash: Buffer.from(
-        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
-      ).toString("base64url"),
     })).toString("base64url");
     // Sign with wrong key
     const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
@@ -79,19 +75,14 @@ test.describe("security: token manipulation attacks", () => {
     expect(result.closeCode).toBe(4001);
   });
 
-  test("token with wrong action field is rejected", async () => {
-    // Create a properly signed token but with action != 'ws-connect'
+  test("legacy DID-Auth payload without a request hash is rejected", async () => {
+    // A valid signature cannot revive the superseded body-only payload shape.
     const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
     const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
-    const bodyHash = Buffer.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
-    ).toString("base64url");
 
     const payload = JSON.stringify({
       did: auth.did,
-      action: "wrong-action",
       timestamp: Date.now(),
-      bodyHash,
     });
     const payloadEncoded = Buffer.from(payload).toString("base64url");
     const signature = new Uint8Array(

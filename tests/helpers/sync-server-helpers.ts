@@ -13,9 +13,7 @@ import {
   publicKeyToDidKeyAsync,
   signRecordAsync,
 } from "@haex-space/vault-sdk";
-import { DidAuthAction } from "@haex-space/ucan";
-
-export { DidAuthAction };
+import { createSignedAuthHeader } from "@haex-space/ucan";
 
 const { subtle } = crypto.webcrypto as unknown as Crypto;
 
@@ -67,10 +65,6 @@ export interface AuthContext {
 // DID-Auth Header
 // =============================================================================
 
-function base64urlEncode(data: Uint8Array): string {
-  return Buffer.from(data).toString("base64url");
-}
-
 /**
  * Create a DID-Auth Authorization header value.
  * Format: `DID <base64url-payload>.<base64url-signature>`
@@ -78,31 +72,21 @@ function base64urlEncode(data: Uint8Array): string {
 export async function createDidAuthHeader(
   privateKeyBase64: string,
   did: string,
-  action: string,
-  body?: string,
+  request: { method?: string; url: string; body?: string },
 ): Promise<string> {
   const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
-
-  const bodyHash = base64urlEncode(
-    new Uint8Array(
-      await subtle.digest("SHA-256", new TextEncoder().encode(body ?? "")),
-    ),
-  );
-
-  const payload = JSON.stringify({
+  const privateKey = await importUserPrivateKeyAsync(privateKeyBase64);
+  const url = new URL(request.url);
+  const headerValue = await createSignedAuthHeader({
+    privateKey,
     did,
-    action,
-    timestamp: Date.now(),
-    bodyHash,
+    method: request.method ?? "GET",
+    path: url.pathname,
+    rawQuery: url.search.slice(1),
+    body: request.body ?? "",
   });
 
-  const payloadEncoded = base64urlEncode(new TextEncoder().encode(payload));
-  const privateKey = await importUserPrivateKeyAsync(privateKeyBase64);
-  const signature = new Uint8Array(
-    await subtle.sign("Ed25519", privateKey, new TextEncoder().encode(payloadEncoded)),
-  );
-
-  return `DID ${payloadEncoded}.${base64urlEncode(signature)}`;
+  return `DID ${headerValue}`;
 }
 
 // =============================================================================
@@ -498,7 +482,9 @@ export async function createSpace(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, bodyStr),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "POST", url: `${SYNC_SERVER_URL}/spaces`, body: bodyStr,
+      }),
     },
     body: bodyStr,
   });
@@ -525,7 +511,9 @@ export async function addSpaceMember(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, bodyStr),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/members`, body: bodyStr,
+      }),
     },
     body: bodyStr,
   });
@@ -544,7 +532,9 @@ export async function removeSpaceMember(
     {
       method: "DELETE",
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "DELETE", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/members/${encodeURIComponent(memberDid)}`,
+        }),
       },
     },
   );
@@ -560,7 +550,9 @@ export async function deleteSpace(
   return fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
     method: "DELETE",
     headers: {
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "DELETE", url: `${SYNC_SERVER_URL}/spaces/${spaceId}`,
+      }),
     },
   });
 }
@@ -592,7 +584,9 @@ export async function createVaultKey(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "POST", url: `${SYNC_SERVER_URL}/sync/vault-key`, body: bodyStr,
+      }),
     },
     body: bodyStr,
   });
@@ -613,7 +607,9 @@ export async function deleteVault(
   const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${spaceId}`, {
     method: "DELETE",
     headers: {
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultDelete),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "DELETE", url: `${SYNC_SERVER_URL}/sync/vault/${spaceId}`,
+      }),
     },
   });
 
@@ -684,7 +680,9 @@ export async function pushChanges(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPush, bodyStr),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        method: "POST", url: `${SYNC_SERVER_URL}/sync/push`, body: bodyStr,
+      }),
     },
     body: bodyStr,
   });
@@ -716,7 +714,9 @@ export async function pullChanges(
 
   const res = await fetch(`${SYNC_SERVER_URL}/sync/pull?${params}`, {
     headers: {
-      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.SyncPull),
+      Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+        url: `${SYNC_SERVER_URL}/sync/pull?${params}`,
+      }),
     },
   });
 

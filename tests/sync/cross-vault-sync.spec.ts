@@ -13,7 +13,6 @@ import {
   makeSyncChange,
   toAuthContext,
   createDidAuthHeader,
-  DidAuthAction,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -75,7 +74,9 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
       `${SYNC_SERVER_URL}/sync/pull?spaceId=${spaceIdA}&limit=10`,
       {
         headers: {
-          Authorization: await createDidAuthHeader(authB.privateKeyBase64, authB.did, DidAuthAction.SyncPull),
+          Authorization: await createDidAuthHeader(authB.privateKeyBase64, authB.did, {
+            url: `${SYNC_SERVER_URL}/sync/pull?spaceId=${spaceIdA}&limit=10`,
+          }),
         },
       },
     );
@@ -121,7 +122,9 @@ test.describe("sync: cross-vault sync via shared spaces", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.CreateSpace),
+        Authorization: await createDidAuthHeader(authA.privateKeyBase64, authA.did, {
+          method: "POST", url: `${SYNC_SERVER_URL}/partitions/create`,
+        }),
       },
     });
 

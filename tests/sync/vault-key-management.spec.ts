@@ -8,7 +8,6 @@ import {
   deleteVault,
   toAuthContext,
   createDidAuthHeader,
-  DidAuthAction,
 } from "../helpers";
 
 test.describe("sync: vault-key-management", () => {
@@ -51,7 +50,9 @@ test.describe("sync: vault-key-management", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpload, bodyStr),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "POST", url: `${baseUrl}/sync/vault-key`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });
@@ -67,7 +68,7 @@ test.describe("sync: vault-key-management", () => {
   test("retrieve vault key returns all fields with matching spaceId", async () => {
     const res = await fetch(`${baseUrl}/sync/vault-key/${spaceId}`, {
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyGet),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${baseUrl}/sync/vault-key/${spaceId}` }),
       },
     });
 
@@ -86,7 +87,7 @@ test.describe("sync: vault-key-management", () => {
   test("list vaults includes the created vault", async () => {
     const res = await fetch(`${baseUrl}/sync/vaults`, {
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${baseUrl}/sync/vaults` }),
       },
     });
 
@@ -118,7 +119,9 @@ test.describe("sync: vault-key-management", () => {
       method: "PATCH",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultKeyUpdate, bodyStr),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "PATCH", url: `${baseUrl}/sync/vault-key/${spaceId}`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });
@@ -134,7 +137,9 @@ test.describe("sync: vault-key-management", () => {
     const res = await fetch(`${baseUrl}/sync/vault/${spaceId}`, {
       method: "DELETE",
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultDelete),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+          method: "DELETE", url: `${baseUrl}/sync/vault/${spaceId}`,
+        }),
       },
     });
 
@@ -148,7 +153,7 @@ test.describe("sync: vault-key-management", () => {
   test("deleted vault no longer appears in vault list", async () => {
     const res = await fetch(`${baseUrl}/sync/vaults`, {
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${baseUrl}/sync/vaults` }),
       },
     });
 
