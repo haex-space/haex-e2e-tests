@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-08-23 - DID-Auth request-binding CI repair
+
+### Root cause
+- PR #91 migrated the E2E helpers to the shared DID proof-of-possession format.
+- `haex-sync-server` mounts both `spacesRouter` and `mlsRouter` at `/spaces`.
+- An invitation request therefore ran DID-Auth middleware twice. The second internal pass rechecked the same `jti` and returned `401 PoP replay detected`.
+
+### Resolution
+- Merged haex-sync-server PR #11: reuse an existing verified DID context for the second internal router pass.
+- Added a focused regression test that runs the middleware twice in one request; replay protection remains active across distinct requests.
+- Restarted the full PR #91 workflow so its Docker image uses the fixed server revision.
+
+### Verification
+- `bun test tests/middleware/didAuth.test.ts` (sync server): 17 passed
+- `pnpm exec tsc --noEmit` (E2E repository): passed
+
 ## 2026-04-12 - CI Failures: QUIC Connection Lost + Invite Accept
 
 ### Durchgeführt
