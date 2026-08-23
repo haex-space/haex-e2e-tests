@@ -735,3 +735,19 @@ Siehe [docs/plans/2026-04-18-code-review-followups.md](../docs/plans/2026-04-18-
 `tests/ui/{start-page,identity-and-sync-setup}.spec.ts`, `tests/database/migrations.spec.ts`, `tests-db/mls.test.ts`.
 
 <!-- Neue Sessions hier eintragen -->
+
+## 2026-08-23 — DID-Auth request binding review
+
+### Durchgeführt
+- PR #91 auf Standard- und Anforderungstreue geprüft.
+- DID-Auth-E2E-Helper auf `@haex-space/ucan#createSignedAuthHeader` migriert:
+  Methode, Pfad, Raw-Query und exakter Request-Body sind signiert.
+- URL-target-swap-Regressionsabdeckung ergänzt: ein für `POST /sync/push`
+  gültiger Header wird bei `POST /sync/pull` mit gleichem Body abgewiesen.
+
+### CI-Erkenntnis
+- Der fehlgeschlagene PR-Lauf nutzte den Stand von `haex-sync-server` vor
+  dessen Companion-PR #10 und erhielt dadurch für das entfernte Legacy-Format
+  erwartungsgemäß `401`.
+- haex-sync-server#10 ist inzwischen in `main`; ein neuer E2E-Lauf verwendet
+  die kompatible request-gebundene Prüfung.
