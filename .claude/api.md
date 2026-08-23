@@ -263,7 +263,7 @@ string[]  // ["entries", "groups", ...]
 All protected sync-server HTTP routes use a request-bound DID-Auth header,
 not a bearer token:
 
-```
+```text
 Authorization: DID <base64url-payload>.<base64url-signature>
 ```
 

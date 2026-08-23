@@ -767,3 +767,15 @@ Siehe [docs/plans/2026-04-18-code-review-followups.md](../docs/plans/2026-04-18-
   erwartungsgemäß `401`.
 - haex-sync-server#10 ist inzwischen in `main`; ein neuer E2E-Lauf verwendet
   die kompatible request-gebundene Prüfung.
+
+## 2026-08-23 - PR #91 review fixes
+
+### Durchgeführt
+- Review-Hinweis zur WebSocket-Negativ-Fixture behoben: Der absichtlich falsch
+  signierte Token nutzt jetzt dennoch den aktuellen request-gebundenen
+  DID-Auth-Payload für `GET /ws`.
+- Sprach-Tag am DID-Auth-Header-Beispiel ergänzt.
+
+### Verifikation
+- `pnpm exec tsc --noEmit` bestanden
+- Vollständige PR-CI erfolgreich; lokaler Docker-Integrationsstack war nicht aktiv

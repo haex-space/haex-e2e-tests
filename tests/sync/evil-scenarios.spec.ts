@@ -7,7 +7,6 @@
  */
 import * as crypto from "crypto";
 import { test, expect } from "@playwright/test";
-import { createSignedAuthHeader } from "@haex-space/ucan";
 import type { AuthContext } from "../helpers";
 import {
   getSyncServerUrl,
@@ -180,23 +179,18 @@ test.describe("sync: evil scenarios", () => {
   });
 
   test("attack: DID-Auth URL-target swap with a valid body signature is rejected", async () => {
-    const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
     const body = JSON.stringify({ spaceId: attackerSpaceId, changes: [] });
-    const privateKey = await importUserPrivateKeyAsync(attackerAuth.privateKeyBase64);
-    const signedForPush = await createSignedAuthHeader({
-      privateKey,
-      did: attackerAuth.did,
-      method: "POST",
-      path: "/sync/push",
-      rawQuery: "",
-      body,
-    });
+    const signedForPush = await createDidAuthHeader(
+      attackerAuth.privateKeyBase64,
+      attackerAuth.did,
+      { method: "POST", url: `${SYNC_SERVER_URL}/sync/push`, body },
+    );
 
     const res = await fetch(`${SYNC_SERVER_URL}/sync/pull`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `DID ${signedForPush}`,
+        Authorization: signedForPush,
       },
       body,
     });
