@@ -80,7 +80,7 @@ test.describe("sync: realtime auth lifecycle", () => {
   test("connection is rejected with malformed payload.signature format", async () => {
     const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
     // Valid base64url but not a real DID-Auth payload
-    const fakePayload = Buffer.from(JSON.stringify({ did: "did:key:z123", action: "ws-connect", timestamp: Date.now(), bodyHash: "abc" })).toString("base64url");
+    const fakePayload = Buffer.from(JSON.stringify({ did: "did:key:z123", timestamp: Date.now() })).toString("base64url");
     const fakeSignature = Buffer.from("not-a-real-signature").toString("base64url");
     const result = await client.connectWithRawToken(`${fakePayload}.${fakeSignature}`);
 

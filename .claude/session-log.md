@@ -1,5 +1,21 @@
 # Session Log
 
+## 2026-08-23 - DID-Auth request-binding CI repair
+
+### Root cause
+- PR #91 migrated the E2E helpers to the shared DID proof-of-possession format.
+- `haex-sync-server` mounts both `spacesRouter` and `mlsRouter` at `/spaces`.
+- An invitation request therefore ran DID-Auth middleware twice. The second internal pass rechecked the same `jti` and returned `401 PoP replay detected`.
+
+### Resolution
+- Merged haex-sync-server PR #11: reuse an existing verified DID context for the second internal router pass.
+- Added a focused regression test that runs the middleware twice in one request; replay protection remains active across distinct requests.
+- Restarted the full PR #91 workflow so its Docker image uses the fixed server revision.
+
+### Verification
+- `bun test tests/middleware/didAuth.test.ts` (sync server): 17 passed
+- `pnpm exec tsc --noEmit` (E2E repository): passed
+
 ## 2026-04-12 - CI Failures: QUIC Connection Lost + Invite Accept
 
 ### Durchgeführt
@@ -735,3 +751,31 @@ Siehe [docs/plans/2026-04-18-code-review-followups.md](../docs/plans/2026-04-18-
 `tests/ui/{start-page,identity-and-sync-setup}.spec.ts`, `tests/database/migrations.spec.ts`, `tests-db/mls.test.ts`.
 
 <!-- Neue Sessions hier eintragen -->
+
+## 2026-08-23 — DID-Auth request binding review
+
+### Durchgeführt
+- PR #91 auf Standard- und Anforderungstreue geprüft.
+- DID-Auth-E2E-Helper auf `@haex-space/ucan#createSignedAuthHeader` migriert:
+  Methode, Pfad, Raw-Query und exakter Request-Body sind signiert.
+- URL-target-swap-Regressionsabdeckung ergänzt: ein für `POST /sync/push`
+  gültiger Header wird bei `POST /sync/pull` mit gleichem Body abgewiesen.
+
+### CI-Erkenntnis
+- Der fehlgeschlagene PR-Lauf nutzte den Stand von `haex-sync-server` vor
+  dessen Companion-PR #10 und erhielt dadurch für das entfernte Legacy-Format
+  erwartungsgemäß `401`.
+- haex-sync-server#10 ist inzwischen in `main`; ein neuer E2E-Lauf verwendet
+  die kompatible request-gebundene Prüfung.
+
+## 2026-08-23 - PR #91 review fixes
+
+### Durchgeführt
+- Review-Hinweis zur WebSocket-Negativ-Fixture behoben: Der absichtlich falsch
+  signierte Token nutzt jetzt dennoch den aktuellen request-gebundenen
+  DID-Auth-Payload für `GET /ws`.
+- Sprach-Tag am DID-Auth-Header-Beispiel ergänzt.
+
+### Verifikation
+- `pnpm exec tsc --noEmit` bestanden
+- Vollständige PR-CI erfolgreich; lokaler Docker-Integrationsstack war nicht aktiv

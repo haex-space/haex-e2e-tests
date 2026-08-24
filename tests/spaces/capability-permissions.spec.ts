@@ -10,7 +10,6 @@ import {
   deleteSpace,
   removeSpaceMember,
   createDidAuthHeader,
-  DidAuthAction,
   makeSyncChange,
   signAndPushSpaceChanges,
   type AuthContext,
@@ -143,7 +142,9 @@ test.describe("spaces: capability-based permissions", () => {
       encryptedName: randomBase64(32),
       nameNonce: randomBase64(12),
     });
-    const authHeader = await createDidAuthHeader(ownerAuth.privateKeyBase64, ownerAuth.did, DidAuthAction.CreateSpace, body);
+    const authHeader = await createDidAuthHeader(ownerAuth.privateKeyBase64, ownerAuth.did, {
+      method: "PATCH", url: `${SYNC_SERVER_URL}/spaces/${spaceId}`, body,
+    });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "PATCH",
       headers: {
@@ -213,7 +214,9 @@ test.describe("spaces: capability-based permissions", () => {
       label: "DID-Auth Invite",
       capability: SpaceCapabilities.WRITE,
     });
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
+    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, {
+      method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/members`, body,
+    });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/members`, {
       method: "POST",
       headers: {
@@ -292,7 +295,7 @@ test.describe("spaces: capability-based permissions", () => {
   });
 
   test("owner can list their spaces", async () => {
-    const authHeader = await createDidAuthHeader(ownerAuth.privateKeyBase64, ownerAuth.did, DidAuthAction.ListSpaces);
+    const authHeader = await createDidAuthHeader(ownerAuth.privateKeyBase64, ownerAuth.did, { url: `${SYNC_SERVER_URL}/spaces` });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
       headers: { Authorization: authHeader },
     });
@@ -399,7 +402,9 @@ test.describe("spaces: capability-based permissions", () => {
 
   test("member cannot transfer ownership", async () => {
     const body = JSON.stringify({ targetDid: readerDid });
-    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, DidAuthAction.CreateSpace, body);
+    const authHeader = await createDidAuthHeader(memberAuth.privateKeyBase64, memberAuth.did, {
+      method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, body,
+    });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, {
       method: "POST",
       headers: {
@@ -425,7 +430,9 @@ test.describe("spaces: capability-based permissions", () => {
 
   test("reader cannot transfer ownership", async () => {
     const body = JSON.stringify({ targetDid: memberDid });
-    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, DidAuthAction.CreateSpace, body);
+    const authHeader = await createDidAuthHeader(readerAuth.privateKeyBase64, readerAuth.did, {
+      method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, body,
+    });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}/transfer-ownership`, {
       method: "POST",
       headers: {

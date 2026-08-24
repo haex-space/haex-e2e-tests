@@ -13,7 +13,6 @@ import {
   createSpace,
   deleteSpace,
   createDidAuthHeader,
-  DidAuthAction,
   getSyncServerUrl,
   type AuthContext,
 } from "../../helpers";
@@ -472,8 +471,7 @@ test.describe("invitations: attack scenarios & multi-user", () => {
         Authorization: await createDidAuthHeader(
           authOwner.privateKeyBase64,
           authOwner.did,
-          DidAuthAction.CreateSpace,
-          "{}",
+          { method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites`, body: "{}" },
         ),
       },
       body: "{}",

@@ -10,7 +10,6 @@ import {
   removeSpaceMember,
   deleteSpace,
   createDidAuthHeader,
-  DidAuthAction,
   type AuthContext,
 } from "../helpers";
 import {
@@ -69,7 +68,7 @@ test.describe("spaces: member-management", () => {
   });
 
   test("list members shows both users with correct roles", async () => {
-    const authHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
+    const authHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, { url: `${SYNC_SERVER_URL}/spaces/${spaceId}` });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       headers: { Authorization: authHeader },
     });
@@ -152,7 +151,7 @@ test.describe("spaces: member-management", () => {
     expect(deleteBody.success).toBe(true);
 
     // Verify member is no longer in list
-    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
+    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, { url: `${SYNC_SERVER_URL}/spaces/${spaceId}` });
     const detailRes = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       headers: { Authorization: detailAuthHeader },
     });
@@ -173,7 +172,7 @@ test.describe("spaces: member-management", () => {
     expect(body.success).toBe(true);
 
     // Verify member is back in list
-    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, DidAuthAction.ListSpaces);
+    const detailAuthHeader = await createDidAuthHeader(authA.privateKeyBase64, authA.did, { url: `${SYNC_SERVER_URL}/spaces/${spaceId}` });
     const detailRes = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       headers: { Authorization: detailAuthHeader },
     });

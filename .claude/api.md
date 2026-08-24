@@ -258,6 +258,33 @@ string[]  // ["entries", "groups", ...]
 
 ## haex-sync-server REST API (Port 3002)
 
+### DID-Auth proof of possession
+
+All protected sync-server HTTP routes use a request-bound DID-Auth header,
+not a bearer token:
+
+```text
+Authorization: DID <base64url-payload>.<base64url-signature>
+```
+
+The payload is created with `@haex-space/ucan`'s
+`createSignedAuthHeader` and binds the signature to the complete request:
+
+- HTTP method (defaults to `GET`)
+- URL pathname
+- raw query string (without `?`)
+- exact raw request body (or an empty string)
+
+`createDidAuthHeader(privateKeyBase64, did, { method?, url, body? })` in
+`tests/helpers/sync-server-helpers.ts` is the only E2E helper for creating
+this value. Reusing a valid header for a different method, path, query, or
+body must fail with `401` and `PoP request mismatch`.
+
+The WebSocket endpoint applies the same binding. It accepts the unprefixed
+DID token as `GET /ws?token=<payload>.<signature>`; the signature is made for
+`GET /ws` with an empty raw query and body. Authentication failures close the
+connection with code `4001`.
+
 ### Health Check
 
 `GET /`
@@ -276,7 +303,7 @@ string[]  // ["entries", "groups", ...]
 `POST /sync/push`
 
 **Headers:**
-- `Authorization: Bearer <token>`
+- `Authorization: DID <signed-request>`
 - `Content-Type: application/json`
 
 **Request:**
@@ -317,7 +344,7 @@ string[]  // ["entries", "groups", ...]
 - `limit` (optional, default 1000)
 
 **Headers:**
-- `Authorization: Bearer <token>`
+- `Authorization: DID <signed-request>`
 
 **Response:**
 ```json
@@ -344,7 +371,7 @@ string[]  // ["entries", "groups", ...]
 `GET /sync/vaults`
 
 **Headers:**
-- `Authorization: Bearer <token>`
+- `Authorization: DID <signed-request>`
 
 **Response:**
 ```json
@@ -364,7 +391,7 @@ string[]  // ["entries", "groups", ...]
 `DELETE /sync/vault/:vaultId`
 
 **Headers:**
-- `Authorization: Bearer <token>`
+- `Authorization: DID <signed-request>`
 
 **Response:** 204 No Content
 

@@ -9,7 +9,6 @@ import {
   createAdminUser,
   toAuthContext,
   createDidAuthHeader,
-  DidAuthAction,
 } from "../helpers";
 
 test.describe("identity-auth: challenge-login", () => {
@@ -127,7 +126,7 @@ test.describe("identity-auth: challenge-login", () => {
 
     const res = await fetch(`${baseUrl}/sync/vaults`, {
       headers: {
-        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.VaultList),
+        Authorization: await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${baseUrl}/sync/vaults` }),
       },
     });
 

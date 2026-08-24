@@ -20,7 +20,6 @@ import {
   deleteSpace,
   addSpaceMember,
   createDidAuthHeader,
-  DidAuthAction,
   getSyncServerUrl,
   type AuthContext,
 } from "../../helpers";
@@ -350,8 +349,7 @@ test.describe("invitations: policy enforcement", () => {
         Authorization: await createDidAuthHeader(
           authOwner.privateKeyBase64,
           authOwner.did,
-          DidAuthAction.CreateSpace,
-          bodyStr,
+          { method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites`, body: bodyStr },
         ),
       },
       body: bodyStr,

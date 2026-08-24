@@ -13,7 +13,6 @@ import * as crypto from "crypto";
 import {
   getSyncServerUrl,
   createDidAuthHeader,
-  DidAuthAction,
   type AuthContext,
 } from "./sync-server-helpers";
 import {
@@ -85,8 +84,7 @@ export async function createServerInvite(
         Authorization: await createDidAuthHeader(
           caller.privateKeyBase64,
           caller.did,
-          DidAuthAction.CreateSpace,
-          bodyStr,
+          { method: "POST", url, body: bodyStr },
         ),
       };
 
@@ -121,8 +119,11 @@ export async function acceptServerInvite(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.AcceptInvite,
-          bodyStr,
+          {
+            method: "POST",
+            url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites/${inviteId}/accept`,
+            body: bodyStr,
+          },
         ),
       },
       body: bodyStr,
@@ -147,7 +148,7 @@ export async function declineServerInvite(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.DeclineInvite,
+          { method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites/${inviteId}/decline` },
         ),
       },
     },
@@ -166,7 +167,7 @@ export async function listPendingInvites(
       Authorization: await createDidAuthHeader(
         auth.privateKeyBase64,
         auth.did,
-        DidAuthAction.ListSpaces,
+        { url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites` },
       ),
     },
   });
@@ -204,8 +205,7 @@ export async function createInviteToken(
       Authorization: await createDidAuthHeader(
         auth.privateKeyBase64,
         auth.did,
-        DidAuthAction.CreateSpace,
-        bodyStr,
+        { method: "POST", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens`, body: bodyStr },
       ),
     },
     body: bodyStr,
@@ -237,8 +237,11 @@ export async function claimInviteToken(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.AcceptInvite,
-          bodyStr,
+          {
+            method: "POST",
+            url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}/claim`,
+            body: bodyStr,
+          },
         ),
       },
       body: bodyStr,
@@ -262,7 +265,7 @@ export async function revokeInviteToken(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.CreateSpace,
+          { method: "DELETE", url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens/${tokenId}` },
         ),
       },
     },
@@ -281,7 +284,7 @@ export async function listInviteTokens(
       Authorization: await createDidAuthHeader(
         auth.privateKeyBase64,
         auth.did,
-        DidAuthAction.ListSpaces,
+        { url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invite-tokens` },
       ),
     },
   });
@@ -306,7 +309,7 @@ export async function getInviteUcan(
         Authorization: await createDidAuthHeader(
           auth.privateKeyBase64,
           auth.did,
-          DidAuthAction.ListSpaces,
+          { url: `${SYNC_SERVER_URL}/spaces/${spaceId}/invites/${inviteId}/ucan` },
         ),
       },
     },
@@ -329,7 +332,7 @@ export async function getSpaceDetails(
       Authorization: await createDidAuthHeader(
         auth.privateKeyBase64,
         auth.did,
-        DidAuthAction.ListSpaces,
+        { url: `${SYNC_SERVER_URL}/spaces/${spaceId}` },
       ),
     },
   });

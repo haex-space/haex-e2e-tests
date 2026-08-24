@@ -8,7 +8,6 @@ import {
   createSpace,
   deleteSpace,
   createDidAuthHeader,
-  DidAuthAction,
 } from "../helpers";
 import { LegacySpaceCapabilities as SpaceCapabilities } from "../helpers/legacy-space-capabilities";
 
@@ -50,7 +49,7 @@ test.describe("spaces: create-space", () => {
   });
 
   test("list spaces includes the created space with admin role", async () => {
-    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${SYNC_SERVER_URL}/spaces` });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces`, {
       headers: { Authorization: authHeader },
     });
@@ -71,7 +70,7 @@ test.describe("spaces: create-space", () => {
   });
 
   test("get space details returns members array with creator", async () => {
-    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${SYNC_SERVER_URL}/spaces/${spaceId}` });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       headers: { Authorization: authHeader },
     });
@@ -99,7 +98,9 @@ test.describe("spaces: create-space", () => {
       encryptedName: randomBase64(32),
       nameNonce: randomBase64(12),
     });
-    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.CreateSpace, body);
+    const authHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, {
+      method: "PATCH", url: `${SYNC_SERVER_URL}/spaces/${spaceId}`, body,
+    });
     const res = await fetch(`${SYNC_SERVER_URL}/spaces/${spaceId}`, {
       method: "PATCH",
       headers: {
@@ -122,7 +123,7 @@ test.describe("spaces: create-space", () => {
     expect(deleteBody.success).toBe(true);
 
     // Verify space is no longer in list
-    const listAuthHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, DidAuthAction.ListSpaces);
+    const listAuthHeader = await createDidAuthHeader(auth.privateKeyBase64, auth.did, { url: `${SYNC_SERVER_URL}/spaces` });
     const listRes = await fetch(`${SYNC_SERVER_URL}/spaces`, {
       headers: { Authorization: listAuthHeader },
     });

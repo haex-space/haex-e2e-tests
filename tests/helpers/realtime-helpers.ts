@@ -53,7 +53,7 @@ export class RealtimeTestClient {
     const authHeader = await createDidAuthHeader(
       this.privateKeyBase64,
       this.did,
-      "ws-connect",
+      { url: `${this.serverUrl}/ws` },
     );
     // Strip "DID " prefix — the WS token is just payload.signature
     const token = authHeader.slice(4);
@@ -95,7 +95,7 @@ export class RealtimeTestClient {
     const authHeader = await createDidAuthHeader(
       this.privateKeyBase64,
       this.did,
-      "ws-connect",
+      { url: `${this.serverUrl}/ws` },
     );
     const token = authHeader.slice(4);
     const wsUrl =

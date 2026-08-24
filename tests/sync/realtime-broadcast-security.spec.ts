@@ -14,6 +14,7 @@ import { test, expect } from "@playwright/test";
 import {
   checkSyncServerHealth,
   createAdminUserWithIdentity,
+  createDidAuthHeader,
   createTestIdentity,
   createSpace,
   addSpaceMember,
@@ -22,6 +23,7 @@ import {
   makeSyncChange,
   toAuthContext,
   setupSyncTestWithSpace,
+  getSyncServerUrl,
   RealtimeTestClient,
   type AuthContext,
 } from "../helpers";
@@ -52,23 +54,14 @@ test.describe("security: token manipulation attacks", () => {
   });
 
   test("token with valid format but wrong signature is rejected", async () => {
-    // Create a payload that looks right but sign it with a different key
+    // Create a request-bound payload that claims the real DID but is signed
+    // with a different key.
     const otherIdentity = await createTestIdentity();
-    const fakePayload = Buffer.from(JSON.stringify({
-      did: auth.did, // Claim to be the real user
-      action: "ws-connect",
-      timestamp: Date.now(),
-      bodyHash: Buffer.from(
-        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
-      ).toString("base64url"),
-    })).toString("base64url");
-    // Sign with wrong key
-    const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
-    const wrongKey = await importUserPrivateKeyAsync(otherIdentity.privateKeyBase64);
-    const signature = new Uint8Array(
-      await crypto.subtle.sign("Ed25519", wrongKey, new TextEncoder().encode(fakePayload)),
-    );
-    const fakeToken = `${fakePayload}.${Buffer.from(signature).toString("base64url")}`;
+    const fakeToken = (await createDidAuthHeader(
+      otherIdentity.privateKeyBase64,
+      auth.did,
+      { url: `${getSyncServerUrl()}/ws` },
+    )).slice(4);
 
     const client = new RealtimeTestClient(auth.privateKeyBase64, auth.did);
     const result = await client.connectWithRawToken(fakeToken);
@@ -79,19 +72,14 @@ test.describe("security: token manipulation attacks", () => {
     expect(result.closeCode).toBe(4001);
   });
 
-  test("token with wrong action field is rejected", async () => {
-    // Create a properly signed token but with action != 'ws-connect'
+  test("legacy DID-Auth payload without a request hash is rejected", async () => {
+    // A valid signature cannot revive the superseded body-only payload shape.
     const { importUserPrivateKeyAsync } = await import("@haex-space/vault-sdk");
     const privateKey = await importUserPrivateKeyAsync(auth.privateKeyBase64);
-    const bodyHash = Buffer.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(""))),
-    ).toString("base64url");
 
     const payload = JSON.stringify({
       did: auth.did,
-      action: "wrong-action",
       timestamp: Date.now(),
-      bodyHash,
     });
     const payloadEncoded = Buffer.from(payload).toString("base64url");
     const signature = new Uint8Array(

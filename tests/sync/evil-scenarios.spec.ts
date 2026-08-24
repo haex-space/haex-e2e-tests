@@ -18,7 +18,6 @@ import {
   makeSyncChange,
   toAuthContext,
   createDidAuthHeader,
-  DidAuthAction,
 } from "../helpers";
 
 const SYNC_SERVER_URL = getSyncServerUrl();
@@ -64,7 +63,9 @@ test.describe("sync: evil scenarios", () => {
       `${SYNC_SERVER_URL}/sync/pull?spaceId=${victimSpaceId}&limit=100`,
       {
         headers: {
-          Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPull),
+          Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, {
+            url: `${SYNC_SERVER_URL}/sync/pull?spaceId=${victimSpaceId}&limit=100`,
+          }),
         },
       },
     );
@@ -98,7 +99,9 @@ test.describe("sync: evil scenarios", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, {
+          method: "POST", url: `${SYNC_SERVER_URL}/sync/push`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });
@@ -112,7 +115,9 @@ test.describe("sync: evil scenarios", () => {
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vault/${victimSpaceId}`, {
       method: "DELETE",
       headers: {
-        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultDelete),
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, {
+          method: "DELETE", url: `${SYNC_SERVER_URL}/sync/vault/${victimSpaceId}`,
+        }),
       },
     });
 
@@ -127,7 +132,7 @@ test.describe("sync: evil scenarios", () => {
   test("attacker cannot read victim's vault key", async () => {
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vaults`, {
       headers: {
-        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultList),
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, { url: `${SYNC_SERVER_URL}/sync/vaults` }),
       },
     });
 
@@ -147,7 +152,7 @@ test.describe("sync: evil scenarios", () => {
 
   test("tampered DID-Auth payload is rejected", async () => {
     // Create a valid DID-Auth header then tamper with the payload
-    const validHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.VaultList);
+    const validHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, { url: `${SYNC_SERVER_URL}/sync/vaults` });
     const parts = validHeader.replace("DID ", "").split(".");
     // Tamper with the payload (change the DID to victim's)
     const payload = JSON.parse(Buffer.from(parts[0]!, "base64url").toString());
@@ -164,13 +169,34 @@ test.describe("sync: evil scenarios", () => {
 
   test("forged DID-Auth with wrong key is rejected", async () => {
     // Create a DID-Auth header signed by attacker but claiming to be victim
-    const forgedHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, victimAuth.did, DidAuthAction.VaultList);
+    const forgedHeader = await createDidAuthHeader(attackerAuth.privateKeyBase64, victimAuth.did, { url: `${SYNC_SERVER_URL}/sync/vaults` });
 
     const res = await fetch(`${SYNC_SERVER_URL}/sync/vaults`, {
       headers: { Authorization: forgedHeader },
     });
 
     expect(res.status).toBe(401);
+  });
+
+  test("attack: DID-Auth URL-target swap with a valid body signature is rejected", async () => {
+    const body = JSON.stringify({ spaceId: attackerSpaceId, changes: [] });
+    const signedForPush = await createDidAuthHeader(
+      attackerAuth.privateKeyBase64,
+      attackerAuth.did,
+      { method: "POST", url: `${SYNC_SERVER_URL}/sync/push`, body },
+    );
+
+    const res = await fetch(`${SYNC_SERVER_URL}/sync/pull`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: signedForPush,
+      },
+      body,
+    });
+
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toBe("PoP request mismatch");
   });
 
   // =====================================================================
@@ -195,7 +221,9 @@ test.describe("sync: evil scenarios", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, DidAuthAction.SyncPush, bodyStr),
+        Authorization: await createDidAuthHeader(attackerAuth.privateKeyBase64, attackerAuth.did, {
+          method: "POST", url: `${SYNC_SERVER_URL}/sync/push`, body: bodyStr,
+        }),
       },
       body: bodyStr,
     });
