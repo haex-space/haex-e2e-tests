@@ -2810,7 +2810,11 @@ export class VaultAutomation {
     // (bundle verification, migrations) is still in flight, so callers used
     // to race ahead into get_all_extensions() before it landed. Confirm
     // against the same source the specs assert on instead of trusting the UI.
-    const confirmed = await this.waitForExtensionInstalled(extensionName, 30000);
+    // Windows runners (antivirus / Defender scanning + slower filesystem I/O)
+    // regularly need well past 30 s for the bundle verify + migrations, so
+    // the poll runs long enough to cover the worst-case case there. macOS
+    // and Linux still return early as soon as get_all_extensions lists it.
+    const confirmed = await this.waitForExtensionInstalled(extensionName, 90000);
     if (!confirmed) {
       const capturedErrors = await this.executeScript<string[]>(
         `return window.__e2eCapturedErrors || [];`,
