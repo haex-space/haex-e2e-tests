@@ -2848,13 +2848,25 @@ export class VaultAutomation {
    */
   private async handleInstallDialog(timeout: number): Promise<boolean> {
     const start = Date.now();
+    // `dialogClosed = !dialog && !loadingIndicator` is ambiguous — it fires
+    // BOTH "dialog closed after confirm" AND "dialog never rendered".
+    // On Windows CI, the pre-dialog path (bundle preview: tauriFetch +
+    // Array.from(bytes) + JSON-over-IPC + Defender scanning the extracted
+    // ZIP) exceeds the 1s pre-poll wait, so the very first poll used to
+    // see `dialogClosed: true`, return success, and the confirm button was
+    // never clicked. Track whether the dialog was ever observed open, and
+    // only accept the closed-state as success once we have. Otherwise keep
+    // polling until the dialog shows up or the timeout expires — clicks
+    // that never opened a dialog still surface as false, so the caller can
+    // fall back on the get_all_extensions poll.
+    let dialogEverAppeared = false;
+    let confirmClicked = false;
 
     while (Date.now() - start < timeout) {
       const dialogState = await this.executeScript<{
         hasDialog: boolean;
         hasConfirmButton: boolean;
         isLoading: boolean;
-        dialogClosed: boolean;
       }>(`
         // Check for install confirmation dialog
         const dialog = document.querySelector('[data-testid="extension-install-dialog"]')
@@ -2873,19 +2885,24 @@ export class VaultAutomation {
           hasDialog: !!dialog,
           hasConfirmButton: !!confirmBtn,
           isLoading: !!loadingIndicator,
-          dialogClosed: !dialog && !loadingIndicator
         };
       `);
 
-      console.log(`[E2E] Install dialog state:`, dialogState);
+      console.log(
+        `[E2E] Install dialog state:`,
+        { ...dialogState, dialogEverAppeared, confirmClicked },
+      );
 
-      if (dialogState.dialogClosed) {
-        // Dialog closed, installation might be complete
+      if (dialogState.hasDialog) {
+        dialogEverAppeared = true;
+      }
+
+      if (dialogEverAppeared && !dialogState.hasDialog && !dialogState.isLoading) {
+        // Dialog was open and is now gone → user (test) confirmed and it closed.
         return true;
       }
 
       if (dialogState.hasDialog && dialogState.hasConfirmButton && !dialogState.isLoading) {
-        // Click confirm button
         console.log(`[E2E] Clicking install confirm button...`);
         await this.executeScript(`
           const confirmBtn = document.querySelector('[data-testid="extension-install-confirm"]')
@@ -2897,20 +2914,30 @@ export class VaultAutomation {
             confirmBtn.click();
           }
         `);
+        confirmClicked = true;
         await this.wait(500);
       }
 
       await this.wait(500);
     }
 
-    // Check final state
-    const finalCheck = await this.executeScript<boolean>(`
+    // Timed out. Only treat "no dialog visible" as success if we saw the
+    // dialog open at some point — otherwise the install command was never
+    // issued and the caller's get_all_extensions poll is the arbiter.
+    if (!dialogEverAppeared) {
+      console.log(
+        `[E2E] Install dialog never appeared within ${timeout}ms — install command likely never issued`,
+      );
+      return false;
+    }
+
+    const dialogGoneAtEnd = await this.executeScript<boolean>(`
       const dialog = document.querySelector('[data-testid="extension-install-dialog"]')
         || document.querySelector('[role="dialog"]');
       return !dialog;
     `);
 
-    return finalCheck;
+    return dialogGoneAtEnd;
   }
 
   /**
