@@ -88,7 +88,7 @@ export async function ensureStubExtensionTable(vault: VaultAutomation): Promise<
     sql: `CREATE TABLE IF NOT EXISTS ${STUB_EXT_TABLE} (
       id TEXT PRIMARY KEY NOT NULL,
       body TEXT,
-      haex_hlc TEXT
+      haex_hlc_no_sync TEXT
     )`,
     params: [],
   });
@@ -155,7 +155,7 @@ export async function insertBusinessRow(
   args: SeedBusinessRowArgs,
 ): Promise<void> {
   await vault.invokeTauriCommand("sql_execute", {
-    sql: `INSERT INTO ${STUB_EXT_TABLE} (id, body, haex_hlc) VALUES (?1, ?2, ?3)`,
+    sql: `INSERT INTO ${STUB_EXT_TABLE} (id, body, haex_hlc_no_sync) VALUES (?1, ?2, ?3)`,
     params: [args.id, args.body ?? "hello", args.haexHlc ?? "1/aaa"],
   });
 }
@@ -210,7 +210,7 @@ export async function insertRegisterRow(
 ): Promise<void> {
   await vault.invokeTauriCommand("sql_execute", {
     sql: `INSERT INTO haex_shared_space_sync
-          (id, space_id, table_name, row_pks, haex_hlc)
+          (id, space_id, table_name, row_pks, haex_hlc_no_sync)
           VALUES (?1, ?2, ?3, ?4, ?5)`,
     params: [
       row.registerId,
@@ -226,14 +226,14 @@ export async function insertRegisterRow(
 export async function queryRegisterRow(
   vault: VaultAutomation,
   args: { spaceId: string; tableName: string; rowPksJson: string },
-): Promise<{ id: string; space_id: string; haex_hlc: string | null } | null> {
+): Promise<{ id: string; space_id: string; haex_hlc_no_sync: string | null } | null> {
   const rows = await sqlQuery<{
     id: string;
     space_id: string;
-    haex_hlc: string | null;
+    haex_hlc_no_sync: string | null;
   }>(
     vault,
-    `SELECT id, space_id, haex_hlc FROM haex_shared_space_sync
+    `SELECT id, space_id, haex_hlc_no_sync FROM haex_shared_space_sync
      WHERE table_name = ?1 AND row_pks = ?2 AND space_id = ?3
      LIMIT 1`,
     [args.tableName, args.rowPksJson, args.spaceId],

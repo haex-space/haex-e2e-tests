@@ -64,7 +64,7 @@ async function createLocalSpaceViaUI(vault: VaultAutomation, spaceName: string):
   // want the one we just created.
   const spaces = await sqlQuery<{ id: string }>(
     vault,
-    `SELECT id FROM haex_spaces WHERE name = ?1 ORDER BY created_at DESC LIMIT 1`,
+    `SELECT id FROM haex_spaces WHERE name = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
     [spaceName],
   );
   expect(spaces.length).toBe(1);
@@ -159,7 +159,7 @@ async function acceptInviteViaUI(
       // row is already accepted so we don't keep clicking after success.
       const rows = await sqlQuery<{ status: string }>(
         vault,
-        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
         [spaceId],
       );
       return rows.length > 0 && rows[0].status === "accepted";
@@ -171,7 +171,7 @@ async function acceptInviteViaUI(
     async () => {
       const rows = await sqlQuery<{ status: string }>(
         vault,
-        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
         [spaceId],
       );
       return rows.length > 0 && rows[0].status === "accepted";
@@ -260,8 +260,8 @@ async function dumpSyncDiagnostics(
     safe(() => vaultB.invokeTauriCommand("peer_storage_status", {}), "B.peer_storage_status"),
     safe(() => sqlQuery(vaultA, `SELECT endpoint_id, name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "A.haex_space_devices"),
     safe(() => sqlQuery(vaultB, `SELECT endpoint_id, name FROM haex_space_devices WHERE space_id = ?1`, [spaceId]), "B.haex_space_devices"),
-    safe(() => sqlQuery(vaultA, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "A.haex_pending_invites"),
-    safe(() => sqlQuery(vaultB, `SELECT id, status, created_at FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "B.haex_pending_invites"),
+    safe(() => sqlQuery(vaultA, `SELECT id, status, created_at_no_sync FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "A.haex_pending_invites"),
+    safe(() => sqlQuery(vaultB, `SELECT id, status, created_at_no_sync FROM haex_pending_invites WHERE space_id = ?1`, [spaceId]), "B.haex_pending_invites"),
   ]);
 
   console.log("[FileSharing][diag] ──── sync timeout diagnostics ────");
@@ -550,7 +550,7 @@ test.describe("cross-vault P2P file sharing after real invite", () => {
 
     const invites = await sqlQuery<{ status: string }>(
       vaultB,
-      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
       [spaceId],
     );
     expect(invites.length).toBeGreaterThan(0);

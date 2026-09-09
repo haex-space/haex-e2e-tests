@@ -125,35 +125,32 @@ test.describe("Delete-Log Lifecycle", () => {
     expect(silentLogged).toEqual(false);
   });
 
-  test("crdt_get_stats.deleteCount reflects haex_deleted_rows size", async () => {
+  test("crdt_get_stats.deleteLogRowCount reflects haex_deleted_rows size", async () => {
     // Add one more logged deletion so the count is known-positive
     await sql.remove(tableName, "id = ?", ["row-3"]);
 
-    // CrdtStats fields (camelCase via serde rename_all):
-    //   totalEntries: total rows across CRDT-synced user tables
-    //   applied: same as totalEntries in the delete-log model
-    //   deleteCount: rows currently in haex_deleted_rows
-    //   pendingUpload, pendingApply, insertCount, updateCount: compat fields
+    // CrdtStats fields (camelCase via serde rename_all) — this is the vault's
+    // thin mirror of `haex_crdt::CrdtStats`:
+    //   liveRowCount: live rows across every CRDT-managed user table
+    //   crdtTableCount: number of CRDT-managed tables discovered
+    //   deleteLogRowCount: rows currently in haex_deleted_rows
     const stats = await vault.invokeTauriCommand<{
-      totalEntries: number;
-      applied: number;
-      deleteCount: number;
-      pendingUpload: number;
-      pendingApply: number;
-      insertCount: number;
-      updateCount: number;
+      liveRowCount: number;
+      crdtTableCount: number;
+      deleteLogRowCount: number;
     }>("crdt_get_stats", {});
 
-    expect(typeof stats.deleteCount).toEqual("number");
-    expect(typeof stats.applied).toEqual("number");
-    expect(typeof stats.totalEntries).toEqual("number");
+    expect(typeof stats.deleteLogRowCount).toEqual("number");
+    expect(typeof stats.liveRowCount).toEqual("number");
+    expect(typeof stats.crdtTableCount).toEqual("number");
 
     // We have at least the two logged deletes: row-2 and row-3.
     // (row-4 was removed silently via sql_execute and must NOT be counted.)
-    expect(stats.deleteCount).toBeGreaterThanOrEqual(2);
+    expect(stats.deleteLogRowCount).toBeGreaterThanOrEqual(2);
 
-    // Total entries is strictly the count of live rows across all CRDT tables.
-    expect(stats.totalEntries).toBeGreaterThan(0);
-    expect(stats.applied).toEqual(stats.totalEntries);
+    // Live rows and table count are strictly positive: this test itself
+    // creates and populates a CRDT-managed table.
+    expect(stats.liveRowCount).toBeGreaterThan(0);
+    expect(stats.crdtTableCount).toBeGreaterThan(0);
   });
 });

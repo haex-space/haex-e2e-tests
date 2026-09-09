@@ -188,7 +188,7 @@ test.describe("invitations: permanent failure marks outbox FAILED on first attem
     await vaultA.invokeTauriCommand("sql_execute_with_crdt", {
       sql: `INSERT INTO haex_invite_outbox
               (id, space_id, token_id, target_did, target_endpoint_id, status,
-               retry_count, next_retry_at, expires_at, created_at)
+               retry_count, next_retry_at, expires_at, created_at_no_sync)
             VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?7, ?8)`,
       params: [
         outboxRowId,

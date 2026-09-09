@@ -113,24 +113,24 @@ export function registerPersonalSpacePhase(state: QuicTestState): void {
 
     // Check outbox status on Vault A — the invite should be queued or delivered
     await wait(3000);
-    const outbox = await sqlQuery<{ id: string; status: string; retry_count: number; target_endpoint_id: string; space_id: string; created_at: string }>(
+    const outbox = await sqlQuery<{ id: string; status: string; retry_count: number; target_endpoint_id: string; space_id: string; created_at_no_sync: string }>(
       vaultA,
-      `SELECT id, status, retry_count, target_endpoint_id, space_id, created_at FROM haex_invite_outbox WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 3`,
+      `SELECT id, status, retry_count, target_endpoint_id, space_id, created_at_no_sync FROM haex_invite_outbox WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 3`,
       [personalSpaceId],
     );
-    console.log(`[QUIC-DEBUG] Outbox for Personal space: ${JSON.stringify(outbox.map(o => ({ status: o.status, retries: o.retry_count, target: o.target_endpoint_id?.slice(0, 12), created: o.created_at })))}`);
+    console.log(`[QUIC-DEBUG] Outbox for Personal space: ${JSON.stringify(outbox.map(o => ({ status: o.status, retries: o.retry_count, target: o.target_endpoint_id?.slice(0, 12), created: o.created_at_no_sync })))}`);
 
     // Check ALL pending invites on Vault B (without space_id filter)
     const allPendingB = await sqlQuery<{ id: string; space_id: string; status: string; space_name: string }>(
       vaultB,
-      `SELECT id, space_id, status, space_name FROM haex_pending_invites ORDER BY created_at DESC LIMIT 10`,
+      `SELECT id, space_id, status, space_name FROM haex_pending_invites ORDER BY created_at_no_sync DESC LIMIT 10`,
     );
     console.log(`[QUIC-DEBUG] Vault B ALL pending invites: ${JSON.stringify(allPendingB.map(i => ({ spaceId: i.space_id?.slice(0, 8), status: i.status, name: i.space_name })))}`);
 
     // Also check haex_spaces on Vault B for any new entries
     const spacesB = await sqlQuery<{ id: string; name: string; type: string; status: string }>(
       vaultB,
-      `SELECT id, name, type, status FROM haex_spaces ORDER BY created_at DESC LIMIT 5`,
+      `SELECT id, name, type, status FROM haex_spaces ORDER BY created_at_no_sync DESC LIMIT 5`,
     );
     console.log(`[QUIC-DEBUG] Vault B spaces: ${JSON.stringify(spacesB.map(s => ({ id: s.id?.slice(0, 8), name: s.name, type: s.type, status: s.status })))}`);
 
@@ -158,7 +158,7 @@ export function registerPersonalSpacePhase(state: QuicTestState): void {
         // CI runs. Cheap: single-row SELECT per poll.
         const ob = await sqlQuery<{ status: string; retry_count: number }>(
           vaultA,
-          `SELECT status, retry_count FROM haex_invite_outbox ORDER BY created_at DESC LIMIT 1`,
+          `SELECT status, retry_count FROM haex_invite_outbox ORDER BY created_at_no_sync DESC LIMIT 1`,
         );
         if (ob.length > 0) {
           const { status, retry_count } = ob[0];
@@ -232,7 +232,7 @@ export function registerPersonalSpacePhase(state: QuicTestState): void {
 
     const invites = await sqlQuery<{ status: string }>(
       state.vaultB!,
-      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
       [personalSpaceId],
     );
 

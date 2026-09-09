@@ -272,7 +272,7 @@ export function registerLocalSpacePhase(state: QuicTestState): void {
     // pure timing). See docs/plans/2026-04-20-fix-e2e-flakes.md in haex-vault.
     const pending = await sqlQuery<{ id: string; space_id: string; status: string; space_name: string }>(
       vaultB,
-      `SELECT id, space_id, status, space_name FROM haex_pending_invites ORDER BY created_at DESC LIMIT 10`,
+      `SELECT id, space_id, status, space_name FROM haex_pending_invites ORDER BY created_at_no_sync DESC LIMIT 10`,
     );
     const mlsWelcomes = await sqlQuery<{ id: string; space_id: string; source: string }>(
       vaultB,
@@ -290,7 +290,7 @@ export function registerLocalSpacePhase(state: QuicTestState): void {
     // Verify: invite status changed to 'accepted'
     const invites = await sqlQuery<{ status: string }>(
       vaultB,
-      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
       [spaceId],
     );
     expect(invites.length).toBeGreaterThan(0);

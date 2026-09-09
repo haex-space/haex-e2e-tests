@@ -397,7 +397,7 @@ async function acceptInviteViaStore(vault: VaultAutomation, spaceId: string): Pr
             space_endpoints, token_id
      FROM haex_pending_invites
      WHERE space_id = ?1 AND status = 'pending'
-     ORDER BY created_at DESC LIMIT 1`,
+     ORDER BY created_at_no_sync DESC LIMIT 1`,
     [spaceId],
   );
   if (rows.length !== 1) {
