@@ -280,14 +280,25 @@ async function registerContactViaJsonImport(
   });
 
   await openSettingsCategory(vaultA, "contacts");
-  await wait(500);
 
-  const addClicked = await clickTestId(vaultA, "contacts-add-trigger");
-  if (!addClicked) throw new Error("[MLS-ATTACK] contacts-add-trigger not clickable");
-  await wait(800);
-
-  const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
-  if (!dialogOpen) throw new Error("[MLS-ATTACK] contact-add dialog did not open");
+  // The 'contacts' settings panel mounts async — under CI load, the previous
+  // fixed 500ms sleep expired before the '+ Add' trigger was in the DOM and
+  // the click became a no-op ("contacts-add-trigger not clickable"). Poll for
+  // its presence, then click through the same poll (a click before the Vue
+  // handler is bound is silent too, so verify the dialog opened before moving
+  // on).
+  await pollUntil(
+    () => elementExists(vaultA, '[data-testid="contacts-add-trigger"]'),
+    { timeout: 15_000, interval: 250, label: "contacts-add-trigger visible" },
+  );
+  await pollUntil(
+    async () => {
+      if (await elementExists(vaultA, '[role="dialog"]')) return true;
+      await clickTestId(vaultA, "contacts-add-trigger");
+      return elementExists(vaultA, '[role="dialog"]');
+    },
+    { timeout: 15_000, interval: 500, label: "contact-add dialog open" },
+  );
 
   const tabSwitched = await mousedownClickFound(
     vaultA,
