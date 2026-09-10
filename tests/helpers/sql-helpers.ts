@@ -8,7 +8,10 @@
 // IMPORTANT CONCEPTS:
 //
 // 1. CRDT Tables vs No-Sync Tables
-//    - Regular tables get CRDT columns automatically (haex_hlc, haex_column_hlcs)
+//    - Regular tables get CRDT columns automatically (haex_hlc_no_sync,
+//      haex_column_hlcs_no_sync, haex_column_sigs_no_sync). The CRDT metadata
+//      itself carries the "_no_sync" suffix because it is peer-local and moves
+//      out-of-band through the sync protocol, never as ordinary column payload.
 //    - Tables with "_no_sync" suffix are local-only and don't get CRDT transformation
 //
 // 2. Delete Semantics (delete-log model)
@@ -357,13 +360,14 @@ export class SqlHelpers {
   /**
    * Select rows via the raw sql_select command (no CRDT read-path).
    *
-   * Use this when you want to inspect CRDT-metadata columns (haex_hlc,
-   * haex_column_hlcs) or access data the normal read-path may not surface.
+   * Use this when you want to inspect CRDT-metadata columns
+   * (haex_hlc_no_sync, haex_column_hlcs_no_sync, haex_column_sigs_no_sync)
+   * or access data the normal read-path may not surface.
    *
    * @example
    * ```typescript
    * // Inspect HLC metadata for a row
-   * const row = await sql.selectRaw("users", ["id", "haex_hlc"], {
+   * const row = await sql.selectRaw("users", ["id", "haex_hlc_no_sync"], {
    *   where: "id = ?",
    *   params: ["user1"],
    * });

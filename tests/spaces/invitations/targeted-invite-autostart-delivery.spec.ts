@@ -201,12 +201,12 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
 
     // The device row (and its persistent endpoint id) exists after the Welcome
     // dialog committed it — independent of whether the endpoint is running.
-    // ORDER BY created_at keeps the device/identity pair deterministic.
+    // ORDER BY created_at_no_sync keeps the device/identity pair deterministic.
     const devRows = await pollUntil(
       async () => {
         const r = await sqlQuery<{ endpoint_id: string }>(
           vaultB,
-          "SELECT endpoint_id FROM haex_devices WHERE endpoint_id IS NOT NULL ORDER BY created_at LIMIT 1",
+          "SELECT endpoint_id FROM haex_devices WHERE endpoint_id IS NOT NULL ORDER BY created_at_no_sync LIMIT 1",
         );
         return r.length > 0 ? r : null;
       },
@@ -219,7 +219,7 @@ test.describe("invitations: targeted invite reaches a passive (autostart-only) i
       async () => {
         const r = await sqlQuery<{ did: string }>(
           vaultB,
-          "SELECT did FROM haex_identities WHERE private_key IS NOT NULL ORDER BY created_at LIMIT 1",
+          "SELECT did FROM haex_identities WHERE private_key IS NOT NULL ORDER BY created_at_no_sync LIMIT 1",
         );
         return r.length > 0 ? r : null;
       },

@@ -147,7 +147,7 @@ async function acceptInviteViaUI(
     async () => {
       const rows = await sqlQuery<{ status: string }>(
         vault,
-        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 1`,
+        `SELECT status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 1`,
         [spaceId],
       );
       return rows.length > 0 && rows[0].status === "accepted";

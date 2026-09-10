@@ -32,7 +32,7 @@ test.describe("CRDT Behavior", () => {
     );
 
     // After creating a new CRDT table, triggers must be set up so that INSERT/UPDATE
-    // operations populate haex_column_hlcs and mark the table as dirty.
+    // operations populate haex_column_hlcs_no_sync and mark the table as dirty.
     await vault.invokeTauriCommand("ensure_extension_triggers", {});
 
     const tableInfo = await sql.getTableInfo(crdtTable);
@@ -69,7 +69,7 @@ test.describe("CRDT Behavior", () => {
     expect(columnNames).toContain("data");
   });
 
-  test("INSERT sets haex_hlc via selectRaw", async () => {
+  test("INSERT sets haex_hlc_no_sync via selectRaw", async () => {
     await sql.insert(crdtTable, { id: "crdt-1", title: "Test Entry", value: 42 });
 
     const rows = await sql.selectRaw(
@@ -91,7 +91,7 @@ test.describe("CRDT Behavior", () => {
     expect(hlc as string).toMatch(/^\d+\/[0-9a-fA-F]+$/);
   });
 
-  test("UPDATE single column updates haex_column_hlcs for that column", async () => {
+  test("UPDATE single column updates haex_column_hlcs_no_sync for that column", async () => {
     // Get HLC state before update
     const beforeRows = await sql.selectRaw(
       crdtTable,

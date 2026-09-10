@@ -173,7 +173,7 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
       try {
         const dbSpaces = await sqlQuery<{ id: string; status: string; name: string; type: string; owner_identity_id: string | null }>(
           vaultB,
-          `SELECT id, status, name, type, owner_identity_id FROM haex_spaces ORDER BY created_at DESC LIMIT 10`,
+          `SELECT id, status, name, type, owner_identity_id FROM haex_spaces ORDER BY created_at_no_sync DESC LIMIT 10`,
         );
         console.log(`[QUIC-DEBUG 1426] haex_spaces (B): ${JSON.stringify(dbSpaces.map(s => ({ id: s.id?.slice(0, 8), status: s.status, name: s.name, type: s.type, owner: s.owner_identity_id?.slice(0, 8) ?? null })))}`);
 
@@ -186,7 +186,7 @@ export function registerPostAcceptPhase(state: QuicTestState): void {
       try {
         const dbInvites = await sqlQuery<{ id: string; space_id: string; status: string }>(
           vaultB,
-          `SELECT id, space_id, status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at DESC LIMIT 5`,
+          `SELECT id, space_id, status FROM haex_pending_invites WHERE space_id = ?1 ORDER BY created_at_no_sync DESC LIMIT 5`,
           [spaceId],
         );
         console.log(`[QUIC-DEBUG 1426] haex_pending_invites[${spaceId.slice(0, 8)}]: ${JSON.stringify(dbInvites.map(i => ({ id: i.id?.slice(0, 8), status: i.status })))}`);

@@ -88,14 +88,23 @@ async function registerContactViaJsonImport(
   });
 
   await openSettingsCategory(vaultA, "contacts");
-  await wait(500);
 
-  const addClicked = await clickTestId(vaultA, "contacts-add-trigger");
-  expect(addClicked).toBe(true);
-  await wait(800);
-
-  const dialogOpen = await elementExists(vaultA, '[role="dialog"]');
-  expect(dialogOpen).toBe(true);
+  // Fixed 500ms sleep before the click was racy under CI load — the '+ Add'
+  // trigger mounts async and 500ms often expired first. Poll for presence,
+  // then click through the poll (Vue may bind the handler after the element
+  // first appears, so verify by waiting for the dialog itself).
+  await pollUntil(
+    () => elementExists(vaultA, '[data-testid="contacts-add-trigger"]'),
+    { timeout: 15_000, interval: 250, label: "contacts-add-trigger visible" },
+  );
+  await pollUntil(
+    async () => {
+      if (await elementExists(vaultA, '[role="dialog"]')) return true;
+      await clickTestId(vaultA, "contacts-add-trigger");
+      return elementExists(vaultA, '[role="dialog"]');
+    },
+    { timeout: 15_000, interval: 500, label: "contact-add dialog open" },
+  );
 
   const tabSwitched = await mousedownClickFound(
     vaultA,
@@ -263,7 +272,7 @@ async function acceptInviteViaStore(vault: VaultAutomation, spaceId: string): Pr
             space_endpoints, token_id
      FROM haex_pending_invites
      WHERE space_id = ?1 AND status = 'pending'
-     ORDER BY created_at DESC LIMIT 1`,
+     ORDER BY created_at_no_sync DESC LIMIT 1`,
     [spaceId],
   );
   expect(rows.length, `no pending invite row for space ${spaceId}`).toBe(1);

@@ -76,7 +76,7 @@ export const TAURI_SQL_COMMANDS = {
    * ```typescript
    * // Inspect HLC metadata
    * await vault.invokeTauriCommand("sql_select", {
-   *   sql: "SELECT id, haex_hlc FROM users WHERE id = ?",
+   *   sql: "SELECT id, haex_hlc_no_sync FROM users WHERE id = ?",
    *   params: ["user1"]
    * });
    *
@@ -134,7 +134,7 @@ export const TAURI_SQL_COMMANDS = {
   /**
    * Execute with CRDT transformation
    *
-   * - CREATE TABLE: Adds CRDT columns (haex_hlc, haex_column_hlcs)
+   * - CREATE TABLE: Adds CRDT columns (haex_hlc_no_sync, haex_column_hlcs_no_sync, haex_column_sigs_no_sync)
    * - Sets up BEFORE-DELETE trigger that logs deletes into haex_deleted_rows
    * - Only transforms tables without "_no_sync" suffix
    *
@@ -149,7 +149,7 @@ export const TAURI_SQL_COMMANDS = {
    *   )`,
    *   params: []
    * });
-   * // Results in table with: id, name, email, haex_hlc, haex_column_hlcs
+   * // Results in table with: id, name, email, haex_hlc_no_sync, haex_column_hlcs_no_sync, haex_column_sigs_no_sync
    * ```
    */
   SQL_EXECUTE_WITH_CRDT: "sql_execute_with_crdt" as const,
@@ -277,13 +277,20 @@ export function recommendSqlCommand(
 // =============================================================================
 
 /**
- * CRDT columns automatically added by sql_execute_with_crdt
+ * CRDT columns automatically added by sql_execute_with_crdt.
+ *
+ * These carry the `_no_sync` suffix because they are metadata local to this
+ * peer — they are exchanged out-of-band by the sync protocol, never as
+ * ordinary column payload. The suffix is what marks a column as
+ * transport-invisible in the crate's one-suffix model.
  */
 export const CRDT_COLUMNS = {
   /** Transaction-scope HLC for the last write that touched the row */
-  HLC: "haex_hlc",
+  HLC: "haex_hlc_no_sync",
   /** JSON object mapping column names to their HLC timestamps */
-  COLUMN_HLCS: "haex_column_hlcs",
+  COLUMN_HLCS: "haex_column_hlcs_no_sync",
+  /** JSON object mapping column names to their signatures */
+  COLUMN_SIGS: "haex_column_sigs_no_sync",
 } as const;
 
 /**
